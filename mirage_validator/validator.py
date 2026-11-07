@@ -10,12 +10,15 @@ from .json_utils import pointer, reject_constant, unique_object
 
 class ResponseContractValidator:
     def __init__(self, registry: SchemaRegistry | None = None):
+        """使用傳入的契約註冊表；未提供時載入預設本機契約。"""
         self.registry = registry or SchemaRegistry()
 
     def validate(self, request: ValidationRequest) -> ValidationResult:
+        """依選定契約檢查狀態碼、標頭與 body，回傳契約識別資訊及所有驗證錯誤。"""
         errors = []
 
         def issue(location, path, code, reason, schema_path=None):
+            """將錯誤位置、代碼、原因及 schema 路徑加入本次驗證的錯誤清單。"""
             errors.append(ValidationIssue(location=location, path=path, code=code,
                                           reason=reason, schema_path=schema_path))
 
@@ -42,6 +45,7 @@ class ResponseContractValidator:
 
         def check(instance, schema, location, prefix=()):
             # Empty referencing registry prevents implicit network retrieval of $ref.
+            """以 JSON Schema 驗證資料並收集錯誤，禁止隱式從網路載入參照。"""
             validator = Draft202012Validator(schema, format_checker=FormatChecker(), registry=Registry())
             for error in validator.iter_errors(instance):
                 issue(location, pointer([*prefix, *error.absolute_path]), str(error.validator),

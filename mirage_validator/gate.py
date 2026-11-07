@@ -27,6 +27,7 @@ class StrictJSONBodyMixin:
     """
 
     def _get_content_schema_value_and_schema(self, raw, content, mimetype=None):
+        """反序列化回應內容並取得 schema，保留 JSON 原始型別以避免自動轉型。"""
         mime_type, parameters, media_type = self._find_media_type(content, mimetype)
         value = self._deserialise_media_type(media_type, mime_type, parameters, raw)
         schema = media_type / "schema" if "schema" in media_type else None
@@ -75,6 +76,7 @@ class GateResult(StrictModel):
 
 
 def walk_refs(value):
+    """遞迴檢查規格中的 $ref，遇到非內部參照時拋出 ValueError。"""
     if isinstance(value, dict):
         for key, item in value.items():
             if key == "$ref" and (not isinstance(item, str) or not item.startswith("#/")):
@@ -86,6 +88,7 @@ def walk_refs(value):
 
 
 def deref(spec, node):
+    """解析內部 JSON Pointer 參照，遇到循環參照時拋出 ValueError。"""
     seen = set()
     while isinstance(node, dict) and "$ref" in node:
         ref = node["$ref"]
@@ -125,6 +128,7 @@ class ResponseAdapter:
 
 class PlatformRegistry:
     def __init__(self, root: Path):
+        """載入平台契約，檢查檔案範圍、雜湊與網站綁定，並建立對應版本的驗證器。"""
         self.bundles = []
         for path in sorted(root.glob("*/manifest.yaml")):
             manifest = Manifest.model_validate(yaml.safe_load(path.read_text(encoding="utf-8")))
@@ -155,13 +159,16 @@ class PlatformRegistry:
 
 class OfficialResponseGate:
     def __init__(self, registry: PlatformRegistry):
+        """保存平台契約註冊表，供後續網站與操作匹配使用。"""
         self.registry = registry
 
     def validate(self, request: GateRequest) -> GateResult:
+        """匹配已核准的網站與操作契約，驗證狀態碼、標頭及 JSON，回傳 pass、reject 或 unverifiable。"""
         errors = []
         identity = {}
 
         def result(decision, code=None, reason=None, location="contract", path=""):
+            """彙整目前錯誤與契約識別資訊，必要時加入錯誤並建立決策結果。"""
             if code:
                 errors.append(ValidationIssue(location=location, path=path, code=code, reason=reason))
             return GateResult(valid=decision == "pass", decision=decision, errors=errors, **identity)

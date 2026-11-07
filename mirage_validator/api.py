@@ -15,9 +15,11 @@ gate = OfficialResponseGate(PlatformRegistry(Path(os.environ.get("MIRAGE_PLATFOR
 
 @app.post("/v1/poc/validate", response_model=ValidationResult, deprecated=True)
 def validate_response(request: ValidationRequest) -> ValidationResult:
+    """依指定的 PoC 契約驗證回應，回傳驗證結果與錯誤明細。"""
     return validator.validate(request)
 
 
 @app.post("/v1/validate", response_model=GateResult)
 def validate_official_response(request: GateRequest) -> GateResult:
+    """依網站綁定的官方 OpenAPI 契約驗證回應並回傳放行決策。"""
     return gate.validate(request)

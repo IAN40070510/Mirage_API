@@ -18,6 +18,7 @@ class ValidationRequest(StrictModel):
 
     @model_validator(mode="after")
     def check_raw(self):
+        """確認 raw 編碼的 body 為字串，否則拋出 ValueError；成功時回傳此請求。"""
         if self.body_encoding == "raw" and not isinstance(self.body, str):
             raise ValueError("raw body 必須是字串")
         return self

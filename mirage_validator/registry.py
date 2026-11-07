@@ -18,10 +18,12 @@ class Contract(StrictModel):
 
     @property
     def key(self):
+        """回傳由平台、操作、契約版本與狀態碼組成的唯一查找鍵。"""
         return (self.platform_id, self.operation_id, self.contract_version, self.status_code)
 
     @property
     def contract_id(self):
+        """將契約查找鍵以冒號串接為可讀的契約識別字串。"""
         return ":".join(map(str, self.key))
 
 
@@ -29,6 +31,7 @@ class SchemaRegistry:
     """Load trusted local contracts once; no request-controlled file paths."""
 
     def __init__(self, directory: Path | None = None):
+        """載入本機契約並檢查 schema；契約重複或目錄沒有契約時拋出 ValueError。"""
         self._contracts = {}
         directory = directory or Path(__file__).with_name("contracts")
         for path in sorted(directory.glob("*.json")):
@@ -43,7 +46,9 @@ class SchemaRegistry:
             raise ValueError("Schema registry is empty")
 
     def select(self, platform, operation, version, status):
+        """依平台、操作、版本及狀態碼取得契約；找不到時回傳 None。"""
         return self._contracts.get((platform, operation, version, status))
 
     def statuses(self, platform, operation, version):
+        """回傳指定平台、操作與版本支援的狀態碼，依數值排序。"""
         return sorted(k[3] for k in self._contracts if k[:3] == (platform, operation, version))
