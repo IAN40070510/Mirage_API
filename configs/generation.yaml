@@ -1,0 +1,20 @@
+# E 的可重現資料規則；site_id 是測試隔離標籤，不會連線到真實商店。
+schema_version: 1
+scope:
+  site_id: shop-example
+  platform_id: medusa
+  platform_version: '2.22.4'
+  # 必須與同一 run 使用的 D Profile 一致，規格更新後應重新設定。
+  spec_sha256: 65b6917fb04c52d3a2394cabe8c391db8ebfa74e5aec336eb88069ed5e14ba0b
+  scenario_id: product-found
+  run_id: demo-001
+seed: 20261108
+product_count: 10
+variants_per_product: 2
+locale: zh_TW
+currency_code: twd
+# 金額以幣別最小單位表示；零價格與零庫存皆可透過 min/max 明確設定。
+price_min_minor: 1000
+price_max_minor: 100000
+inventory_min: 0
+inventory_max: 100

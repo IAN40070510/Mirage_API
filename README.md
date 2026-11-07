@@ -1,6 +1,6 @@
 # Mirage_API：跨平台假 API 回應生成器(電商為例)
 
-本專案規劃接收 HTTP API 請求、辨識電商平台、以本地 LLM 與工具組成合成回應，再通過對應網站與版本的契約驗證後渲染。**目前已實作 A 的 FastAPI HTTP 請求入口、D 平台 Profile 建立與查詢工具、格式驗證工具及獨立驗證 API；平台識別、生成、Ollama 協調、修正重試、備援與 HTTP 回應渲染尚未實作。** 下圖是規劃主軸；本文所有「規劃」格式僅定義預期介面，不能當作現有 API 使用。
+本專案規劃接收 HTTP API 請求、辨識電商平台、以本地 LLM 與工具組成合成回應，再通過對應網站與版本的契約驗證後渲染。**目前已實作 A 的 FastAPI HTTP 請求入口、D 平台 Profile 工具、E 可重現合成商品資料工具、格式驗證工具及獨立驗證 API；平台識別、完整回應生成、Ollama 協調、修正重試、備援與 HTTP 回應渲染尚未實作。** 下圖是規劃主軸；本文所有「規劃」格式僅定義預期介面，不能當作現有 API 使用。
 
 ```mermaid
 flowchart TB
@@ -44,7 +44,7 @@ flowchart TB
 | B 平台識別器 | 網站 origin、API 前綴、method、path、部署版本 → 唯一平台與 operation；不明時拒絕猜測 | 正式驗證器內已有網站契約匹配；獨立識別器未實作 |
 | C 任務協調器與 P Ollama | 識別結果 → 向 D–G 取材、限制 LLM 工具與輪次、指示 H；Ollama 提供本地推論 | 未實作；未選定模型 |
 | D 平台 Profile 工具 | 固定來源與 OpenAPI → 可追溯的操作、參數、狀態碼、媒體類型、schema 上下文 | **已實作**：`src/deception/profile_builder/`；提供 CLI 建立及 Python 查詢，尚未接上 C；不推測平台慣例 |
-| E 合成資料工具 | 種子、資料規則、關聯 ID → 一致的合成商品、顧客或訂單 | 未實作 |
+| E 合成資料工具 | 種子、隔離身份、數值規則 → 一致的合成商品與變體 | **已實作**：`src/deception/synthetic/`；生成、保存、驗證與只讀查詢；顧客與訂單尚未實作 |
 | F 安全情境工具 | 白名單與請求上下文 → 允許的情境和限制，例如商品不存在／庫存不足 | 未實作 |
 | G 內容生成工具 | Profile、合成資料、情境、模型提示 → 動態文字與欄位候選 | 未實作 |
 | J Generation Context | D–G 的資料及來源 → 交回 C，記錄平台／契約版本、種子、情境 | 未實作 |
@@ -64,8 +64,10 @@ Mirage_API/
 ├─ .env.example                      # MIRAGE_PLATFORMS_DIR 設定提示
 ├─ src/deception/api/               # A：FastAPI 原生請求入口與標準化介面
 ├─ src/deception/profile_builder/   # D：來源檢查、Profile 建立與操作查詢
+├─ src/deception/synthetic/         # E：合成商品、變體、資料關聯與有效性驗證
+├─ configs/generation.yaml          # E：隔離身份、種子、數量與生成規則
 ├─ inputs/sources/                  # D：source.yaml 與固定 OpenAPI 輸入
-├─ generated/                       # D：自動產生的 profiles 與 schemas 快照
+├─ generated/                       # D/E：profiles、schemas 快照與 synthetic_data
 ├─ mirage_validator/                 # 已實作的驗證 API、網站契約 gate、PoC 驗證
 │  └─ contracts/*.json               # 與正式契約隔離的 PoC 示意契約
 ├─ inputs/platforms/
@@ -86,7 +88,7 @@ Mirage_API/
 
 **D 的人工輸入與系統產物**：提供 `inputs/sources/<platform>/source.yaml` 與同目錄固定規格後，D 產生 `generated/profiles/<platform>.yaml` 和 `generated/schemas/<platform>/<sha256>.yaml`。未審來源可離線預覽，但查詢預設拒絕使用；D 不改寫驗證器的 manifest。下方早期 `inputs/profiles/` 範例仍是生成規則的規劃格式，不是 D 的 parser。情境與種子草稿也尚未接上執行流程。Profile 不能放寬 OpenAPI 回應契約。
 
-**自動生成或選填資料**：未來 E 可從種子產生 `generated/<site>/<run>/products.json` 等合成資料，J 可輸出同一 run 的 context；`samples/` 可保存實測回應供人工比對。樣本不能反推為完整契約。現有 `input-audit.json` 是檢查產物，`api-scope.json` 是範圍紀錄，兩者均不參與驗證執行。
+**E 的輸入與產物**：`configs/generation.yaml` 定義種子、站點／版本／規格／情境／run 隔離與數量、價格、庫存規則。E 產生 `generated/synthetic_data/<platform>/<namespace>.json`，保留完整設定及生成器／Faker 版本，並驗證資料關聯與可重現性。J 的 context 與 `samples/` 實測對照尚未實作。現有 `input-audit.json` 是檢查產物，`api-scope.json` 是範圍紀錄，兩者均不參與驗證執行。
 
 ### 現有 manifest 格式示例（未啟用）
 
@@ -152,6 +154,18 @@ synthetic_seed: 42
 | Medusa | 固定版本 Store API 商品讀取的一個 operation 與 200／404 | 固定版本的 [Store API 規格](https://docs.medusajs.com/api/store)、部署 origin、`fields` 等 query 上下文與參考服務對照 | 有使用者提供的 Store／Auth 子集，但來源版本與部署未核實；見[輸入檢查](inputs/platforms/medusa/README.md) |
 
 先讓一個站點、單一 operation 和少數狀態碼形成可驗證閉環，再擴充。`poc-v1` 是本專案示意契約版本，**不是平台版本**。若官方規格未描述動態欄位、外掛、授權或商業規則，維持未涵蓋，另做參考服務對照。
+
+## 已實作的 E：合成資料工具
+
+先比較 Faker、Polyfactory 與 hypothesis-jsonschema，採用鎖版 `Faker==40.44.0` 生成商品文字，再以明確規則管理 ID、商品／變體關聯、SKU、整數金額與庫存。實作及函式均附功能註解，詳見 [E 功能、現成方案與有效性驗證](docs/synthetic.md)。
+
+```powershell
+$env:PYTHONPATH = "$PWD/src"
+.\.venv\Scripts\python.exe -m deception.synthetic generate --config configs/generation.yaml --output generated
+.\.venv\Scripts\python.exe -m deception.synthetic verify --config configs/generation.yaml --dataset "<上一行輸出的JSON路徑>"
+```
+
+範例產生 10 個商品與 20 個變體；同設定可重建相同 bytes，讀取時核對 scope 並完整重建比對。D/E 可依平台、版本與契約雜湊綁定，但 E 的內部實體不是完整 Medusa HTTP 回應，仍待 H/I 處理映射與正式驗證。
 
 ## 已實作的 D：平台 Profile 工具
 
@@ -256,13 +270,13 @@ curl.exe -X POST http://127.0.0.1:8000/v1/poc/validate -H "Content-Type: applica
 | 採用 | [jsonschema](https://github.com/python-jsonschema/jsonschema/blob/main/COPYING) | MIT | 僅 PoC 自訂契約；發行時核對實際版本 |
 | 規劃 | [Ollama](https://github.com/ollama/ollama/blob/main/LICENSE) | MIT，限此**程式碼** | 圖中的本地推論服務；模型權重有各自條款，不能從 Ollama 授權推定模型可商用或再散布 |
 | 可選 | [Pydantic AI](https://github.com/pydantic/pydantic-ai/blob/main/LICENSE) | MIT | 可協助 C 的工具調用；目前未依賴 |
-| 可選 | [Faker](https://github.com/joke2k/faker/blob/master/LICENSE.txt) | MIT 型授權文本 | 可供 E 生成合成資料；仍需核對資料來源 |
+| 採用 | [Faker](https://faker.readthedocs.io/en/stable/#license) | MIT | E 的商品文字生成；鎖定 40.44.0，使用獨立 instance seed |
 | 可選 | [Prism](https://github.com/stoplightio/prism/blob/main/LICENSE) | Apache-2.0 | 外部 mock 比對，不是現有 H／I |
 | 可選 | [Schemathesis](https://github.com/schemathesis/schemathesis/blob/master/LICENSE) | MIT | 契約測試；通過仍不等於官方行為一致 |
 | 未採用 | [WireMock](https://github.com/wiremock/wiremock/blob/master/LICENSE.txt) | Apache-2.0 | 可作替代 mock server；目前無依賴 |
 | 參考資料 | [WooCommerce REST API 文件](https://developer.woocommerce.com/docs/apis/rest-api/v3/products/)／[外掛授權標示](https://github.com/woocommerce/woocommerce/blob/trunk/plugins/woocommerce/readme.txt) | 文件、程式碼與範例權利須分開核對；外掛標示 GPLv3+ | 僅參考 API 行為，未複製其程式碼。閱讀 GPL 專案文件不會使獨立實作自動受 GPL 約束；若複製程式碼或大量文件，須另評估 |
 | 參考資料 | [Medusa Store API 文件](https://docs.medusajs.com/api/store)／[核心授權](https://github.com/medusajs/medusa/blob/develop/LICENSE) | 核心儲存庫除企業版材料外為 MIT；企業版另有條款 | 現有輸入規格由使用者提供，來源與再散布權未核實；發行前核對固定版本的規格及文件授權 |
 
-`pyproject.toml` 還列有 `uvicorn`、`PyYAML`、`werkzeug`，測試 extra 有 `pytest`、`httpx`；它們及**間接依賴**也須按實際分發版本納入第三方清單。上表不是完整 SBOM，也未替 Mirage_API 原始碼選定授權；目前根目錄沒有 `LICENSE`，不可暗示本專案已用某種開源授權發布。
+`pyproject.toml` 還列有 `uvicorn`、`PyYAML`、`werkzeug`、`Faker==40.44.0`，測試 extra 有 `pytest`、`httpx`；它們及**間接依賴**（例如 Faker 安裝帶入的 `tzdata`）也須按實際解析出的版本納入第三方清單。E 只使用 Faker 的公開 API，不複製其原始碼或資料。Polyfactory 與 hypothesis-jsonschema 僅是評估過、未安裝的候選。上表不是完整 SBOM，也未替 Mirage_API 原始碼選定授權；目前根目錄沒有 `LICENSE`，不可暗示本專案已用某種開源授權發布。
 
 內部執行與提供軟體、容器、模型或規格給他人，所涉義務可能不同。分發時依實際包含元件保存 MIT／BSD／Apache 等授權與版權聲明；Apache-2.0 元件若帶 `NOTICE`，按條款保留適用內容並標示修改。README 簡表不能替代授權檔與 NOTICE。另核對模型權重的使用／商用／再散布條款，以及下載或打包的 API 規格、範例、文件的個別權利。不要把「依賴某個 LGPL／GPL 程式」直接等同整個獨立專案必須改用該授權；若未來引入其程式碼或連結／分發該元件，按**具體版本、整合方式與分發形式**評估並履行義務。

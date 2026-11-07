@@ -9,7 +9,7 @@
 | API Specification | `platforms/<platform>/openapi.yaml` | 回應契約與 operation | 已有 Medusa 子集；目前檔案仍是舊匯入資料 |
 | Platform Profile | `platforms/<platform>/profile.yaml` | 平台版本、來源與生成限制 | 草稿，未載入 |
 | Scenario Configuration | `scenarios/<platform>/` | 測試情境與預期狀態 | 草稿，未載入 |
-| Synthetic State | `synthetic/<platform>/` | 可重現的合成資料狀態 | 草稿，未載入 |
+| Synthetic State 草稿 | `synthetic/<platform>/` | 舊手寫示例 | 不載入；E 改讀根目錄 `configs/generation.yaml` 並生成 `generated/synthetic_data/`，詳見 [E 用法](../docs/synthetic.md) |
 | Generation Policy | `policies/<platform>/` | LLM 與工具生成限制 | 草稿，未載入 |
 
 測試版本統一為 Medusa `v2.22.4`。API Specification、Platform Profile、Scenario Configuration、Synthetic State 與 Generation Policy 均以 `v2.22.4` 為基準。
