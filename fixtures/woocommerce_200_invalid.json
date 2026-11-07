@@ -1,0 +1,17 @@
+{
+  "platform_id": "woocommerce",
+  "operation_id": "get_product",
+  "contract_version": "poc-v1",
+  "status_code": 200,
+  "headers": {
+    "Content-Type": "application/json; charset=utf-8",
+    "X-Request-ID": "demo-001"
+  },
+  "body": {
+    "id": "101",
+    "name": "PoC 商品",
+    "type": "simple",
+    "status": "publish",
+    "price": 19.90
+  }
+}
