@@ -1,0 +1,18 @@
+# Scenario Configuration 草稿；目前不會被載入。
+schema_version: 1
+scenario_id: medusa-product-found
+platform_id: medusa
+profile_id: medusa-store-v2.22.4
+request_id: medusa-store-product-get
+description: 回傳一筆合成商品的成功查詢
+response:
+  status_code: 200
+  content_type: application/json
+requirements:
+  product_exists: true
+  product_is_synthetic: true
+  product_id: prod_synthetic_001
+failure_behavior:
+  on_missing_contract: unverifiable
+  on_validation_failure: reject
+  allow_llm_to_invent_fields: false

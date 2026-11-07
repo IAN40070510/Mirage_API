@@ -1,0 +1,28 @@
+# Generation Policy 草稿；目前不會被 Orchestrator 或 LLM 載入。
+schema_version: 1
+policy_id: medusa-store-safe-generation-v1
+platform_id: medusa
+profile_id: medusa-store-v2.22.4
+mode: draft
+model:
+  provider: ollama
+  model: REPLACE_WITH_APPROVED_LOCAL_MODEL
+  temperature: 0
+tools:
+  allowed:
+    - platform_profile
+    - synthetic_state
+    - scenario_configuration
+    - response_composer
+    - response_validator
+  denied:
+    - live_store_network_access
+    - real_customer_data_lookup
+    - arbitrary_filesystem_read
+    - unapproved_external_tools
+output:
+  must_validate_before_render: true
+  must_keep_status_headers_body_together: true
+  max_repair_attempts: 0
+  fallback_requires_same_contract: true
+  on_unverifiable: fail_closed

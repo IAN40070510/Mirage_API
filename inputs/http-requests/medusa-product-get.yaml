@@ -1,0 +1,18 @@
+# HTTP Request 草稿：供未來 Orchestrator 使用，目前不會被程式載入。
+schema_version: 1
+request_id: medusa-store-product-get
+platform_id: medusa
+source_tag: v2.22.4
+method: GET
+path: /store/products/{id}
+path_parameters:
+  id: prod_synthetic_001
+query: {}
+headers:
+  Accept: application/json
+  # Medusa Store API 的 publishable key 由執行環境注入，不寫入 input。
+  X-Publishable-Api-Key: ${MEDUSA_PUBLISHABLE_API_KEY}
+body: null
+expected_response:
+  status_codes: [200, 404]
+  content_type: application/json

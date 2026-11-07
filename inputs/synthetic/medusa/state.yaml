@@ -1,0 +1,22 @@
+# Synthetic State 草稿；不是資料庫，也不會被目前程式載入。
+schema_version: 1
+state_id: medusa-demo-state-v1
+platform_id: medusa
+profile_id: medusa-store-v2.22.4
+seed: 20261108
+isolation_key: medusa:v2.22.4:demo:20261108
+entities:
+  products:
+    - id: prod_synthetic_001
+      title: 合成示範商品
+      handle: synthetic-demo-product
+      status: published
+      variants:
+        - id: variant_synthetic_001
+          title: Default
+          sku: SYNTH-001
+          inventory_quantity: 10
+provenance:
+  generated: true
+  real_data_imported: false
+  source: local_seed

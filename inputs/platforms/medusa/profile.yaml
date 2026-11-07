@@ -1,0 +1,24 @@
+# Platform Profile 草稿；目前 PlatformRegistry 不會載入此檔案。
+schema_version: 1
+profile_id: medusa-store-v2.22.4
+platform_id: medusa
+source_repository: https://github.com/medusajs/medusa
+source_tag: v2.22.4
+source_file: www/apps/api-reference/specs/store/openapi.yaml
+spec_info_version: '2.22.3'
+source_status: tag_verified_spec_version_requires_review
+approved: false
+api_area: store
+base_url: https://shop.example
+openapi_file: openapi.yaml
+contract_status: existing_local_file_is_not_yet_verified_against_v2.22.4
+allowed_operations:
+  - operation_id: GetProductsId
+    method: GET
+    path: /store/products/{id}
+    response_statuses: [200, 404]
+generation_constraints:
+  synthetic_only: true
+  never_use_real_customer_data: true
+  do_not_infer_missing_schema: true
+  do_not_cross_version_fallback: true
