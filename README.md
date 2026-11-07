@@ -1,6 +1,6 @@
 # Mirage_API：跨平台假 API 回應生成器(電商為例)
 
-本專案規劃接收 HTTP API 請求、辨識電商平台、以本地 LLM 與工具組成合成回應，再通過對應網站與版本的契約驗證後渲染。**目前只實作格式驗證工具及獨立驗證 API；生成、Ollama 協調、修正重試、備援與 HTTP 回應渲染尚未實作。** 下圖是規劃主軸；本文所有「規劃」格式僅定義預期介面，不能當作現有 API 使用。
+本專案規劃接收 HTTP API 請求、辨識電商平台、以本地 LLM 與工具組成合成回應，再通過對應網站與版本的契約驗證後渲染。**目前已實作 A 的 FastAPI HTTP 請求入口、格式驗證工具及獨立驗證 API；平台識別、生成、Ollama 協調、修正重試、備援與 HTTP 回應渲染尚未實作。** 下圖是規劃主軸；本文所有「規劃」格式僅定義預期介面，不能當作現有 API 使用。
 
 ```mermaid
 flowchart TB
@@ -40,7 +40,7 @@ flowchart TB
 
 | 節點 | 輸入 → 職責 → 輸出 | 狀態 |
 | --- | --- | --- |
-| A HTTP API 請求 | method、URL、headers、body → 保留原始 URL、query、追蹤 ID 的標準化請求 | 生成服務未實作；驗證 API 只接受已組好的候選回應 |
+| A HTTP API 請求 | method、URL、headers、body → 保留原始 URL、query、追蹤 ID 的標準化請求 | **已實作**：`mirage_api.api:app`；保留重複 query／headers 與 body bytes，尚未接上 B/C，預設回 501 |
 | B 平台識別器 | 網站 origin、API 前綴、method、path、部署版本 → 唯一平台與 operation；不明時拒絕猜測 | 正式驗證器內已有網站契約匹配；獨立識別器未實作 |
 | C 任務協調器與 P Ollama | 識別結果 → 向 D–G 取材、限制 LLM 工具與輪次、指示 H；Ollama 提供本地推論 | 未實作；未選定模型 |
 | D 平台 Profile 工具 | 已審查的站點與版本設定、OpenAPI 契約 → 欄位、狀態碼、媒體類型、平台慣例 | 只有驗證用 manifest／規格載入；生成用 Profile 工具未實作 |
@@ -62,6 +62,7 @@ Mirage_API/
 ├─ README.md
 ├─ pyproject.toml                    # 現有驗證器依賴及測試設定
 ├─ .env.example                      # MIRAGE_PLATFORMS_DIR 設定提示
+├─ mirage_api/                       # A：FastAPI 原生請求入口與標準化介面
 ├─ mirage_validator/                 # 已實作的驗證 API、網站契約 gate、PoC 驗證
 │  └─ contracts/*.json               # 與正式契約隔離的 PoC 示意契約
 ├─ inputs/platforms/
@@ -149,7 +150,18 @@ synthetic_seed: 42
 
 先讓一個站點、單一 operation 和少數狀態碼形成可驗證閉環，再擴充。`poc-v1` 是本專案示意契約版本，**不是平台版本**。若官方規格未描述動態欄位、外掛、授權或商業規則，維持未涵蓋，另做參考服務對照。
 
-## 已實作的格式驗證 API
+## 已實作的 A：HTTP 請求入口
+
+直接用 FastAPI 接收目標 path，不必把請求包成 JSON。入口與驗證 API 分開啟動：
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn mirage_api.api:app --host 127.0.0.1 --port 8001 --no-proxy-headers
+curl.exe -i "http://127.0.0.1:8001/store/products/prod_synthetic_001?fields=id&fields=title" -H "X-Request-ID: demo-001"
+```
+
+A 會保留 method、原始 URL／path／query、重複 headers、body bytes 與追蹤 ID，供後續 handler 使用。B/C 尚未接上，預設回 `501 pipeline_not_implemented` 與 `X-Request-ID`；不代表已生成商品回應。body 超過 1 MiB 回 413，無效或重複追蹤 ID 回 400。此入口沒有 `/docs`；驗證 API 的 `/docs` 維持原樣。詳見 [入口介面與部署方式](docs/ingress.md)。
+
+## 已實作的 I：格式驗證 API
 
 `POST /v1/validate` 接受原請求定位資訊與**候選最終回應**，不生成回應。下例 `shop.example` 是占位網站；在沒有已核准契約時，預期 `unverifiable`，不是成功範例：
 

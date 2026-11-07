@@ -16,7 +16,7 @@ test = ["pytest>=8.3,<9", "httpx>=0.28,<0.29"]
 mirage_validator = ["contracts/*.json"]
 
 [tool.setuptools.packages.find]
-include = ["mirage_validator*"]
+include = ["mirage_validator*", "mirage_api*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

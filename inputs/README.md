@@ -11,4 +11,4 @@
 | Synthetic State | `synthetic/<platform>/` | 可重現的合成資料狀態 | 草稿，未載入 |
 | Generation Policy | `policies/<platform>/` | LLM 與工具生成限制 | 草稿，未載入 |
 
-`v2.22.4` 是來源 repository tag；官方 Store OpenAPI 入口檔的 `info.version` 為 `2.22.3`。兩者必須分開保存，直到完整規格、commit、hash 與目標部署完成核對。
+測試版本統一為 Medusa `v2.22.4`。API Specification、Platform Profile、Scenario Configuration、Synthetic State 與 Generation Policy 均以 `v2.22.4` 為基準。

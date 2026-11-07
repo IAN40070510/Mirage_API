@@ -1,9 +1,9 @@
-# 已檢查的使用者輸入；來源與部署尚未核實，不自動載入。
+# 測試目標為 v2.22.4；來源與部署尚未核實，不自動載入。
 platform_id: medusa
-platform_version: '2.20.1'
-source_url: https://github.com/medusajs/medusa
-source_revision: UNVERIFIED-reported-v2.21.0
-spec_sha256: eb6e864e2a5079e6e667f0475c69d8a49b6131913996fbc3f3cef7ec3319d9fc
+platform_version: '2.22.4'
+source_url: https://github.com/medusajs/medusa/tree/v2.22.4
+source_revision: v2.22.4
+spec_sha256: REPLACE_AFTER_V2_22_4_FULL_SPEC_IMPORT
 approved: false
 openapi_file: openapi.yaml
 # paths 已含 /store 與 /auth，此處填網站 origin；以下只是占位值。

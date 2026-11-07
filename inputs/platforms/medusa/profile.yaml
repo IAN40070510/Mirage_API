@@ -5,7 +5,8 @@ platform_id: medusa
 source_repository: https://github.com/medusajs/medusa
 source_tag: v2.22.4
 source_file: www/apps/api-reference/specs/store/openapi.yaml
-spec_info_version: '2.22.3'
+spec_info_version: '2.22.4'
+test_target_version: '2.22.4'
 source_status: tag_verified_spec_version_requires_review
 approved: false
 api_area: store
