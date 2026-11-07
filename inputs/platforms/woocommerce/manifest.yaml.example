@@ -1,0 +1,12 @@
+# 範本；不是已驗證的官方契約。填入確切版本、官方來源及雜湊。
+platform_id: woocommerce
+platform_version: REPLACE_WITH_EXACT_VERSION
+source_url: https://REPLACE_WITH_OFFICIAL_SOURCE
+source_revision: REPLACE_WITH_TAG_OR_COMMIT
+spec_sha256: REPLACE_WITH_SHA256
+approved: false
+openapi_file: openapi.yaml
+base_urls:
+  - https://shop.example/REPLACE_WITH_API_PREFIX
+query_contexts:
+  - {}

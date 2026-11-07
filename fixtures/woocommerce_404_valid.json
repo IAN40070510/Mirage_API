@@ -1,0 +1,14 @@
+{
+  "platform_id": "woocommerce",
+  "operation_id": "get_product",
+  "contract_version": "poc-v1",
+  "status_code": 404,
+  "headers": {
+    "Content-Type": "application/json; charset=utf-8",
+    "X-Request-ID": "demo-001"
+  },
+  "body": {
+    "code": "product_not_found",
+    "message": "找不到商品"
+  }
+}

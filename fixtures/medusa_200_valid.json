@@ -1,0 +1,17 @@
+{
+  "platform_id": "medusa",
+  "operation_id": "get_product",
+  "contract_version": "poc-v1",
+  "status_code": 200,
+  "headers": {
+    "Content-Type": "application/json; charset=utf-8",
+    "X-Request-ID": "demo-001"
+  },
+  "body": {
+    "product": {
+      "id": "prod_demo101",
+      "title": "PoC 商品",
+      "status": "published"
+    }
+  }
+}

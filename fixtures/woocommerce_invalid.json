@@ -1,0 +1,14 @@
+{
+  "platform_id": "woocommerce",
+  "operation_id": "get_product",
+  "contract_version": "poc-v1",
+  "status_code": 200,
+  "headers": {
+    "Content-Type": "text/html"
+  },
+  "body": {
+    "id": "wrong",
+    "status": "unknown",
+    "extra": true
+  }
+}

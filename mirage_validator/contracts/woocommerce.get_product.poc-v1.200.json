@@ -1,0 +1,56 @@
+{
+  "platform_id": "woocommerce",
+  "operation_id": "get_product",
+  "contract_version": "poc-v1",
+  "status_code": 200,
+  "description": "PoC 示意契約；不等同官方 API，404 為統一示範格式。",
+  "content_types": [
+    "application/json"
+  ],
+  "required_headers": {
+    "x-request-id": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "body_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "name": {
+        "type": "string",
+        "minLength": 1
+      },
+      "type": {
+        "enum": [
+          "simple",
+          "variable"
+        ]
+      },
+      "status": {
+        "enum": [
+          "publish",
+          "draft",
+          "pending",
+          "private"
+        ]
+      },
+      "price": {
+        "type": "string",
+        "pattern": "^\\d+\\.\\d{2}$"
+      }
+    },
+    "required": [
+      "id",
+      "name",
+      "type",
+      "status",
+      "price"
+    ],
+    "additionalProperties": false
+  }
+}

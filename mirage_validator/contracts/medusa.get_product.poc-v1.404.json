@@ -1,0 +1,36 @@
+{
+  "platform_id": "medusa",
+  "operation_id": "get_product",
+  "contract_version": "poc-v1",
+  "status_code": 404,
+  "description": "PoC 示意契約；不等同官方 API，404 為統一示範格式。",
+  "content_types": [
+    "application/json"
+  ],
+  "required_headers": {
+    "x-request-id": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "body_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "code": {
+        "enum": [
+          "product_not_found"
+        ]
+      },
+      "message": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "required": [
+      "code",
+      "message"
+    ],
+    "additionalProperties": false
+  }
+}

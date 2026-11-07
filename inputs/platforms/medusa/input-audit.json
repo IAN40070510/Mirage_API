@@ -1,0 +1,94 @@
+{
+  "spec_sha256": "eb6e864e2a5079e6e667f0475c69d8a49b6131913996fbc3f3cef7ec3319d9fc",
+  "scope_sha256": "cce318b62a355184cd7cac51e67ea30d131c15e3ff0d6b662aac116b79a5007f",
+  "source_sha256_in_scope": "438ac1daa9b3d6e27944e05a553986dcc4a3f3dbde72dd4d3b978575d6eaf328",
+  "openapi": "3.0.0",
+  "info": {
+    "version": "2.20.1",
+    "title": "Medusa Storefront API",
+    "license": {
+      "name": "MIT",
+      "url": "https://github.com/medusajs/medusa/blob/master/LICENSE"
+    }
+  },
+  "scope_reported_tag": "v2.21.0",
+  "scope_spec_version": "2.20.1",
+  "paths": 67,
+  "operations": 77,
+  "scope_operations": 77,
+  "scope_only": [],
+  "spec_only": [],
+  "operation_id_mismatches": [],
+  "external_refs": [],
+  "broken_internal_refs": [],
+  "response_status_counts": {
+    "200": 75,
+    "400": 77,
+    "401": 77,
+    "404": 77,
+    "409": 77,
+    "422": 77,
+    "500": 77,
+    "201": 2
+  },
+  "response_media_schemas": 529,
+  "responses_without_content": [
+    [
+      "POST",
+      "/auth/customer/emailpass/verification/confirm",
+      "200"
+    ],
+    [
+      "POST",
+      "/auth/mfa/challenges/{id}/verify",
+      "200"
+    ],
+    [
+      "GET",
+      "/auth/mfa/factors",
+      "200"
+    ],
+    [
+      "POST",
+      "/auth/mfa/factors",
+      "200"
+    ],
+    [
+      "DELETE",
+      "/auth/mfa/factors/{id}",
+      "200"
+    ],
+    [
+      "POST",
+      "/auth/mfa/factors/{id}/verify",
+      "200"
+    ],
+    [
+      "POST",
+      "/auth/mfa/recovery-codes",
+      "200"
+    ],
+    [
+      "POST",
+      "/auth/verification/confirm",
+      "200"
+    ],
+    [
+      "POST",
+      "/auth/verification/request",
+      "201"
+    ],
+    [
+      "GET",
+      "/store/gift-cards/{idOrCode}",
+      "200"
+    ]
+  ],
+  "openapi_validation": "passed",
+  "schemas": 133,
+  "scope_meaning": "Requests selected for XGBoost inference; not evidence of detection accuracy or training coverage.",
+  "registry_load": "passed",
+  "unapproved_contract_blocked": true,
+  "official_provenance_verified": false,
+  "deployment_version_verified": false
+}

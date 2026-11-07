@@ -1,0 +1,478 @@
+{
+  "source_file": "C:\\Users\\USER\\Downloads\\openapi.full.yaml",
+  "source_sha256": "438ac1daa9b3d6e27944e05a553986dcc4a3f3dbde72dd4d3b978575d6eaf328",
+  "reported_repository_tag": "v2.21.0",
+  "spec_info_version": "2.20.1",
+  "openapi": "3.0.0",
+  "path_count": 67,
+  "operation_count": 77,
+  "counts": {
+    "auth": 18,
+    "store": 59
+  },
+  "scope_meaning": "Requests selected for XGBoost inference; not evidence of detection accuracy or training coverage.",
+  "operations": [
+    {
+      "method": "POST",
+      "path": "/auth/customer/emailpass/verification/confirm",
+      "operation_id": "PostActor_typeAuth_providerVerificationConfirm",
+      "summary": "Verify the Customer's Email"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/customer/providers",
+      "operation_id": "GetCustomerProviders",
+      "summary": "List Auth Providers for Customers"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/customer/{auth_provider}",
+      "operation_id": "PostActor_typeAuth_provider",
+      "summary": "Authenticate Customer"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/customer/{auth_provider}/callback",
+      "operation_id": "PostActor_typeAuth_providerCallback",
+      "summary": "Validate Authentication Callback"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/customer/{auth_provider}/register",
+      "operation_id": "PostActor_typeAuth_provider_register",
+      "summary": "Retrieve Registration JWT Token"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/customer/{auth_provider}/reset-password",
+      "operation_id": "PostActor_typeAuth_providerResetPassword",
+      "summary": "Generate Reset Password Token for Customer"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/customer/{auth_provider}/update",
+      "operation_id": "PostActor_typeAuth_providerUpdate",
+      "summary": "Reset a Customer's Password"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/mfa/challenges/{id}/verify",
+      "operation_id": "PostMfaChallengesIdVerify",
+      "summary": "Verify a Multi-Factor Authentication (MFA) Challenge"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/mfa/factors",
+      "operation_id": "GetMfaFactors",
+      "summary": "List Multifactor Authentication (MFA) Factors"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/mfa/factors",
+      "operation_id": "PostMfaFactors",
+      "summary": "Start Multi-Factor Authentication (MFA) Factor Enrollment"
+    },
+    {
+      "method": "DELETE",
+      "path": "/auth/mfa/factors/{id}",
+      "operation_id": "DeleteMfaFactorsId",
+      "summary": "Disable a Multi-Factor Authentication (MFA) Factor"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/mfa/factors/{id}/verify",
+      "operation_id": "PostMfaFactorsIdVerify",
+      "summary": "Verify and Enable a Multi-Factor Authentication (MFA) Factor"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/mfa/recovery-codes",
+      "operation_id": "PostMfaRecoveryCodes",
+      "summary": "Generate Multi-Factor Authentication (MFA) Recovery Codes"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/session",
+      "operation_id": "PostSession",
+      "summary": "Set Authentication Session"
+    },
+    {
+      "method": "DELETE",
+      "path": "/auth/session",
+      "operation_id": "DeleteSession",
+      "summary": "Delete Authentication Session"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/token/refresh",
+      "operation_id": "PostAdminAuthTokenRefresh",
+      "summary": "Refresh Authentication Token"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/verification/confirm",
+      "operation_id": "PostVerificationConfirm",
+      "summary": "Confirm Customer Verification"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/verification/request",
+      "operation_id": "PostVerificationRequest",
+      "summary": "Request Customer Verification"
+    },
+    {
+      "method": "POST",
+      "path": "/store/carts",
+      "operation_id": "PostCarts",
+      "summary": "Create Cart"
+    },
+    {
+      "method": "GET",
+      "path": "/store/carts/{id}",
+      "operation_id": "GetCartsId",
+      "summary": "Get a Cart"
+    },
+    {
+      "method": "POST",
+      "path": "/store/carts/{id}",
+      "operation_id": "PostCartsId",
+      "summary": "Update a Cart"
+    },
+    {
+      "method": "POST",
+      "path": "/store/carts/{id}/complete",
+      "operation_id": "PostCartsIdComplete",
+      "summary": "Complete Cart"
+    },
+    {
+      "method": "POST",
+      "path": "/store/carts/{id}/customer",
+      "operation_id": "PostCartsIdCustomer",
+      "summary": "Change Cart's Customer to Logged-in Customer"
+    },
+    {
+      "method": "POST",
+      "path": "/store/carts/{id}/gift-cards",
+      "operation_id": "PostCartsIdGiftCards",
+      "summary": "Add Gift Card to Cart"
+    },
+    {
+      "method": "DELETE",
+      "path": "/store/carts/{id}/gift-cards",
+      "operation_id": "DeleteCartsIdGiftCards",
+      "summary": "Remove Gift Card from Cart"
+    },
+    {
+      "method": "POST",
+      "path": "/store/carts/{id}/line-items",
+      "operation_id": "PostCartsIdLineItems",
+      "summary": "Add Line Item to Cart"
+    },
+    {
+      "method": "POST",
+      "path": "/store/carts/{id}/line-items/{line_id}",
+      "operation_id": "PostCartsIdLineItemsLine_id",
+      "summary": "Update a Line Item in a Cart"
+    },
+    {
+      "method": "DELETE",
+      "path": "/store/carts/{id}/line-items/{line_id}",
+      "operation_id": "DeleteCartsIdLineItemsLine_id",
+      "summary": "Remove Line Item from Cart"
+    },
+    {
+      "method": "POST",
+      "path": "/store/carts/{id}/promotions",
+      "operation_id": "PostCartsIdPromotions",
+      "summary": "Add Promotions to Cart"
+    },
+    {
+      "method": "DELETE",
+      "path": "/store/carts/{id}/promotions",
+      "operation_id": "DeleteCartsIdPromotions",
+      "summary": "Remove Promotions from Cart"
+    },
+    {
+      "method": "POST",
+      "path": "/store/carts/{id}/shipping-methods",
+      "operation_id": "PostCartsIdShippingMethods",
+      "summary": "Add Shipping Method to Cart"
+    },
+    {
+      "method": "POST",
+      "path": "/store/carts/{id}/store-credits",
+      "operation_id": "PostCartsIdStoreCredits",
+      "summary": "Add Store Credit to Cart"
+    },
+    {
+      "method": "POST",
+      "path": "/store/carts/{id}/taxes",
+      "operation_id": "PostCartsIdTaxes",
+      "summary": "Calculate Cart Taxes"
+    },
+    {
+      "method": "GET",
+      "path": "/store/collections",
+      "operation_id": "GetCollections",
+      "summary": "List Collections"
+    },
+    {
+      "method": "GET",
+      "path": "/store/collections/{id}",
+      "operation_id": "GetCollectionsId",
+      "summary": "Get a Collection"
+    },
+    {
+      "method": "GET",
+      "path": "/store/currencies",
+      "operation_id": "GetCurrencies",
+      "summary": "List Currencies"
+    },
+    {
+      "method": "GET",
+      "path": "/store/currencies/{code}",
+      "operation_id": "GetCurrenciesCode",
+      "summary": "Get a Currency"
+    },
+    {
+      "method": "POST",
+      "path": "/store/customers",
+      "operation_id": "PostCustomers",
+      "summary": "Register Customer"
+    },
+    {
+      "method": "GET",
+      "path": "/store/customers/me",
+      "operation_id": "GetCustomersMe",
+      "summary": "Get Logged-in Customer"
+    },
+    {
+      "method": "POST",
+      "path": "/store/customers/me",
+      "operation_id": "PostCustomersMe",
+      "summary": "Update Customer"
+    },
+    {
+      "method": "GET",
+      "path": "/store/customers/me/addresses",
+      "operation_id": "GetCustomersMeAddresses",
+      "summary": "List Customer's Addresses"
+    },
+    {
+      "method": "POST",
+      "path": "/store/customers/me/addresses",
+      "operation_id": "PostCustomersMeAddresses",
+      "summary": "Create Address for Logged-In Customer"
+    },
+    {
+      "method": "GET",
+      "path": "/store/customers/me/addresses/{address_id}",
+      "operation_id": "GetCustomersMeAddressesAddress_id",
+      "summary": "Get Customer's Address"
+    },
+    {
+      "method": "POST",
+      "path": "/store/customers/me/addresses/{address_id}",
+      "operation_id": "PostCustomersMeAddressesAddress_id",
+      "summary": "Update Customer's Address"
+    },
+    {
+      "method": "DELETE",
+      "path": "/store/customers/me/addresses/{address_id}",
+      "operation_id": "DeleteCustomersMeAddressesAddress_id",
+      "summary": "Remove Customer's Address"
+    },
+    {
+      "method": "GET",
+      "path": "/store/gift-cards/{idOrCode}",
+      "operation_id": "GetGiftCardsIdorcode",
+      "summary": "Get a Gift Card"
+    },
+    {
+      "method": "GET",
+      "path": "/store/locales",
+      "operation_id": "GetLocales",
+      "summary": "List Locales"
+    },
+    {
+      "method": "GET",
+      "path": "/store/orders",
+      "operation_id": "GetOrders",
+      "summary": "List Logged-in Customer's Orders"
+    },
+    {
+      "method": "GET",
+      "path": "/store/orders/{id}",
+      "operation_id": "GetOrdersId",
+      "summary": "Get an Order"
+    },
+    {
+      "method": "POST",
+      "path": "/store/orders/{id}/transfer/accept",
+      "operation_id": "PostOrdersIdTransferAccept",
+      "summary": "Accept Order Transfer"
+    },
+    {
+      "method": "POST",
+      "path": "/store/orders/{id}/transfer/cancel",
+      "operation_id": "PostOrdersIdTransferCancel",
+      "summary": "Cancel Order Transfer"
+    },
+    {
+      "method": "POST",
+      "path": "/store/orders/{id}/transfer/decline",
+      "operation_id": "PostOrdersIdTransferDecline",
+      "summary": "Decline Order Transfer"
+    },
+    {
+      "method": "POST",
+      "path": "/store/orders/{id}/transfer/request",
+      "operation_id": "PostOrdersIdTransferRequest",
+      "summary": "Request Order Transfer"
+    },
+    {
+      "method": "POST",
+      "path": "/store/payment-collections",
+      "operation_id": "PostPaymentCollections",
+      "summary": "Create Payment Collection"
+    },
+    {
+      "method": "POST",
+      "path": "/store/payment-collections/{id}/payment-sessions",
+      "operation_id": "PostPaymentCollectionsIdPaymentSessions",
+      "summary": "Initialize Payment Session of a Payment Collection"
+    },
+    {
+      "method": "GET",
+      "path": "/store/payment-providers",
+      "operation_id": "GetPaymentProviders",
+      "summary": "List Payment Providers"
+    },
+    {
+      "method": "GET",
+      "path": "/store/product-categories",
+      "operation_id": "GetProductCategories",
+      "summary": "List Product Categories"
+    },
+    {
+      "method": "GET",
+      "path": "/store/product-categories/{id}",
+      "operation_id": "GetProductCategoriesId",
+      "summary": "Get a Product Category"
+    },
+    {
+      "method": "GET",
+      "path": "/store/product-options",
+      "operation_id": "GetProductOptions",
+      "summary": "List Product Options"
+    },
+    {
+      "method": "GET",
+      "path": "/store/product-options/{id}",
+      "operation_id": "GetProductOptionsId",
+      "summary": "Get a Product Option"
+    },
+    {
+      "method": "GET",
+      "path": "/store/product-tags",
+      "operation_id": "GetProductTags",
+      "summary": "List Product Tags"
+    },
+    {
+      "method": "GET",
+      "path": "/store/product-tags/{id}",
+      "operation_id": "GetProductTagsId",
+      "summary": "Get a Product Tag"
+    },
+    {
+      "method": "GET",
+      "path": "/store/product-types",
+      "operation_id": "GetProductTypes",
+      "summary": "List Product Types"
+    },
+    {
+      "method": "GET",
+      "path": "/store/product-types/{id}",
+      "operation_id": "GetProductTypesId",
+      "summary": "Get a Product Type"
+    },
+    {
+      "method": "GET",
+      "path": "/store/product-variants",
+      "operation_id": "GetProductVariants",
+      "summary": "List Product Variants"
+    },
+    {
+      "method": "GET",
+      "path": "/store/products",
+      "operation_id": "GetProducts",
+      "summary": "List Products"
+    },
+    {
+      "method": "GET",
+      "path": "/store/products/{id}",
+      "operation_id": "GetProductsId",
+      "summary": "Get a Product"
+    },
+    {
+      "method": "GET",
+      "path": "/store/regions",
+      "operation_id": "GetRegions",
+      "summary": "List Regions"
+    },
+    {
+      "method": "GET",
+      "path": "/store/regions/{id}",
+      "operation_id": "GetRegionsId",
+      "summary": "Get a Region"
+    },
+    {
+      "method": "GET",
+      "path": "/store/return-reasons",
+      "operation_id": "GetReturnReasons",
+      "summary": "List Return Reasons"
+    },
+    {
+      "method": "GET",
+      "path": "/store/return-reasons/{id}",
+      "operation_id": "GetReturnReasonsId",
+      "summary": "Get a Return Reason"
+    },
+    {
+      "method": "POST",
+      "path": "/store/returns",
+      "operation_id": "PostReturns",
+      "summary": "Create Return"
+    },
+    {
+      "method": "GET",
+      "path": "/store/shipping-options",
+      "operation_id": "GetShippingOptions",
+      "summary": "List Shipping Options for Cart"
+    },
+    {
+      "method": "POST",
+      "path": "/store/shipping-options/{id}/calculate",
+      "operation_id": "PostShippingOptionsIdCalculate",
+      "summary": "Calculate Shipping Option Price"
+    },
+    {
+      "method": "GET",
+      "path": "/store/store-credit-accounts",
+      "operation_id": "GetStoreCreditAccounts",
+      "summary": "List Customer's Store Credit Accounts"
+    },
+    {
+      "method": "POST",
+      "path": "/store/store-credit-accounts/claim",
+      "operation_id": "PostStoreCreditAccountsClaim",
+      "summary": "Claim a Store Credit Account"
+    },
+    {
+      "method": "GET",
+      "path": "/store/store-credit-accounts/{id}",
+      "operation_id": "GetStoreCreditAccountsId",
+      "summary": "Get Customer's Store Credit Account"
+    }
+  ]
+}

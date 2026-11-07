@@ -1,0 +1,15 @@
+{
+  "platform_id": "medusa",
+  "operation_id": "get_product",
+  "contract_version": "poc-v1",
+  "status_code": 200,
+  "headers": {
+    "Content-Type": "text/html"
+  },
+  "body": {
+    "product": {
+      "id": 123,
+      "status": "unknown"
+    }
+  }
+}
