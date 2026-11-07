@@ -1,11 +1,12 @@
 # A：FastAPI HTTP 請求入口
 
-`mirage_api.api:app` 直接接收 HTTP 請求，把標準化的 `NormalizedRequest` 交給下一階段 handler。沒有另包一層 JSON 請求描述，也不會向 URL 發送網路請求。既有 `mirage_validator.api:app` 繼續提供獨立的驗證 API。
+`deception.api.app:app` 直接接收 HTTP 請求，把標準化的 `NormalizedRequest` 交給下一階段 handler。沒有另包一層 JSON 請求描述，也不會向 URL 發送網路請求。既有 `mirage_validator.api:app` 繼續提供獨立的驗證 API。
 
 在專案根目錄啟動：
 
 ```powershell
-.\.venv\Scripts\python.exe -m uvicorn mirage_api.api:app --host 127.0.0.1 --port 8001 --no-proxy-headers
+$env:PYTHONPATH = "$PWD/src"
+.\.venv\Scripts\python.exe -m uvicorn deception.api.app:app --host 127.0.0.1 --port 8001 --no-proxy-headers
 curl.exe -i "http://127.0.0.1:8001/store/products/prod_synthetic_001?fields=id&fields=title" -H "X-Request-ID: demo-001"
 ```
 

@@ -15,9 +15,13 @@ test = ["pytest>=8.3,<9", "httpx>=0.28,<0.29"]
 [tool.setuptools.package-data]
 mirage_validator = ["contracts/*.json"]
 
+[tool.setuptools]
+package-dir = {deception = "src/deception"}
+
 [tool.setuptools.packages.find]
-include = ["mirage_validator*", "mirage_api*"]
+where = [".", "src"]
+include = ["mirage_validator*", "deception*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["."]
+pythonpath = [".", "src"]

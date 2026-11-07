@@ -6,7 +6,7 @@ import pytest
 from fastapi.responses import Response
 from fastapi.testclient import TestClient
 
-from mirage_api.api import create_app
+from deception.api.app import create_app
 
 
 def capture_app(**kwargs):

@@ -1,6 +1,6 @@
 # Mirage_API：跨平台假 API 回應生成器(電商為例)
 
-本專案規劃接收 HTTP API 請求、辨識電商平台、以本地 LLM 與工具組成合成回應，再通過對應網站與版本的契約驗證後渲染。**目前已實作 A 的 FastAPI HTTP 請求入口、格式驗證工具及獨立驗證 API；平台識別、生成、Ollama 協調、修正重試、備援與 HTTP 回應渲染尚未實作。** 下圖是規劃主軸；本文所有「規劃」格式僅定義預期介面，不能當作現有 API 使用。
+本專案規劃接收 HTTP API 請求、辨識電商平台、以本地 LLM 與工具組成合成回應，再通過對應網站與版本的契約驗證後渲染。**目前已實作 A 的 FastAPI HTTP 請求入口、D 平台 Profile 建立與查詢工具、格式驗證工具及獨立驗證 API；平台識別、生成、Ollama 協調、修正重試、備援與 HTTP 回應渲染尚未實作。** 下圖是規劃主軸；本文所有「規劃」格式僅定義預期介面，不能當作現有 API 使用。
 
 ```mermaid
 flowchart TB
@@ -40,10 +40,10 @@ flowchart TB
 
 | 節點 | 輸入 → 職責 → 輸出 | 狀態 |
 | --- | --- | --- |
-| A HTTP API 請求 | method、URL、headers、body → 保留原始 URL、query、追蹤 ID 的標準化請求 | **已實作**：`mirage_api.api:app`；保留重複 query／headers 與 body bytes，尚未接上 B/C，預設回 501 |
+| A HTTP API 請求 | method、URL、headers、body → 保留原始 URL、query、追蹤 ID 的標準化請求 | **已實作**：`deception.api.app:app`；保留重複 query／headers 與 body bytes，尚未接上 B/C，預設回 501 |
 | B 平台識別器 | 網站 origin、API 前綴、method、path、部署版本 → 唯一平台與 operation；不明時拒絕猜測 | 正式驗證器內已有網站契約匹配；獨立識別器未實作 |
 | C 任務協調器與 P Ollama | 識別結果 → 向 D–G 取材、限制 LLM 工具與輪次、指示 H；Ollama 提供本地推論 | 未實作；未選定模型 |
-| D 平台 Profile 工具 | 已審查的站點與版本設定、OpenAPI 契約 → 欄位、狀態碼、媒體類型、平台慣例 | 只有驗證用 manifest／規格載入；生成用 Profile 工具未實作 |
+| D 平台 Profile 工具 | 固定來源與 OpenAPI → 可追溯的操作、參數、狀態碼、媒體類型、schema 上下文 | **已實作**：`src/deception/profile_builder/`；提供 CLI 建立及 Python 查詢，尚未接上 C；不推測平台慣例 |
 | E 合成資料工具 | 種子、資料規則、關聯 ID → 一致的合成商品、顧客或訂單 | 未實作 |
 | F 安全情境工具 | 白名單與請求上下文 → 允許的情境和限制，例如商品不存在／庫存不足 | 未實作 |
 | G 內容生成工具 | Profile、合成資料、情境、模型提示 → 動態文字與欄位候選 | 未實作 |
@@ -62,7 +62,10 @@ Mirage_API/
 ├─ README.md
 ├─ pyproject.toml                    # 現有驗證器依賴及測試設定
 ├─ .env.example                      # MIRAGE_PLATFORMS_DIR 設定提示
-├─ mirage_api/                       # A：FastAPI 原生請求入口與標準化介面
+├─ src/deception/api/               # A：FastAPI 原生請求入口與標準化介面
+├─ src/deception/profile_builder/   # D：來源檢查、Profile 建立與操作查詢
+├─ inputs/sources/                  # D：source.yaml 與固定 OpenAPI 輸入
+├─ generated/                       # D：自動產生的 profiles 與 schemas 快照
 ├─ mirage_validator/                 # 已實作的驗證 API、網站契約 gate、PoC 驗證
 │  └─ contracts/*.json               # 與正式契約隔離的 PoC 示意契約
 ├─ inputs/platforms/
@@ -81,7 +84,7 @@ Mirage_API/
 
 **人工必要輸入（啟用網站契約前）**：在 `inputs/platforms/<站點與版本套件>/` 放入經核對的固定版本 `openapi.yaml`（或 manifest 指定檔名）及 `manifest.yaml`；填入精確平台／部署版本、真正的來源 URL 與不可變 revision、規格 SHA-256、實際站點 `base_urls`、已審查的 `query_contexts`。`approved: true` 只能由維護者在來源、部署和適用範圍審查完成後設定；雜湊正確不等於官方或部署相符。只接受打包好的內部 `$ref`，不能讓請求指定本地檔案或自動抓遠端引用。
 
-**規劃中的人工輸入**：`inputs/profiles/<platform>/<version>/profile.yaml` 可記錄生成慣例與欄位對映；`inputs/scenarios/*.yaml` 可定義允許的測試情境；`inputs/seeds/*.yaml` 可固定合成資料種子。**這些路徑目前不存在且不會被載入。** Profile 只能補充生成規則，不能放寬 OpenAPI 回應契約。
+**D 的人工輸入與系統產物**：提供 `inputs/sources/<platform>/source.yaml` 與同目錄固定規格後，D 產生 `generated/profiles/<platform>.yaml` 和 `generated/schemas/<platform>/<sha256>.yaml`。未審來源可離線預覽，但查詢預設拒絕使用；D 不改寫驗證器的 manifest。下方早期 `inputs/profiles/` 範例仍是生成規則的規劃格式，不是 D 的 parser。情境與種子草稿也尚未接上執行流程。Profile 不能放寬 OpenAPI 回應契約。
 
 **自動生成或選填資料**：未來 E 可從種子產生 `generated/<site>/<run>/products.json` 等合成資料，J 可輸出同一 run 的 context；`samples/` 可保存實測回應供人工比對。樣本不能反推為完整契約。現有 `input-audit.json` 是檢查產物，`api-scope.json` 是範圍紀錄，兩者均不參與驗證執行。
 
@@ -150,12 +153,24 @@ synthetic_seed: 42
 
 先讓一個站點、單一 operation 和少數狀態碼形成可驗證閉環，再擴充。`poc-v1` 是本專案示意契約版本，**不是平台版本**。若官方規格未描述動態欄位、外掛、授權或商業規則，維持未涵蓋，另做參考服務對照。
 
+## 已實作的 D：平台 Profile 工具
+
+已先比較 openapi-core、Prance、openapi-pydantic 與 openapi-python-client，選擇重用現有 `openapi-core==0.19.5` 做規格檢查，再建立本專案的 Profile 摘要與查詢，沒有新增依賴。功能範圍與現成方案評估見 [D 說明](docs/profiles.md)。
+
+```powershell
+$env:PYTHONPATH = "$PWD/src"
+.\.venv\Scripts\python.exe -m deception.profile_builder --source inputs/sources/medusa/source.yaml --output generated
+```
+
+目前可從使用者提供的 Medusa 規格建立 77 個 operations；來源仍為 `approved: false`。`ProfileTool.get_operation` 以平台、版本、規格雜湊、method 和 path template 精確查詢，保留 schema 引用與規格缺口。尚未提供來源的 WooCommerce 只有設定範本。
+
 ## 已實作的 A：HTTP 請求入口
 
 直接用 FastAPI 接收目標 path，不必把請求包成 JSON。入口與驗證 API 分開啟動：
 
 ```powershell
-.\.venv\Scripts\python.exe -m uvicorn mirage_api.api:app --host 127.0.0.1 --port 8001 --no-proxy-headers
+$env:PYTHONPATH = "$PWD/src"
+.\.venv\Scripts\python.exe -m uvicorn deception.api.app:app --host 127.0.0.1 --port 8001 --no-proxy-headers
 curl.exe -i "http://127.0.0.1:8001/store/products/prod_synthetic_001?fields=id&fields=title" -H "X-Request-ID: demo-001"
 ```
 

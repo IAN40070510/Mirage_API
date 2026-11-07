@@ -11,3 +11,6 @@ node_modules/
 *.egg-info/
 build/
 dist/
+generated/profiles/
+generated/schemas/
+generated/releases/

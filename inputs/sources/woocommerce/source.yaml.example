@@ -1,0 +1,9 @@
+# 待提供固定版本 OpenAPI 後填寫；.example 不會自動執行。
+schema_version: 1
+platform_id: woocommerce
+platform_version: REPLACE_WITH_PLATFORM_VERSION
+source_url: https://REPLACE_WITH_VERSIONED_SOURCE
+source_revision: REPLACE_WITH_FIXED_REVISION
+spec_sha256: REPLACE_WITH_64_HEX_SHA256
+approved: false
+openapi_file: openapi.yaml
