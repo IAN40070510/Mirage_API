@@ -22,13 +22,13 @@ Mirage_API 的製作目標是整合不同部署環境的 HTTP 流量入口，接
 | --- | --- | --- |
 | 多環境流量攔截整合 | A：FastAPI HTTP 入口及標準化請求 | 各環境流量攔截／轉送接入、部署識別與統一轉接介面 |
 | 外部攻擊判定接收 | A 可保留 request ID 供後續關聯 | 判定資料格式、來源驗證、請求關聯與情境選擇 |
-| 依多服務契約生成 | D：固定 OpenAPI 的 Profile 建立與查詢；I：契約驗證 | B 平台識別、C/G/H 生成與回應組合、更多服務對映 |
+| 依多服務契約生成 | D：固定 OpenAPI 的 Profile；H：明確模板與 E 映射的候選組合；I：契約驗證 | B 平台識別、C/G 生成、完整流程串接、更多服務對映 |
 | 跨 API 虛構資料與互動狀態 | E：可重現、可查詢的商品／變體資料與關聯 | 跨請求狀態更新、寫入操作、互動／session 隔離與並行一致性 |
 | 本地 LLM 動態生成 | 圖中的 C、G、P 與其資料邊界已規劃 | Ollama 整合、模型選定、工具調用與生成流程 |
-| 契約一致的 HTTP 輸出 | I：獨立驗證 API | H/M、修正／備援，以及入口到輸出的完整串接 |
+| 契約一致的 HTTP 輸出 | H：候選組合及契約 preflight；I：獨立驗證 API | M、修正／備援，以及入口到輸出的完整串接 |
 | 多環境集中管理 | 本地來源設定、生成設定與隔離欄位 | 集中設定儲存、管理介面、版本發布與部署綁定 |
 
-目前 A、D、E、I 可各自使用；A 尚未接上後續流程，預設回 `501 pipeline_not_implemented`。現有 E 是可查詢的固定資料快照，尚不提供互動造成的狀態更新。本文所有「規劃」格式只定義預期介面，不能當作現有 API 使用。
+目前 A、D、E、H、I 可各自使用；A 尚未接上後續流程，預設回 `501 pipeline_not_implemented`。H 接收明確指令及可選的 E 映射，輸出仍待 I 部署 gate 驗證的候選。現有 E 是可查詢的固定資料快照，尚不提供互動造成的狀態更新。本文所有「規劃」格式只定義預期介面，不能當作現有 API 使用。
 
 ## 系統架構與整合邊界
 
@@ -95,7 +95,7 @@ flowchart TB
 | F 安全情境工具 | 外部攻擊判定、情境白名單與請求上下文 → 允許的情境和限制，例如實體不存在或資源不足 | 未實作；不執行攻擊偵測 |
 | G 內容生成工具 | Profile、合成資料、情境、模型提示 → 動態文字與欄位候選 | 未實作 |
 | J Generation Context | D–G 的資料及來源 → 交回 C，記錄環境／部署／服務身份、判定關聯、契約版本、種子、情境及狀態版本 | 未實作 |
-| H 回應組合工具 | C 指令與 J → status、headers、已序列化 body；只使用契約允許欄位 | 未實作 |
+| H 回應組合工具 | 明確指令、D 契約、可選 E 映射 → status、headers、已序列化 body | **已實作**：`src/deception/core/`；UTF-8 JSON、嚴格 metadata 與契約 preflight，產物仍需 I 驗證；C/J 尚未串接 |
 | I 格式驗證工具 | 候選 status、headers、body 及原請求 URL／method → `pass`、`reject` 或 `unverifiable` 與錯誤 | **已實作** |
 | N 修正或備援 | 驗證錯誤 → 有上限的重新組合；耗盡後用同一契約已驗證的備援 | 未實作；現有驗證器不修正、不重試、不提供備援 |
 | M HTTP Response Renderer | 僅接收 `pass` 且 `valid=true` 的同一份回應 → HTTP status、headers、body | 未實作 |
@@ -127,9 +127,11 @@ Mirage_API/
 ├─ src/deception/api/               # A：FastAPI 原生請求入口與標準化介面
 ├─ src/deception/profile_builder/   # D：來源檢查、Profile 建立與操作查詢
 ├─ src/deception/synthetic/         # E：合成商品、變體、資料關聯與有效性驗證
+├─ src/deception/core/              # H：明確模板、E 映射與候選回應組合
 ├─ configs/generation.yaml          # E：隔離身份、種子、數量與生成規則
+├─ configs/composition.yaml         # H：明確狀態、headers、body 與映射指令
 ├─ inputs/sources/                  # D：source.yaml 與固定 OpenAPI 輸入
-├─ generated/                       # D/E：profiles、schemas 快照與 synthetic_data
+├─ generated/                       # D/E/H：profiles、schemas、synthetic_data、responses
 ├─ mirage_validator/                 # 已實作的驗證 API、網站契約 gate、PoC 驗證
 │  └─ contracts/*.json               # 與正式契約隔離的 PoC 示意契約
 ├─ inputs/platforms/
@@ -219,6 +221,17 @@ synthetic_seed: 42
 
 先讓一個站點、單一 operation 和少數狀態碼形成可驗證閉環，再擴充。`poc-v1` 是本專案示意契約版本，**不是平台版本**。若官方規格未描述動態欄位、外掛、授權或商業規則，維持未涵蓋，另做參考服務對照。
 
+## 已實作的 H：回應組合工具
+
+先比較 openapi-sampler、json-schema-faker 與 Prism，選擇沿用現有 Pydantic、標準庫 JSON、openapi-core 及 Werkzeug。H 依明確模板與 E 的 JSON Pointer 映射組合候選，拒絕缺欄位、錯誤型別及不符契約的狀態或媒體，不自動填值。實作含功能註解，功能、評估、有效性驗證與套件授權見 [H 說明](docs/composer.md)。
+
+```powershell
+$env:PYTHONPATH = "$PWD/src"
+.\.venv\Scripts\python.exe -m deception.core --plan configs/composition.yaml --profiles generated --output generated --allow-unreviewed
+```
+
+範例以目前未審 Medusa 來源產生明確 404 候選，因此需顯式開啟離線預覽。preflight 通過不代表 I 已放行；I 還須驗證網站、query 與部署契約。候選的 status、headers、body 在送往 I 時保持完全相同，`verify_candidate` 另核對 I 回報的 platform／version／hash／operation，避免套用其他契約的結果。H 尚未接上 A、C、J 或 M。
+
 ## 已實作的 E：合成資料工具
 
 先比較 Faker、Polyfactory 與 hypothesis-jsonschema，採用鎖版 `Faker==40.44.0` 生成商品文字，再以明確規則管理 ID、商品／變體關聯、SKU、整數金額與庫存。實作及函式均附功能註解，詳見 [E 功能、現成方案與有效性驗證](docs/synthetic.md)。
@@ -229,7 +242,7 @@ $env:PYTHONPATH = "$PWD/src"
 .\.venv\Scripts\python.exe -m deception.synthetic verify --config configs/generation.yaml --dataset "<上一行輸出的JSON路徑>"
 ```
 
-範例產生 10 個商品與 20 個變體；同設定可重建相同 bytes，讀取時核對 scope 並完整重建比對。D/E 可依平台、版本與契約雜湊綁定，但 E 的內部實體不是完整 Medusa HTTP 回應，仍待 H/I 處理映射與正式驗證。
+範例產生 10 個商品與 20 個變體；同設定可重建相同 bytes，讀取時核對 scope 並完整重建比對。D/E 可依平台、版本與契約雜湊綁定；E 內部實體經 H 明確模板與欄位映射才能成為候選，不能直接當作完整 Medusa HTTP 回應，仍須 I 正式驗證。
 
 ## 已實作的 D：平台 Profile 工具
 
@@ -332,7 +345,9 @@ curl.exe -X POST http://127.0.0.1:8000/v1/poc/validate -H "Content-Type: applica
 | 採用 | [FastAPI](https://github.com/fastapi/fastapi/blob/master/LICENSE) | MIT | 現有驗證 API |
 | 採用 | [Pydantic](https://github.com/pydantic/pydantic/blob/main/LICENSE) | MIT | 嚴格輸入／輸出模型 |
 | 採用 | [openapi-core](https://github.com/python-openapi/openapi-core/blob/master/LICENSE) | BSD-3-Clause | 正式 OpenAPI 驗證；保留版權、授權與免責聲明，不用作者名稱背書 |
-| 採用 | [jsonschema](https://github.com/python-jsonschema/jsonschema/blob/main/COPYING) | MIT | 僅 PoC 自訂契約；發行時核對實際版本 |
+| 採用 | [Werkzeug](https://github.com/pallets/werkzeug/blob/3.1.1/LICENSE.txt) | BSD-3-Clause | H／I 的 HTTP headers adapter |
+| 採用 | [PyYAML](https://github.com/yaml/pyyaml/blob/6.0.3/LICENSE) | MIT | 來源、Profile 與組合指令讀取 |
+| 採用 | [jsonschema](https://github.com/python-jsonschema/jsonschema/blob/main/COPYING) | MIT | PoC 自訂契約及既有 OpenAPI 驗證依賴鏈；不代替網站部署 gate |
 | 規劃 | [Ollama](https://github.com/ollama/ollama/blob/main/LICENSE) | MIT，限此**程式碼** | 圖中的本地推論服務；模型權重有各自條款，不能從 Ollama 授權推定模型可商用或再散布 |
 | 可選 | [Pydantic AI](https://github.com/pydantic/pydantic-ai/blob/main/LICENSE) | MIT | 可協助 C 的工具調用；目前未依賴 |
 | 採用 | [Faker](https://faker.readthedocs.io/en/stable/#license) | MIT | E 的商品文字生成；鎖定 40.44.0，使用獨立 instance seed |
