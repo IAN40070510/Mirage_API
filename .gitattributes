@@ -1,2 +1,3 @@
 # 契約以原始 bytes 計算 SHA-256，避免 Git 在不同作業系統改寫換行。
 inputs/sources/**/openapi.yaml -text
+inputs/platforms/**/openapi.yaml -text
