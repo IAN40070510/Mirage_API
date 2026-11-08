@@ -37,9 +37,9 @@ D 把使用者提供的固定 OpenAPI 來源轉為可追溯的 Profile，供 C �
 schema_version: 1
 platform_id: medusa
 platform_version: '2.22.4'
-source_url: https://github.com/medusajs/medusa/tree/v2.22.4
-source_revision: v2.22.4
-spec_sha256: <原始規格檔的64位小寫SHA256>
+source_url: https://github.com/medusajs/medusa/blob/81edb06c323812773c9c0dcc4da2d9784f3b3319/www/apps/api-reference/specs/store/openapi.full.yaml
+source_revision: 81edb06c323812773c9c0dcc4da2d9784f3b3319
+spec_sha256: 15c794cf596866f13bf96b715db66470011406f659e2eadbf4761dfdbb2ccc96
 approved: false
 openapi_file: openapi.yaml
 ```
@@ -53,7 +53,7 @@ $env:PYTHONPATH = "$PWD/src"
 .\.venv\Scripts\python.exe -m deception.profile_builder --source inputs/sources/medusa/source.yaml --output generated
 ```
 
-目前 Medusa 輸入是從既有 `inputs/platforms/medusa/openapi.yaml` 複製的使用者提供快照，已建立對應來源雜湊並維持 `approved: false`；不是這次從官方下載或核實的規格。輸出共有 77 個 operations。WooCommerce 只有 `source.yaml.example`，必須先提供固定規格才能執行，不能用現有 PoC schema 替代。
+目前 Medusa 輸入已依官方 `v2.22.4` 固定 commit 的完整 OpenAPI 修補子集：補上 `BaseRefund.idempotency_key`、51 個 operation 的 `x-allowed`，D 與 I 規格檔 bytes 一致。目標平台版本 `2.22.4` 與官方規格 `info.version: 2.22.3` 分別記錄；來源仍維持 `approved: false`，尚未驗證實際部署。輸出有 77 個 operations。WooCommerce 只有 `source.yaml.example`，必須先提供固定規格才能執行，不能用現有 PoC schema 替代。
 
 輸出如下，兩類產物均可由來源重建：
 
