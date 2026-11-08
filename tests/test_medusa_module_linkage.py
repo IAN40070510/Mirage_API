@@ -72,7 +72,9 @@ def integration(tmp_path_factory):
     ephemeral_source = {**production_source, "approved": True}
     (platform_dir / "source.yaml").write_text(
         yaml.safe_dump(ephemeral_source, sort_keys=False), encoding="utf-8")
-    manifest = dict(ephemeral_source)
+    manifest = {key: ephemeral_source[key] for key in (
+        "platform_id", "platform_version", "source_url", "source_revision",
+        "spec_sha256", "approved", "openapi_file")}
     manifest.update(base_urls=[TEST_ORIGIN], query_contexts=[{}])
     (platform_dir / "manifest.yaml").write_text(
         yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
@@ -223,7 +225,9 @@ def test_h_rejects_dataset_from_different_run(integration):
 
 
 def test_b_i_do_not_approve_repository_medusa_when_temp_manifest_is_unapproved(integration, tmp_path):
-    cfg = dict(integration["production_source"])
+    cfg = {key: integration["production_source"][key] for key in (
+        "platform_id", "platform_version", "source_url", "source_revision",
+        "spec_sha256", "approved", "openapi_file")}
     assert cfg["approved"] is False
     directory = tmp_path / "platforms" / "medusa"
     directory.mkdir(parents=True)
