@@ -53,19 +53,19 @@ flowchart TB
     C -->|選擇測試情境| F
     Q -->|攻擊類型與判定依據| F
     C -->|生成動態內容| G
-    D --> J["Generation Context"]
+    D --> J["J Generation Context"]
     E --> J
     F --> J
     G --> J
     J --> C
     C -->|組裝指令| H
-    H --> K["候選 API Response"]
+    H --> K["K 候選 API Response"]
     K --> I
-    I --> L{"驗證通過？"}
-    L -->|是| M["HTTP Response Renderer"]
-    L -->|否：有界重試| N["規則修正或已驗證備援模板"]
+    I --> L{"L 驗證通過？"}
+    L -->|是| M["M HTTP Response Renderer"]
+    L -->|否：有界重試| N["N 規則修正或已驗證備援模板"]
     N --> H
-    M --> O["符合原服務契約的誘餌 HTTP Response"]
+    M --> O["O 符合原服務契約的誘餌 HTTP Response"]
     P["本地 LLM／Ollama"] <--> C
     T["多環境集中設定管理（規劃）"] -.-> R
     T -.-> B
