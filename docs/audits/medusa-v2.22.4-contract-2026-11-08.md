@@ -114,3 +114,7 @@
 ### CI 首輪失敗與結構位置修復（2026-11-08）
 
 GitHub Actions 首輪 pytest 為 `179 passed, 1 failed`；失敗點為 `BaseRefund.properties.idempotency_key` 未找到。原因：上一輪文字修補誤將 `idempotency_key` 放到鄰近的 `BaseCartLineItem.properties`。已將欄位移回官方的 `BaseRefund.properties`，並同步更新 D/I 規格及 SHA-256。之前文件中的靜態文字存在性檢查不足以證明 YAML 結構正確；本次以 pytest YAML 解析回歸測試驗收。CI 重新執行結果須以最新 GitHub Actions run 為準。
+
+### GitHub Actions 第 2 次 pytest 結果（2026-11-08）
+
+修正誤置欄位與同步 SHA 後，GitHub Actions [run 42434198571](https://github.com/IAN40070510/Mirage_API/actions/runs/42434198571) 的 Python 3.12 全套測試：**280 passed, 1 warning, 0 failed（50.98 秒）**。警告為 Starlette 對 httpx TestClient 的棄用提醒。另在 CI 新增真實 Medusa 契約離線 Profile Builder smoke test，用以確認 77 個操作、來源雜湊、文件版本和審核狀態；該新增步驟的執行結果應以新的 Actions run 為準。
