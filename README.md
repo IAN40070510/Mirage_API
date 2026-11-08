@@ -22,19 +22,19 @@ Mirage_API 的製作目標是整合不同部署環境的 HTTP 流量入口，接
 
 | 核心能力 | 已有基礎 | 尚待完成 |
 | --- | --- | --- |
-| 多環境流量攔截整合 | A：FastAPI HTTP 入口；B：明確環境／部署綁定識別及可選 A→B 接入 | 各環境流量攔截／轉送接入、可信代理與統一轉接介面 |
-| 外部攻擊判定接收 | A 保留 request ID；F 已有判定模型、時效／請求關聯及情境選擇 | 判定接收器、來源認證與完整流程串接 |
-| 依多服務契約生成 | B/D：固定身份與契約；C/G/J：受控本機模型生成流程；H/I：候選組合與驗證 | 正式 HTTP 主流程、更多服務與生成欄位對映 |
+| 多環境流量攔截整合 | A：FastAPI HTTP 入口；B：明確部署綁定；可選 A→B 診斷及 A→C/N→M 完整 app | 各環境流量攔截／轉送接入、可信代理與統一轉接介面 |
+| 外部攻擊判定接收 | A 保留 request ID；F 核對時效／請求關聯；完整 app 明確注入可信判定 provider | 遠端判定接收器、來源認證及事件整合 |
+| 依多服務契約生成 | B/D：固定身份與契約；C/G/J：受控本機生成；H/I/N/M：組合、修正／備援、驗證與 HTTP 回送 | 更多服務、真實部署及生成欄位對映 |
 | 跨 API 虛構資料與互動狀態 | E：可重現、可查詢的商品／變體資料與關聯 | 跨請求狀態更新、寫入操作、互動／session 隔離與並行一致性 |
-| 本地 LLM 動態生成 | C 自家控制流程、Pydantic AI 受控工具規劃、G 本機 Ollama 結構生成與衍生內容快取 | 更多真實樣本、模型品質與效能評估，及入口／輸出完整串接 |
-| 契約一致的 HTTP 輸出 | H：候選組合及契約 preflight；I：獨立驗證 API | M、修正／備援，以及入口到輸出的完整串接 |
+| 本地 LLM 動態生成 | C 自家控制流程、Pydantic AI 受控工具規劃、G 本機 Ollama 結構生成與衍生內容快取；可選完整 HTTP 接入 | 更多真實樣本、模型品質與效能評估 |
+| 契約一致的 HTTP 輸出 | H/I：組合與驗證；N：有限修正／同分支欄位備援；M：最終傳輸候選重驗與原樣回送 | 真實平台與部署對照、更多 HTTP 媒體及傳輸情境 |
 | 多環境集中管理 | 本地來源／生成設定、B 部署 binding 與可信 runtime context | 集中設定儲存、管理介面、版本發布與代理整合 |
 
-目前 A、B、C、D、E、F、G、H、I 可各自使用；C/J 已把固定身份、情境、資料與 G 生成串成需經 H/I 驗證的內部流程。可選 A→B handler 尚未自動接 C/M，因此 B 識別成功後仍回 `501 orchestrator_not_implemented`；原始 A 入口預設仍回 `501 pipeline_not_implemented`。F 以 `domain: ecommerce` 選電商，C/G 沿用同一領域與資料快照；正式 HTTP 回送、外部判定接收器、圖形選擇介面及交易狀態更新尚未完成。現有 E 仍是可查詢的固定資料快照。本文所有「規劃」格式只定義預期介面，不能當作現有 API 使用。
+目前 A、B、C、D、E、F、G、H、I、N、M 已提供工具介面；C/J 串接固定身份、情境、資料、G 生成與 H/I 驗證，N 提供有限重新生成及精確同分支的確定性欄位備援，M 重新驗證最終傳輸候選後回送。管理者可透過 `deception.api.pipeline.create_app` 注入可信判定 provider、runtime 及資料設定，啟用 A→C/N→M。B-only 診斷 handler 成功仍回 `501 orchestrator_not_implemented`；原始 A 預設仍回 `501 pipeline_not_implemented`。F 以 `domain: ecommerce` 選電商，各工具使用同一領域與快照。外部判定來源認證接收器、圖形介面、集中管理、OCI／真實 Medusa 部署對照及交易狀態更新尚未完成。本文所有「規劃」格式不能當作現有 API 使用。
 
 ## 系統架構與整合邊界
 
-下圖保留 A–O 的生成與驗證主流程，補上環境流量整合、外部攻擊判定及集中設定管理。C/G/J 已提供內部生成流程；環境流量整合、判定接收器、集中設定及 M 對外輸出仍為規劃。虛線表示設定供給。
+下圖保留 A–O 的生成與驗證主流程，補上環境流量整合、外部攻擊判定及集中設定管理。C/G/J/N/M 已提供內部流程與可選 HTTP 接入；環境流量整合、來源認證接收器及集中設定仍為規劃。虛線表示設定供給。
 
 ```mermaid
 flowchart TB
@@ -65,7 +65,7 @@ flowchart TB
     K --> I
     I --> L{"L 驗證通過？"}
     L -->|是| M["M HTTP Response Renderer"]
-    L -->|否：有界重試| N["N 規則修正或已驗證備援模板"]
+    L -->|否：允許的內容錯誤| N["N 有限重新生成或同分支欄位備援"]
     N --> H
     M --> O["O 符合原服務契約的誘餌 HTTP Response"]
     P["本地 LLM／Ollama"] <--> C
@@ -89,9 +89,9 @@ flowchart TB
 
 | 節點 | 輸入 → 職責 → 輸出 | 狀態 |
 | --- | --- | --- |
-| A HTTP API 請求 | method、URL、headers、body → 保留原始 URL、query、追蹤 ID 的標準化請求；未來由環境轉接層提供部署上下文 | **已實作**：`deception.api.app:app` 預設回 501，另有可選 A→B handler；完整 C/M HTTP 串接待完成 |
+| A HTTP API 請求 | method、URL、headers、body → 保留原始 URL、query、追蹤 ID 的標準化請求；由伺服器注入部署上下文 | **已實作**：原始 app 預設回 501，B-only handler 維持診斷用途；`deception.api.pipeline` 提供可選完整 C/N/M 接入 |
 | B 平台識別器 | 環境／部署／服務綁定、origin、API 前綴、method、path、版本 → 唯一平台與 operation；不明時拒絕猜測 | **已實作**：`src/deception/discovery/`；與 I 共用匹配器，可接 A／D；代理整合與集中設定管理尚未實作 |
-| C 任務協調器與 P Ollama | 可信請求、外部判定、生成政策 → 強制 B/D/E/F 檢查、受限工具規劃、G 生成、H/I 驗證 | **已實作**：`src/deception/core/orchestrator.py` 與 `src/deception/llm/`；Pydantic AI＋固定本機 Ollama 身份，共用預算與期限；尚未接正式 HTTP 輸出，見 [C/G 說明](docs/orchestration.md) |
+| C 任務協調器與 P Ollama | 可信請求、外部判定、生成政策 → 強制 B/D/E/F 檢查、受限工具規劃、G 生成、N 修正／備援、H/I 驗證 | **已實作**：`src/deception/core/orchestrator.py` 與 `src/deception/llm/`；共用預算與期限，內部結果可交 M 回送，見 [C/G 說明](docs/orchestration.md) |
 | D 平台 Profile 工具 | 固定來源與 OpenAPI → 可追溯的操作、參數、狀態碼、媒體類型、schema 上下文 | **已實作**：`src/deception/profile_builder/`；提供 CLI 建立及 Python 查詢，C 依精確身份調用；不推測平台慣例 |
 | E 合成資料工具 | 種子、隔離身份、資料規則 → 跨操作可引用的虛構實體；未來維護互動造成的狀態變更 | **已實作**：`src/deception/synthetic/` 的商品／變體生成、保存、驗證與只讀查詢；顧客、訂單及互動狀態更新尚未實作 |
 | F 安全情境工具 | 領域政策、可信整合層的判定、白名單與 B/D → 固定 family；領域處理器再依資料選分支與 H 計畫 | **已實作**：`src/deception/scenarios/`；可選 `ecommerce`，提供 GET 商品 200／404、可追溯決策及交接完整性；領域可註冊擴充，尚無其他真實領域資料，不偵測攻擊或更新交易狀態，詳見 [F 功能、驗證與授權](docs/scenarios.md) |
@@ -99,16 +99,16 @@ flowchart TB
 | J Generation Context | 工具結果 → 固定領域、請求指紋、部署／契約／資料摘要、情境及政策／模型版本 | **已實作**：`deception.generation.GenerationContext`，由 C 建立與綁定，不包含原始憑證 |
 | H 回應組合工具 | 明確指令、D 契約、可選 E 映射 → status、headers、已序列化 body | **已實作**：`src/deception/core/`；已接 C/J 內部流程，UTF-8 JSON、嚴格 metadata 與契約 preflight，產物仍需 I 驗證 |
 | I 格式驗證工具 | 候選 status、headers、body 及原請求 URL／method → `pass`、`reject` 或 `unverifiable` 與錯誤 | **已實作** |
-| N 修正或備援 | 驗證錯誤 → 有上限的重新組合；耗盡後用同一契約已驗證的備援 | C/G 已有受限欄位的有限重新生成；通用 N 規則修正及備援模板尚未實作，I 本身仍不修正或重試 |
-| M HTTP Response Renderer | 僅接收 `pass` 且 `valid=true` 的同一份回應 → HTTP status、headers、body | 未實作 |
+| N 修正或備援 | 允許的內容錯誤 → 有限重新生成或精確匹配的固定欄位備援 → H/I 重驗 | **已實作**：`src/deception/core/recovery.py`；備援預設停用，保護 F 結果與 E 映射，不發布模型內容快取，見 [N 說明](docs/recovery.md) |
+| M HTTP Response Renderer | 同請求的已驗證候選 → 完成傳輸欄位、再驗 I → 原樣 status、headers、body bytes | **已實作**：`src/deception/core/renderer.py` 與 `src/deception/api/pipeline.py`；發送前阻擋驗證後變更，見 [M 說明](docs/renderer.md) |
 
-A → B → C；C 關聯外部攻擊判定，分別調用 D/E/F/G，匯成 J，再指示 H 建立 K；I 驗證 K。C/G 對欄位或組合失敗使用**固定上限**的重新生成及共用總期限，每次重新驗證；I 未通過時保持失敗。`unverifiable` 表示缺少可信契約或情境，不應由 LLM 補出規格。通用備援及正式對外失敗狀態仍待設計；備援也必須通過 I。通過後 M 必須渲染**完全相同**的 body、status、headers，不得再改動。
+A → B → C；C 關聯可信 provider 的判定，分別調用 D/E/F/G，匯成 J，再指示 H 建立 K；I 驗證 K。N 對允許的內容錯誤使用固定上限與同一總預算重新生成，耗盡後只使用管理者明列的同契約／同分支欄位備援並重驗 H/I。`unverifiable`、身份或 HTTP metadata 錯誤不能由模型修正或備援掩蓋。M 完成本次追蹤 ID 與 UTF-8 長度後再驗 I，回送完全相同的 status、headers、body bytes。完整 app 對未適用回 409、無法完成回固定 503 診斷；不自動轉送正常流量，也不把診斷當成平台契約回應。
 
 規劃中的跨 API 互動應共用明確的虛構實體與狀態版本。例如建立一筆虛構資源後，列表與明細 API 應能讀到相同 ID 與欄位，後續更新及刪除也應反映在同一互動中。狀態寫入需配合契約驗證、並行控制與重試去重，避免修正一次回應就重複建立資源；目前尚無這類狀態寫入流程。
 
 ## 檔案與輸入資料
 
-核心流程預期使用下列六類輸入；外部判定與部署上下文由整合層補入。檔案存在與模組實際載入的狀態需分別確認。
+核心流程使用下列輸入；外部判定與部署上下文由整合層補入。檔案存在與模組實際載入的狀態需分別確認。
 
 | 輸入 | 內容與用途 | 目前對應 |
 | --- | --- | --- |
@@ -117,7 +117,8 @@ A → B → C；C 關聯外部攻擊判定，分別調用 D/E/F/G，匯成 J，�
 | Platform Profile | 服務版本、契約來源、operation 摘要及生成上下文 | D 已建立 `generated/profiles/`；完整服務慣例與回應對映仍待擴充 |
 | Scenario Configuration | 領域、情境白名單、適用操作及外部判定的情境選擇規則 | F 讀取 `inputs/policies/deception.yaml` 格式，必填 `domain: ecommerce`；現有 `inputs/scenarios/` 草稿不自動載入 |
 | Synthetic State | 跨 API 共用的虛構實體、關聯與互動狀態 | E 已有商品／變體快照；狀態更新尚未實作 |
-| Generation Policy | 模型、工具權限、可生成欄位、保護位置及共用預算 | C/G 讀取 `inputs/policies/generation.yaml` 格式與 `configs/llm.yaml`；`configs/generation.yaml` 只管理 E 資料規則，通用備援待實作 |
+| Generation Policy | 模型、工具權限、可生成欄位、保護位置及共用預算 | C/G 讀取 `inputs/policies/generation.yaml` 格式與 `configs/llm.yaml`；`configs/generation.yaml` 只管理 E 資料規則 |
+| Recovery Policy | 精確契約／結果、F/G 政策摘要與備援欄位值 | N 讀取 `inputs/policies/recovery.yaml` 格式，由管理者明確注入；範本預設停用 |
 | 外部攻擊判定 | 與請求關聯的攻擊標籤、來源與判定依據 | F 已有嚴格模型與關聯檢查；接收及來源認證介面待實作 |
 | 部署與環境設定 | 環境／部署／服務綁定及本次使用的設定版本 | 本地設定可供個別工具使用；集中管理待實作 |
 
@@ -126,13 +127,16 @@ Mirage_API/
 ├─ README.md
 ├─ pyproject.toml                    # 現有驗證器依賴及測試設定
 ├─ .env.example                      # MIRAGE_PLATFORMS_DIR 設定提示
-├─ src/deception/api/               # A：FastAPI 原生請求入口與標準化介面
+├─ src/deception/api/               # A：原生請求入口；pipeline.py 提供可選 C/N/M 接入
 ├─ src/deception/discovery/         # B：明確部署綁定、唯一契約與操作識別
 ├─ src/deception/profile_builder/   # D：來源檢查、Profile 建立與操作查詢
 ├─ src/deception/synthetic/         # E：合成商品、變體、資料關聯與有效性驗證
 ├─ src/deception/scenarios/         # F：共用引擎、領域註冊、情境與 H 計畫
 │  └─ domains/ecommerce.py          # 電商政策、商品規則及 prepare／resolve 處理器
-├─ src/deception/core/              # C：強制協調流程；H：候選回應組合與交接
+├─ src/deception/core/              # C：協調；H：組合；N：修正／備援；M：最終驗證與回送
+│  ├─ orchestrator.py              # 固定身份、資料、總預算與發布期限
+│  ├─ recovery.py                  # N：有限修正與同分支確定性欄位備援
+│  └─ renderer.py                  # M：最終 I 驗證與封存 HTTP Response
 ├─ src/deception/generation/        # G/J：生成白名單、固定上下文與已驗證內容快取
 ├─ src/deception/llm/               # Pydantic AI、本機 Ollama 設定及共用預算
 ├─ configs/llm.yaml                 # C/G：本機模型名稱、完整 digest 與輸出限制
@@ -142,6 +146,7 @@ Mirage_API/
 ├─ inputs/sources/                  # D：source.yaml 與固定 OpenAPI 輸入
 ├─ inputs/policies/deception.yaml    # F：停用的部署／情境政策範本
 ├─ inputs/policies/generation.yaml   # C/G：停用的生成白名單及共用預算範本
+├─ inputs/policies/recovery.yaml     # N：停用的精確同分支欄位備援範本
 ├─ generated/                       # profiles、schemas、synthetic_data、scenarios、generation、responses
 ├─ mirage_validator/                 # 已實作的驗證 API、網站契約 gate、PoC 驗證
 │  └─ contracts/*.json               # 與正式契約隔離的 PoC 示意契約
@@ -156,7 +161,7 @@ Mirage_API/
 │     └─ README.md                   # 此規格的來源與缺口
 ├─ fixtures/                         # 現有兩平台 PoC 驗證範例
 ├─ tests/                            # 現有驗證器測試
-└─ docs/                             # 現有 PoC 與網站契約守門員說明
+└─ docs/                             # 工具索引、各模組功能／使用／驗證／授權說明
 ```
 
 **人工必要輸入（啟用網站契約前）**：在 `inputs/platforms/<站點與版本套件>/` 放入經核對的固定版本 `openapi.yaml`（或 manifest 指定檔名）及 `manifest.yaml`；填入精確平台／部署版本、真正的來源 URL 與不可變 revision、規格 SHA-256、實際站點 `base_urls`、已審查的 `query_contexts`。`approved: true` 只能由維護者在來源、部署和適用範圍審查完成後設定；雜湊正確不等於官方或部署相符。只接受打包好的內部 `$ref`，不能讓請求指定本地檔案或自動抓遠端引用。
@@ -165,9 +170,11 @@ Mirage_API/
 
 **E 的輸入與產物**：`configs/generation.yaml` 定義種子、站點／版本／規格／情境／run 隔離與數量、價格、庫存規則。E 產生 `generated/synthetic_data/<platform>/<namespace>.json`，保留完整設定及生成器／Faker 版本，並驗證資料關聯與可重現性。C/J 已保存資料 namespace 與快照摘要，`samples/` 的真實服務對照尚未實作。現有 `input-audit.json` 是檢查產物，`api-scope.json` 是範圍紀錄，兩者均不參與驗證執行。
 
-**F 的輸入與產物**：`inputs/policies/deception.yaml` 提供明寫 `domain: ecommerce` 的停用政策範本。`ScenarioEngine(policy, domain="ecommerce")` 可核對選擇的領域；省略呼叫參數時依政策領域，未知或不符領域會拒絕。`prepare` 核對可信整合層的判定與 B/D，選出固定 family scope；電商處理器再依同一 E 快照選 200／404，回傳 H 計畫與領域／政策／模板／資料摘要。`python -m deception.scenarios --list-domains` 列出已註冊領域，`python -m deception.scenarios --demo --domain ecommerce` 執行電商合成契約的離線整合展示並保存 `generated/scenarios/` 報告。`domain` 是業務領域，`platform_id` 是 Medusa／WooCommerce 等服務，`scenario_id` 是 `product-lookup` 等情境，`outcome_id` 則是 `found`／`missing` 等結果；用法、擴充介面、有效性測試及套件授權見 [F 說明](docs/scenarios.md)。其他領域的實際政策／資料、購買扣款、庫存更新及真實 HTTP 串接仍待擴充。
+**F 的輸入與產物**：`inputs/policies/deception.yaml` 提供明寫 `domain: ecommerce` 的停用政策範本。`ScenarioEngine(policy, domain="ecommerce")` 可核對選擇的領域；省略呼叫參數時依政策領域，未知或不符領域會拒絕。`prepare` 核對可信整合層的判定與 B/D，選出固定 family scope；電商處理器再依同一 E 快照選 200／404，回傳 H 計畫與領域／政策／模板／資料摘要。`python -m deception.scenarios --list-domains` 列出已註冊領域，`python -m deception.scenarios --demo --domain ecommerce` 執行電商合成契約的離線整合展示並保存 `generated/scenarios/` 報告。`domain` 是業務領域，`platform_id` 是 Medusa／WooCommerce 等服務，`scenario_id` 是 `product-lookup` 等情境，`outcome_id` 則是 `found`／`missing` 等結果；用法、擴充介面、有效性測試及套件授權見 [F 說明](docs/scenarios.md)。可選完整 HTTP 接入已使用同一 F 流程；其他領域、購買扣款、庫存更新與真實部署對照仍待擴充。
 
 **C/G 的輸入與產物**：`configs/llm.yaml` 固定本機模型身份，`inputs/policies/generation.yaml` 提供停用的可生成欄位／保護位置及總預算範本。C/J 將 B/D/F 與同一 E 快照綁定，再透過 Pydantic AI 執行工具規劃及 G 的局部 JSON 生成，H/I 完成驗證後才發布衍生內容快取。真本機展示明確使用 `python -m deception.generation --demo --domain ecommerce --llm-config configs/llm.yaml`，報告及 SQLite 保存至 `generated/generation/`；FunctionModel 測試與實際 Ollama 生成的證據分開。詳見 [C/G 功能、API、CLI 與授權](docs/orchestration.md)。
+
+**N/M 的輸入與輸出**：`inputs/policies/recovery.yaml` 的備援規則精確綁定 G 規則、F/G 政策摘要、契約及結果，只提供 G 已允許的欄位值。C 將同請求的已驗證候選與有效發布期限交給 M；M 完成傳輸標頭後重新驗 I，再回送原 bytes。完整 HTTP app 需要管理者明確注入可信判定 provider，不自動認證訪客宣稱的判定。詳見 [N 政策與用法](docs/recovery.md) 及 [M 接入與部署界線](docs/renderer.md)。
 
 ### 現有 manifest 格式示例（未啟用）
 
@@ -269,7 +276,35 @@ $env:PYTHONPATH = "$PWD/src"
 
 本次已用預設 Foundation Reasoning 量化變體與 CLI 選取的 Qwen 各完成一組真本機 `200 → 404 → 200` 展示；每次 I 通過、E 不變、同商品 body 一致，第三次命中已驗證內容快取。固定模型身份、報告及用量見 [本次實測證據](docs/orchestration.md#本次真本機模型展示證據2026-11-08)；這是合成案例展示，不宣稱普遍模型品質或官方平台相容。
 
-可用 `python -m pytest tests/test_generation.py tests/test_orchestrator.py -q` 驗證可控 `FunctionModel` 的流程與邊界。它與上述實際 Ollama 生成分開記錄，不把假模型通過或跳過實測當成真模型有效。C/G 目前回傳內部候選，A/B handler 的 501、外部判定接收器、M 正式 HTTP 回送與 E 交易狀態仍待後續串接。
+可用 `python -m pytest tests/test_generation.py tests/test_orchestrator.py -q` 驗證可控 `FunctionModel` 的流程與邊界。它與上述實際 Ollama 生成分開記錄，不把假模型通過或跳過實測當成真模型有效。C/G 回傳內部候選，現可由明確建立的完整 HTTP app 交 M 重驗並回送；預設 A 與 B-only handler 保持 501。外部來源認證接收器及 E 交易狀態仍待實作。
+
+## 已實作的 N/M：有限修正、備援與 HTTP 回送
+
+先比較既有 Pydantic AI 重試介面、Tenacity 與 FastAPI／Starlette Response，選擇沿用現有元件，由專案主機流程管理修正及備援。N 只允許重新生成 G 的白名單欄位；備援預設停用，啟用後仍須精確匹配 F/G 政策與同一契約／結果。固定值經 G.apply、H/I 重驗且不寫入模型內容快取。M 先完成 `X-Request-ID` 與 UTF-8 `Content-Length`，再驗最終候選，送出前核對封存內容及同程序發布期限。
+
+可選接入範例中的 `pipeline`、`trusted_runtime`、`checked_e_config`、`checked_e_dataset` 與 `assessment_provider`，均由部署程式依已核對的設定建立；provider 必須取得接收層已完成來源認證的判定：
+
+```python
+from deception.api.pipeline import create_app
+
+app = create_app(
+    orchestrator=pipeline,
+    runtime=trusted_runtime,
+    generation_config=checked_e_config,
+    dataset=checked_e_dataset,
+    assessment_provider=assessment_provider,
+    assessment_timeout_seconds=15,
+)
+```
+
+政策格式、初始化範例、錯誤處理及限制見 [N 說明](docs/recovery.md)；完整 app、啟動命令、最終 header 邊界及 provider 期限見 [M 說明](docs/renderer.md)。目前仍只支援既有 JSON／單值 header 情境，不支援 HEAD／204／205／304、壓縮及多值 headers；未提供可自動啟用的遠端來源認證接收器或正式 OCI 部署。
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_recovery.py tests/test_renderer.py tests/test_pipeline_api.py -q
+.\.venv\Scripts\python.exe tools/check_documentation.py
+```
+
+驗證應涵蓋無效生成後修正、耗盡後同分支備援、E 不變、備援不污染快取、真正 HTTP 的 200／404、最終 bytes／headers 與 I 封套一致，以及錯誤身份、到期與驗證後變更均被拒絕。這些合成測試與先前本機模型展示分開記錄，不宣稱真實 Medusa 部署相容。
 
 ## 已實作的 H：回應組合工具
 
@@ -280,7 +315,7 @@ $env:PYTHONPATH = "$PWD/src"
 .\.venv\Scripts\python.exe -m deception.core --plan configs/composition.yaml --profiles generated --output generated --allow-unreviewed
 ```
 
-範例以目前未審 Medusa 來源產生明確 404 候選，因此需顯式開啟離線預覽。preflight 通過不代表 I 已放行；I 還須驗證網站、query 與部署契約。候選的 status、headers、body 在送往 I 時保持完全相同，`verify_candidate` 另核對 I 回報的 platform／version／hash／operation，避免套用其他契約的結果。H 已接 C/J 內部流程，尚未接上完整 A/M 對外回送。
+範例以目前未審 Medusa 來源產生明確 404 候選，因此需顯式開啟離線預覽。preflight 通過不代表 I 已放行；I 還須驗證網站、query 與部署契約。候選的 status、headers、body 在送往 I 時保持完全相同，`verify_candidate` 另核對 I 回報的 platform／version／hash／operation，避免套用其他契約的結果。H 已接 C/J/N 流程，可選完整 app 由 M 完成傳輸標頭並重驗後回送；此 CLI 產物仍是內部候選封套。
 
 ## 已實作的 E：合成資料工具
 
@@ -315,7 +350,7 @@ $env:PYTHONPATH = "$PWD/src"
 curl.exe -i "http://127.0.0.1:8001/store/products/prod_synthetic_001?fields=id&fields=title" -H "X-Request-ID: demo-001"
 ```
 
-A 會保留 method、原始 URL／path／query、重複 headers、body bytes 與追蹤 ID，供後續 handler 使用。此預設入口未自動接上 B/C/M，仍回 `501 pipeline_not_implemented` 與 `X-Request-ID`；不代表已生成商品回應。body 超過 1 MiB 回 413，無效或重複追蹤 ID 回 400。此入口沒有 `/docs`；驗證 API 的 `/docs` 維持原樣。詳見 [入口介面與部署方式](docs/ingress.md)。
+A 會保留 method、原始 URL／path／query、重複 headers、body bytes 與追蹤 ID，供後續 handler 使用。此預設入口未自動啟用完整流程，仍回 `501 pipeline_not_implemented` 與 `X-Request-ID`；不代表已生成商品回應。完整接入另由 [M 文件中的 `deception.api.pipeline.create_app`](docs/renderer.md) 提供。body 超過 1 MiB 回 413，無效或重複追蹤 ID 回 400。此入口沒有 `/docs`；驗證 API 的 `/docs` 維持原樣。詳見 [入口介面與部署方式](docs/ingress.md)。
 
 ## 已實作的 I：格式驗證 API
 
@@ -392,7 +427,8 @@ curl.exe -X POST http://127.0.0.1:8000/v1/poc/validate -H "Content-Type: applica
 
 | 類別 | 專案 | 上游授權／來源 | 用途與界線 |
 | --- | --- | --- | --- |
-| 採用 | [FastAPI](https://github.com/fastapi/fastapi/blob/master/LICENSE) | MIT | 現有驗證 API |
+| 採用 | [FastAPI](https://github.com/fastapi/fastapi/blob/master/LICENSE) | MIT | 驗證 API、A 原始入口及可選完整 HTTP app |
+| 採用既有間接依賴 | [Starlette](https://github.com/Kludex/starlette/blob/main/LICENSE.md) | BSD-3-Clause | FastAPI 的 ASGI 基礎；M 原始 bytes／headers 回送，未新增套件 |
 | 採用 | [Pydantic](https://github.com/pydantic/pydantic/blob/main/LICENSE) | MIT | 嚴格輸入／輸出模型與 F 白名單政策 |
 | 採用 | [openapi-core](https://github.com/python-openapi/openapi-core/blob/master/LICENSE) | BSD-3-Clause | 正式 OpenAPI 驗證；保留版權、授權與免責聲明，不用作者名稱背書 |
 | 採用 | [Werkzeug](https://github.com/pallets/werkzeug/blob/3.1.1/LICENSE.txt) | BSD-3-Clause | H／I 的 HTTP headers adapter |
@@ -405,6 +441,7 @@ curl.exe -X POST http://127.0.0.1:8000/v1/poc/validate -H "Content-Type: applica
 | 可選 | [Prism](https://github.com/stoplightio/prism/blob/main/LICENSE) | Apache-2.0 | 外部 mock 比對，不是現有 H／I |
 | 可選 | [Schemathesis](https://github.com/schemathesis/schemathesis/blob/master/LICENSE) | MIT | 契約測試；通過仍不等於官方行為一致 |
 | 未採用 | [WireMock](https://github.com/wiremock/wiremock/blob/master/LICENSE.txt) | Apache-2.0 | 可作替代 mock server；目前無依賴 |
+| 未採用 | [Tenacity](https://github.com/jd/tenacity/blob/main/LICENSE) | Apache-2.0 | N 評估過的通用有限重試元件；沿用主機共用預算與既有模型介面，未加入依賴 |
 | 參考資料 | [WooCommerce REST API 文件](https://developer.woocommerce.com/docs/apis/rest-api/v3/products/)／[外掛授權標示](https://github.com/woocommerce/woocommerce/blob/trunk/plugins/woocommerce/readme.txt) | 文件、程式碼與範例權利須分開核對；外掛標示 GPLv3+ | 僅參考 API 行為，未複製其程式碼。閱讀 GPL 專案文件不會使獨立實作自動受 GPL 約束；若複製程式碼或大量文件，須另評估 |
 | 參考資料 | [Medusa Store API 文件](https://docs.medusajs.com/api/store)／[核心授權](https://github.com/medusajs/medusa/blob/develop/LICENSE) | 核心儲存庫除企業版材料外為 MIT；企業版另有條款 | 現有子集已依官方固定 commit 核實核心結構並修正；實際部署尚未對照，規格與文件的再散布權仍須逐項核對 |
 

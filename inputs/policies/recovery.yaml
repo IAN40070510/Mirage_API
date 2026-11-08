@@ -1,0 +1,23 @@
+# N 備援政策；僅替換 G 已核准欄位，不能改 F 結果、HTTP metadata 或 E 事實。
+# 本範本預設停用。啟用前替換精確身份及 F/G 政策摘要，再以 H/I 驗證。
+schema_version: 1
+domain: ecommerce
+policy_id: product-content-recovery
+policy_version: '1'
+enabled: false
+rules:
+  - rule_id: product-description-fallback
+    generation_rule_id: product-description
+    generation_policy_sha256: '0000000000000000000000000000000000000000000000000000000000000000'
+    scenario_policy_sha256: '0000000000000000000000000000000000000000000000000000000000000000'
+    platform_id: replace-platform
+    platform_version: REPLACE_WITH_DEPLOYED_VERSION
+    spec_sha256: '0000000000000000000000000000000000000000000000000000000000000000'
+    operation_id: REPLACE_WITH_OPERATION_ID
+    method: GET
+    path: /products/{id}
+    outcome_id: found
+    status_code: 200
+    media_type: application/json
+    values:
+      description: This synthetic product has no additional description available.

@@ -83,7 +83,8 @@ class ContentGenerator:
                           scenario_policy=context.scenario_policy_sha256,
                           blueprint=plan.model_dump(mode="json"), facts=facts,
                           prompt_version=policy.prompt_version, model=context.model_identity))
-        values = self.cache.get(key)
+        # N 的修正必須重新生成，不能重複讀取剛被部署 gate 拒絕的舊內容。
+        values = None if feedback else self.cache.get(key)
         cache_hit = values is not None
         if values is None:
             output_type = create_model("GeneratedFields", __config__=ConfigDict(extra="forbid", strict=True, allow_inf_nan=False),

@@ -14,12 +14,14 @@
 | H：回應組合工具 | `src/deception/core/composer.py`、`handoff.py` | [組合、序列化與 I 交接](composer.md) |
 | I：OpenAPI 契約驗證 | `mirage_validator/gate.py`、`api.py` | [部署契約、驗證結果與 HTTP API](gate.md) |
 | J：生成上下文 | `src/deception/generation/models.py` | [身份、資料及版本的關聯](context.md) |
+| M：HTTP 回送 | `src/deception/core/renderer.py`、`src/deception/api/pipeline.py` | [最終候選驗證與完整 HTTP 接入](renderer.md) |
+| N：有限修正與備援 | `src/deception/core/recovery.py` | [同契約欄位修正、確定性備援與政策](recovery.md) |
 | P：本機模型與共用工具 | `src/deception/llm/` | [Ollama backend、選模、預算與生命週期](llm.md) |
 | PoC：示意契約驗證 | `mirage_validator/validator.py`、`registry.py` | [與正式 gate 隔離的驗證介面](poc.md) |
 | 文件維護工具 | `tools/check_documentation.py` | [文件標準與檢查方法](documentation.md) |
 
-推薦閱讀順序為 A／B → D／E／F → C／J／G／P → H／I。模型設定與真實展示證據見 [C/G 整合說明](orchestration.md)，整體進度及架構見 [專案 README](../README.md)。
+推薦閱讀順序為 A／B → D／E／F → C／J／G／P → H／I → N／M。模型設定與真實展示證據見 [C/G 整合說明](orchestration.md)，整體進度及架構見 [專案 README](../README.md)。
 
-目前 M 正式 HTTP renderer、外部判定接收認證、集中設定服務與 E 的交易更新尚未實作；通用 N 備援也尚未完成。C/G 的有限重新生成不等於完整 N。這些能力的狀態列於專案 README，沒有可直接啟用的工具介面。
+M 已提供最終 HTTP 回送，N 已提供有限重新生成與精確同分支的確定性欄位備援；`deception.api.pipeline.create_app` 可由管理者注入可信判定 provider，串接 A→C/N→M。預設 A 及 B-only 入口維持診斷用途。外部判定來源認證接收器、集中設定服務及 E 交易更新尚未實作；也尚無 OCI 或真實 Medusa 部署對照。這些狀態列於專案 README。
 
 新增或修改工具時，依 [文件與函式註解標準](documentation.md) 更新本索引，並執行文件檢查。模型權重授權、執行套件授權及來源規格權利分開記錄。

@@ -14,7 +14,7 @@ B 以明確部署設定識別 A 收到的請求，輸出唯一的站點、平台
 | query | 只接受 manifest 明列的已審組合，保留空值與重複值順序 |
 | 原始編碼 | 使用 A 的 `raw_url`，不使用已解碼 `path` 重新選路由；path parameters 保留 percent encoding |
 | 識別結果 | `identified` 或 `unverifiable`；不使用 I 的 response `pass`／`valid` 語意 |
-| 下游介面 | `identity.profile_arguments()` 提供 D 的精確查詢 keys；A→B 可選 handler 尚未接上 C/M，成功仍回 501 |
+| 下游介面 | `identity.profile_arguments()` 提供 D 的精確查詢 keys；B-only handler 成功仍回診斷 501，完整 C/M 接入另由 `deception.api.pipeline` 提供 |
 
 識別成功要求部署 binding 已 enabled、契約 manifest 已 approved、平台／版本／hash／base URL 一致、query 已審查，以及 operation 唯一。binding 的 enabled 不代表來源核准，B 也不會改寫來源、D Profile 或 I manifest。
 
@@ -99,7 +99,7 @@ $env:MIRAGE_BINDINGS_FILE = "$PWD/configs/bindings.yaml"
 .\.venv\Scripts\python.exe -m uvicorn deception.api.identified:create_app --factory --host 127.0.0.1 --port 8001 --no-proxy-headers
 ```
 
-`MIRAGE_ENVIRONMENT_ID`、`MIRAGE_DEPLOYMENT_ID`、`MIRAGE_SERVICE_ID` 可由部署環境同時設定。識別失敗回 409，成功則回 `501 orchestrator_not_implemented` 與身份摘要，因 C 尚未接上。對外診斷不回顯 body、query、path parameter 值或 Authorization，`X-Request-ID` 與 A 一致；HTTP server 的 access log 仍可能記錄 path／query。
+`MIRAGE_ENVIRONMENT_ID`、`MIRAGE_DEPLOYMENT_ID`、`MIRAGE_SERVICE_ID` 可由部署環境同時設定。此 B-only 入口識別失敗回 409，成功仍回 `501 orchestrator_not_implemented` 與身份摘要，保持診斷用途。完整 A→C/N→M 已可用，但須另外以伺服器可信的判定 provider 及核對後工具建立 [完整 HTTP app](renderer.md#可選的-a--c--m-接入)，不會因啟動 B-only 入口而自動啟用。對外診斷不回顯 body、query、path parameter 值或 Authorization，`X-Request-ID` 與 A 一致；HTTP server 的 access log 仍可能記錄 path／query。
 
 A 原有的 `deception.api.app:app` 仍是獨立入口。B 不信任任意 Forwarded／X-* header 來覆寫綁定，但若上游 server 已重寫 scheme／host／path，A 看到的 URL 就已改變；需由部署設定與可信代理界線處理。多個 Host header 會被 A→B 拒絕。
 

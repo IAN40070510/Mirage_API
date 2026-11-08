@@ -16,7 +16,7 @@ H 接收 C 的明確組合指令、D 的固定契約，以及可選的 E 合成�
 | 候選輸出 | 不可變 dataclass、tuple headers、body 字串與來源／run 身份；可原樣轉為 I 的 GateRequest |
 | I 身份交接 | `verify_candidate` 交給 I 後，核對 platform／version／hash／operation；其他契約的結果不能代替原候選通過 |
 
-preflight 只表示符合載入的回應契約，不檢查原網站綁定、已審查 query 或真實平台行為。H 的輸出仍是待 I 驗證的候選，不包含 `valid=true` 或正式放行狀態。C 已串接 H/I 的內部流程；正式 M 與完整 A HTTP 回送尚未實作，必須等 I 依部署 manifest 驗證同一份 triple 後才可渲染。
+preflight 只表示符合載入的回應契約，不檢查原網站綁定、已審查 query 或真實平台行為。H 的輸出仍是待 I 驗證的候選，不包含 `valid=true` 或正式放行狀態。C 已串接 H/I，[N](recovery.md) 的修正及備援也重新經過 H/I；可選 [M／完整 A HTTP 接入](renderer.md) 會完成最終傳輸標頭，再依部署 manifest 對同一份 triple 重新驗 I 才回送。
 
 本版只處理有 JSON body 的回應。HEAD、204／205／304、非 JSON、缺少 media schema 或多值 headers 尚不支援。schema 是否允許額外欄位、nullable、組合 schema 等，沿用來源契約；不額外猜測或放寬。
 

@@ -19,6 +19,8 @@ GUIDES = {
     "H": ("src/deception/core/composer.py", "docs/composer.md"),
     "I": ("mirage_validator/gate.py", "docs/gate.md"),
     "J": ("src/deception/generation/models.py", "docs/context.md"),
+    "M": ("src/deception/core/renderer.py", "docs/renderer.md"),
+    "N": ("src/deception/core/recovery.py", "docs/recovery.md"),
     "P": ("src/deception/llm", "docs/llm.md"),
     "PoC": ("mirage_validator/validator.py", "docs/poc.md"),
     "documentation": ("tools/check_documentation.py", "docs/documentation.md"),

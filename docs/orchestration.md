@@ -10,7 +10,8 @@ C／G 將現有 D／E／F／H／I 串成受控的本地 LLM 生成流程。C 負
 | G 生成器 | 依本次契約、資料事實、情境與白名單，產生結構化的內容片段 | 只有明確允許的位置可由模型填入 |
 | J 生成上下文 | 綁定領域、請求指紋、部署、契約、資料與政策、模型／提示版本 | 同一次生成使用同一組身份與版本 |
 | D／E／F | 分別提供固定契約、已核對的合成資料與情境結果 | C／G 不提升 `approved` 或重新標記既有 E 資料集 |
-| H／I | 組合與序列化候選，驗證原樣交接的 status、headers、body 及原始請求 URL | 通過的候選仍由後續 M 負責正式 HTTP 輸出 |
+| H／I | 組合與序列化候選，驗證原樣交接的 status、headers、body 及原始請求 URL | 通過的候選交由 M 完成傳輸標頭、重新驗 I 後回送 |
+| N／M | N 有限重新生成或選取同分支固定欄位備援；M 回送最終重新驗證的 bytes | 不變更 F 結果、E 事實或契約；完整 HTTP app 須由可信 provider 明確接入 |
 
 目前內建領域為 `ecommerce`。領域政策明寫 `domain: ecommerce`，平台另以 `platform_id`、版本及規格 SHA-256 選擇；電商與 Medusa／WooCommerce 是不同層級。共用 C／G 流程不依商品名稱猜測領域。新增完整領域時，仍須提供相應的情境處理器、資料來源與生成政策。
 
@@ -29,6 +30,10 @@ flowchart LR
     V --> H["H 組合"]
     H --> I["I 驗證"]
     I --> K["內部候選結果"]
+    I -->|允許的內容失敗| N["N 有限修正／同分支備援"]
+    N --> H
+    K --> M["M 完成傳輸欄位並重驗 I"]
+    M --> O["HTTP Response"]
 ```
 
 外部系統負責攻擊判定及來源認證。`AttackAssessment` 的來源 ID 白名單只限制可接受的來源標籤；接收層須先完成服務身份驗證，不能把訪客提供的 `trusted: true` 或 header 當作認證。C／G 沒有新增公開 verdict 接收 API。
@@ -94,12 +99,13 @@ pipeline = DeceptionOrchestrator(
 )
 
 async def run_once():
+    """執行同一請求的生成與驗證，並在結束時釋放本例建立的模型與快取資源。"""
     try:
         result = await pipeline.run(
             request, verified_assessment, runtime=trusted_runtime,
             generation_config=checked_e_config, dataset=checked_e_dataset,
         )
-        # validated 表示內部候選通過 I；後續 M 仍須使用完全相同的候選。
+        # validated 表示內部候選通過 I；M 完成傳輸欄位後會重驗同一 body。
         return result
     finally:
         await backend.aclose()
@@ -107,6 +113,8 @@ async def run_once():
 ```
 
 `dataset=None` 時，內建電商資料供應器會依明確的 E 設定生成；提供快照時則以該完整設定重建檢查。F、生成政策與資料供應器須使用同一領域；其他領域可注入自己的 `load`、`facts`、`composition_data` 介面。`PipelineResult` 區分 `validated`、`not_applicable`、`unverifiable` 與 `reject`，失敗結果沒有可對外使用的候選。
+
+C 可另注入 `recovery=RecoveryTool(reviewed_recovery_policy)`，以 [N 政策](recovery.md) 啟用同分支固定欄位備援；省略時只保留有上限的重新生成。所有修正沿用同一 `RunBudget`，備援不寫入 G 的模型內容快取。模型不會自行選擇備援或宣告驗證成功。由 [M／完整 HTTP app](renderer.md) 明確注入可信判定 provider，即可將內部結果接至 A 的回送流程。
 
 可先執行獨立的真本機模型展示：
 
@@ -211,7 +219,7 @@ Pydantic AI 及 Ollama 的 MIT 是程式碼授權，模型權重、tokenizer、�
 
 此命令主要驗證可控 `FunctionModel` 的邊界與流程；真 Ollama 展示另用前述 CLI，實測結果應依各份報告的 `success`、`real_model`、`checks`、候選與用量判讀。模型品質仍需更多樣本、不同輸入與延遲統計，不以單次合成展示宣稱完整官方平台相容。
 
-本輪輸出是經 H／I 檢查的內部候選結果；M 與完整正式 HTTP 回送尚未實作。A 目前會在 handler 之後追加 `X-Request-ID`，後續 M 串接時必須一併處理最終 headers 與驗證候選一致的要求。
+C 的輸出仍是經 H/I 檢查的內部候選；[M](renderer.md) 已提供最終 HTTP renderer，可由 `deception.api.pipeline.create_app` 接上 A。M 在加入本次 `X-Request-ID` 與精確 `Content-Length` 後重驗 I，A 對封存的 M 回應不再改寫 headers。C 成功結果必須帶 `trace.release_deadline_monotonic`，取 F 判定與共用總預算較早到期者；M 在最終驗證及發送前仍會核對。該期限只供同程序即時交接，保存的報告或跨程序結果不能當作可重放的回送許可。預設原始 A 與 B-only 入口維持診斷用途；外部判定來源認證接收器、OCI 與真實 Medusa 部署對照仍待完成。
 
 現有 `configs/generation.yaml` 的舊契約 hash 與 `product-found` scope 不能直接套到目前固定來源及 `product-lookup` family。正式資料載入須核對本次 D 與 F scope，不自動重標既有資料或提升 Medusa `approved`。
 

@@ -122,7 +122,7 @@ $env:PYTHONPATH = "$PWD/src"
 
 ## 錯誤與驗證
 
-直接呼叫可能遇到設定／metadata 的 `ValueError`、`BudgetExceeded`、框架輸出錯誤、HTTP 錯誤或取消。C 會轉為固定且不回顯憑證的失敗結果；它不把模型錯誤當成空模板或已驗證回應。`test` 模式明確標示測試模型，不會記為真本機模型。
+直接呼叫可能遇到設定／metadata 的 `ValueError`、`BudgetExceeded`、框架輸出錯誤、HTTP 錯誤或取消。C 會轉為固定且不回顯憑證的失敗結果；它不把模型錯誤當成空模板或已驗證回應。明確配置的 [N 備援](recovery.md) 可在已完成 B/D/F/E/G 核對後，以同分支固定欄位值重新經 H/I；這類結果標示 `source: fallback`，不冒充模型輸出，也不寫入模型內容快取。總預算、到期或取消不會觸發備援。`test` 模式明確標示測試模型，不會記為真本機模型。
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests/test_llm_backend.py tests/test_model_selection.py tests/test_orchestrator.py -q
