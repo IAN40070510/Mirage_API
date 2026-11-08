@@ -1,0 +1,13 @@
+# B 的部署綁定範例；占位站點不代表已知部署，完成來源與部署審查前維持 disabled。
+schema_version: 1
+bindings:
+  - binding_id: medusa-demo
+    environment_id: local-test
+    deployment_id: medusa-demo
+    service_id: storefront
+    site_id: shop-example
+    base_url: https://shop.example
+    platform_id: medusa
+    platform_version: '2.22.4'
+    spec_sha256: 65b6917fb04c52d3a2394cabe8c391db8ebfa74e5aec336eb88069ed5e14ba0b
+    enabled: false

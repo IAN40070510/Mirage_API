@@ -9,9 +9,9 @@ from pathlib import Path
 from urllib.parse import unquote
 
 import yaml
-from openapi_core import OpenAPI
 
 from mirage_validator.gate import walk_refs
+from mirage_validator.openapi_utils import create_openapi
 
 from .models import OperationProfile, PlatformProfile, ProfileSource
 
@@ -118,7 +118,7 @@ def extract_profile(source: ProfileSource, data: bytes) -> PlatformProfile:
     walk_refs(spec)
     _check_refs(spec, spec)
     # 使用既有鎖版驗證器，避免另外維護一份 OpenAPI 規格驗證實作。
-    OpenAPI.from_dict(copy.deepcopy(spec))
+    create_openapi(spec)
 
     operations = []
     warnings = []

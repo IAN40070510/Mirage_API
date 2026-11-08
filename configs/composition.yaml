@@ -1,0 +1,17 @@
+# H 的明確404候選：只宣告錯誤情境，不自動判斷商品存在與否（此為F的職責）。
+scope:
+  site_id: shop-example
+  platform_id: medusa
+  platform_version: '2.22.4'
+  spec_sha256: 65b6917fb04c52d3a2394cabe8c391db8ebfa74e5aec336eb88069ed5e14ba0b
+  scenario_id: product-missing
+  run_id: demo-404
+method: GET
+path: /store/products/{id}
+status_code: 404
+media_type: application/json
+headers: {}
+body:
+  type: not_found
+  message: Synthetic product not found
+bindings: []

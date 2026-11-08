@@ -15,3 +15,5 @@ generated/profiles/
 generated/schemas/
 generated/releases/
 generated/synthetic_data/
+generated/responses/
+generated/identification/
