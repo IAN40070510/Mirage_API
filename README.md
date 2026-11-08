@@ -4,7 +4,7 @@
 
 Mirage_API 的製作目標是整合不同部署環境的 HTTP 流量入口，接收外部系統提供的攻擊判定結果，依目標 Web 服務的 API 契約、虛構資料及互動狀態，使用本地 LLM 動態生成誘餌回應，並在驗證後輸出符合原服務契約的 HTTP Response。多個部署環境及其設定由集中管理能力統一維護。
 
-電商是初期驗證案例，範圍包含 Medusa（測試目標 `v2.22.4`）與 WooCommerce；整體平台的設計目標涵蓋其他 Web 服務、應用框架與部署方式。此處的「Platform」表示目標服務及其契約、版本與部署設定。
+電商是初期驗證案例，範圍包含 Medusa（測試目標 `v2.22.4`）與 WooCommerce；整體平台的設計目標涵蓋其他 Web 服務、應用框架與部署方式。F 以 `domain: ecommerce` 選擇電商領域；此處的「Platform」表示該領域下的目標服務及其契約、版本與部署設定。領域可透過型別化政策及處理器擴充，目前內建可用領域只有電商。
 
 ## 核心能力與目前進度
 
@@ -28,7 +28,7 @@ Mirage_API 的製作目標是整合不同部署環境的 HTTP 流量入口，接
 | 契約一致的 HTTP 輸出 | H：候選組合及契約 preflight；I：獨立驗證 API | M、修正／備援，以及入口到輸出的完整串接 |
 | 多環境集中管理 | 本地來源／生成設定、B 部署 binding 與可信 runtime context | 集中設定儲存、管理介面、版本發布與代理整合 |
 
-目前 A、B、D、E、F、H、I 可各自使用，也有可選的 A→B 入口；B 識別成功後仍回 `501 orchestrator_not_implemented`，因 C 尚未接上。原始 A 入口預設仍回 `501 pipeline_not_implemented`。F 已能依同一 E 快照選商品存在／不存在分支，交給 H 組合，再由 I 驗證；尚未接上正式 HTTP 主流程。現有 E 是可查詢的固定資料快照，尚不提供互動造成的狀態更新。本文所有「規劃」格式只定義預期介面，不能當作現有 API 使用。
+目前 A、B、D、E、F、H、I 可各自使用，也有可選的 A→B 入口；B 識別成功後仍回 `501 orchestrator_not_implemented`，因 C 尚未接上。原始 A 入口預設仍回 `501 pipeline_not_implemented`。F 可明確選擇電商領域，再依同一 E 快照選商品存在／不存在分支，交給 H 組合，再由 I 驗證；共用引擎與領域處理器已分開，尚未接上正式 HTTP 主流程或圖形選擇介面。現有 E 是可查詢的固定資料快照，尚不提供互動造成的狀態更新。本文所有「規劃」格式只定義預期介面，不能當作現有 API 使用。
 
 ## 系統架構與整合邊界
 
@@ -92,7 +92,7 @@ flowchart TB
 | C 任務協調器與 P Ollama | 識別結果、外部攻擊判定、生成策略 → 向 D–G 取材、限制 LLM 工具與輪次、指示 H；Ollama 提供本地推論 | 未實作；未選定模型 |
 | D 平台 Profile 工具 | 固定來源與 OpenAPI → 可追溯的操作、參數、狀態碼、媒體類型、schema 上下文 | **已實作**：`src/deception/profile_builder/`；提供 CLI 建立及 Python 查詢，尚未接上 C；不推測平台慣例 |
 | E 合成資料工具 | 種子、隔離身份、資料規則 → 跨操作可引用的虛構實體；未來維護互動造成的狀態變更 | **已實作**：`src/deception/synthetic/` 的商品／變體生成、保存、驗證與只讀查詢；顧客、訂單及互動狀態更新尚未實作 |
-| F 安全情境工具 | 可信整合層的判定、白名單與 B/D → 固定 family；再依同一 E 快照選分支與 H 計畫 | **已實作**：`src/deception/scenarios/`；GET 商品 200／404、可追溯決策與交接完整性；不偵測攻擊或更新交易狀態，詳見 [F 功能、驗證與授權](docs/scenarios.md) |
+| F 安全情境工具 | 領域政策、可信整合層的判定、白名單與 B/D → 固定 family；領域處理器再依資料選分支與 H 計畫 | **已實作**：`src/deception/scenarios/`；可選 `ecommerce`，提供 GET 商品 200／404、可追溯決策及交接完整性；領域可註冊擴充，尚無其他真實領域資料，不偵測攻擊或更新交易狀態，詳見 [F 功能、驗證與授權](docs/scenarios.md) |
 | G 內容生成工具 | Profile、合成資料、情境、模型提示 → 動態文字與欄位候選 | 未實作 |
 | J Generation Context | D–G 的資料及來源 → 交回 C，記錄環境／部署／服務身份、判定關聯、契約版本、種子、情境及狀態版本 | 未實作 |
 | H 回應組合工具 | 明確指令、D 契約、可選 E 映射 → status、headers、已序列化 body | **已實作**：`src/deception/core/`；UTF-8 JSON、嚴格 metadata 與契約 preflight，產物仍需 I 驗證；C/J 尚未串接 |
@@ -113,7 +113,7 @@ A → B → C；C 關聯外部攻擊判定，分別調用 D/E/F/G，匯成 J，�
 | HTTP Request | 原始 method、URL、query、headers、body 與追蹤 ID | A 的 `NormalizedRequest` 已實作 |
 | API Specification | 固定版本的操作、參數、狀態碼、headers 與回應 schema | D 的 `inputs/sources/`；I 另讀 `inputs/platforms/` 的部署契約 |
 | Platform Profile | 服務版本、契約來源、operation 摘要及生成上下文 | D 已建立 `generated/profiles/`；完整服務慣例與回應對映仍待擴充 |
-| Scenario Configuration | 情境白名單、適用操作及外部判定的情境選擇規則 | F 讀取 `inputs/policies/deception.yaml` 格式；現有 `inputs/scenarios/` 草稿不自動載入 |
+| Scenario Configuration | 領域、情境白名單、適用操作及外部判定的情境選擇規則 | F 讀取 `inputs/policies/deception.yaml` 格式，必填 `domain: ecommerce`；現有 `inputs/scenarios/` 草稿不自動載入 |
 | Synthetic State | 跨 API 共用的虛構實體、關聯與互動狀態 | E 已有商品／變體快照；狀態更新尚未實作 |
 | Generation Policy | 模型、工具權限、生成限制、修正上限與備援策略 | 策略草稿未串接；`configs/generation.yaml` 目前只管理 E 的資料生成規則 |
 | 外部攻擊判定 | 與請求關聯的攻擊標籤、來源與判定依據 | F 已有嚴格模型與關聯檢查；接收及來源認證介面待實作 |
@@ -128,7 +128,8 @@ Mirage_API/
 ├─ src/deception/discovery/         # B：明確部署綁定、唯一契約與操作識別
 ├─ src/deception/profile_builder/   # D：來源檢查、Profile 建立與操作查詢
 ├─ src/deception/synthetic/         # E：合成商品、變體、資料關聯與有效性驗證
-├─ src/deception/scenarios/         # F：情境 family、結果分支與 H 計畫
+├─ src/deception/scenarios/         # F：共用引擎、領域註冊、情境與 H 計畫
+│  └─ domains/ecommerce.py          # 電商政策、商品規則及 prepare／resolve 處理器
 ├─ src/deception/core/              # H：明確模板、E 映射與候選回應組合
 ├─ configs/generation.yaml          # E：隔離身份、種子、數量與生成規則
 ├─ configs/composition.yaml         # H：明確狀態、headers、body 與映射指令
@@ -158,7 +159,7 @@ Mirage_API/
 
 **E 的輸入與產物**：`configs/generation.yaml` 定義種子、站點／版本／規格／情境／run 隔離與數量、價格、庫存規則。E 產生 `generated/synthetic_data/<platform>/<namespace>.json`，保留完整設定及生成器／Faker 版本，並驗證資料關聯與可重現性。J 的 context 與 `samples/` 實測對照尚未實作。現有 `input-audit.json` 是檢查產物，`api-scope.json` 是範圍紀錄，兩者均不參與驗證執行。
 
-**F 的輸入與產物**：`inputs/policies/deception.yaml` 提供停用的政策範本。`ScenarioEngine.prepare` 先核對可信整合層的判定與 B/D，選出固定 family scope；`resolve` 再依同一 E 快照選 200／404，回傳 H 計畫與政策／模板／資料摘要。`python -m deception.scenarios --demo` 可執行合成契約的離線整合展示並保存 `generated/scenarios/` 報告；用法、功能註解、有效性測試及套件授權見 [F 說明](docs/scenarios.md)。購買扣款、庫存更新及真實 HTTP 串接仍待擴充。
+**F 的輸入與產物**：`inputs/policies/deception.yaml` 提供明寫 `domain: ecommerce` 的停用政策範本。`ScenarioEngine(policy, domain="ecommerce")` 可核對選擇的領域；省略呼叫參數時依政策領域，未知或不符領域會拒絕。`prepare` 核對可信整合層的判定與 B/D，選出固定 family scope；電商處理器再依同一 E 快照選 200／404，回傳 H 計畫與領域／政策／模板／資料摘要。`python -m deception.scenarios --list-domains` 列出已註冊領域，`python -m deception.scenarios --demo --domain ecommerce` 執行電商合成契約的離線整合展示並保存 `generated/scenarios/` 報告。`domain` 是業務領域，`platform_id` 是 Medusa／WooCommerce 等服務，`scenario_id` 是 `product-lookup` 等情境，`outcome_id` 則是 `found`／`missing` 等結果；用法、擴充介面、有效性測試及套件授權見 [F 說明](docs/scenarios.md)。其他領域的實際政策／資料、購買扣款、庫存更新及真實 HTTP 串接仍待擴充。
 
 ### 現有 manifest 格式示例（未啟用）
 
