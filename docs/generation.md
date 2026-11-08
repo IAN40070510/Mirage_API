@@ -10,7 +10,7 @@ G 的程式位於 `src/deception/generation/`。它依管理者明列的生成�
 | 欄位生成 | 模型只回傳 `field_id` 對應的 JSON 值；目標 Pointer 由政策提供 |
 | 事實保護 | 拒絕與政策 `protected_pointers` 或 F 的 E 映射重複、父子重疊的目標 |
 | schema 投影 | 從 D 的精確回應擷取允許欄位的 schema，供解碼器及本地驗證使用 |
-| 有限合併 | 僅替換既有模板位置，保留原始 JSON 型別；不改 scope、HTTP metadata 或 E 映射 |
+| 有限合併 | 僅替換既有模板位置，依 schema 驗證 JSON 值且不做隱含轉型；不改 scope、HTTP metadata 或 E 映射 |
 | 內容重用 | 使用獨立 SQLite 快取保存已驗證的衍生內容，不修改 E 的 Faker 產物 |
 
 G 的結果是尚未發布的內容。C 必須再交給 H 組合、I 驗證原樣候選，才能發布內容快取；`GeneratedContent` 本身不表示 I 已放行。C/G 目前尚未接上 M 正式 HTTP 回送，購買扣款、庫存更新及訂單交易仍屬後續 E 狀態介面的工作。
@@ -75,7 +75,7 @@ enabled: false
 | `ContentCache(path=None)` | 建立記憶體或指定檔案的 SQLite 內容快取 |
 | `cache.get(key)` | 回傳內容副本或 `None`；摘要不符會拒絕讀取 |
 | `cache.publish(key, values)` | 僅供完成 H/I 檢查的 C 發布；同鍵競爭採先成功發布值 |
-| `cache.close()` | 關閉自有資料庫連線，保留已保存內容 |
+| `cache.close()` | 關閉自有資料庫連線；指定檔案路徑時保留已保存內容，預設記憶體快取的內容隨關閉消失 |
 | `field_schema(profile, plan, pointer)` | 從同一 D 契約的回應取得局部生成 schema |
 | `digest(value)` | 固定 JSON 序列化後計算 SHA-256，拒絕 NaN 等不可重現值 |
 
