@@ -1,8 +1,8 @@
-# E：合成資料工具
+# 合成資料工具
 
 ## 功能確認
 
-E 的第一版範圍是平台無關的商品／變體資料，供 C、F、H 查詢與組合回應。程式位於 `src/deception/synthetic/`，設定為 `configs/generation.yaml`，產物在 `generated/synthetic_data/`。
+合成資料工具的第一版範圍是平台無關的商品／變體資料，供任務協調器、情境選擇工具、回應組合器查詢與組合回應。程式位於 `src/deception/synthetic/`，設定為 `configs/generation.yaml`，產物在 `generated/synthetic_data/`。
 
 | 功能 | 本次行為 |
 | --- | --- |
@@ -13,9 +13,9 @@ E 的第一版範圍是平台無關的商品／變體資料，供 C、F、H 查�
 | 一致性 | 唯一 ID／handle／SKU、有效父子關聯、明確幣別、整數金額與非負庫存 |
 | 保存與載入 | JSON 原子寫入；載入時核對呼叫端的設定，檢查型別與關聯並完整重建比對 |
 | 有效性驗證 | `verify_dataset` 回傳報告；CLI `verify` 可獨立驗證既有檔案，失敗回非零結束碼 |
-| 與 D 配合 | `SyntheticTool(..., profile=context)` 核對平台、版本與契約雜湊，保持 D 的審查狀態 |
+| 與平台規格工具配合 | `SyntheticTool(..., profile=context)` 核對平台、版本與契約雜湊，保持平台規格工具的審查狀態 |
 
-這些是內部資料實體。現有 Medusa `StoreProduct` 還要求 options、images、timestamps 等欄位，庫存也不能直接套用成 StoreProductVariant 的回應欄位。因此 E 的驗證只證明內部資料符合規則與可重現性；完整平台 body 映射由 H 處理，正式 HTTP 契約由 I 驗證。C 核對並使用同一 E 快照，可選 [A→C/N→M HTTP app](renderer.md) 已接上；N 修正與備援同樣保留 E 映射及資料身份，不能更新交易狀態。
+這些是內部資料實體。現有 Medusa `StoreProduct` 還要求 options、images、timestamps 等欄位，庫存也不能直接套用成 StoreProductVariant 的回應欄位。因此合成資料工具的驗證只證明內部資料符合規則與可重現性；完整平台 body 映射由回應組合器處理，正式 HTTP 契約由契約驗證器驗證。任務協調器核對並使用同一合成資料工具快照，可選 [HTTP 請求入口→任務協調與修正備援→HTTP 回送器 HTTP app](renderer.md) 已接上；修正與備援同樣保留合成資料工具映射及資料身份，不能更新交易狀態。
 
 ## 現成專案評估
 
@@ -27,7 +27,7 @@ E 的第一版範圍是平台無關的商品／變體資料，供 C、F、H 查�
 
 Faker 官方說明同一 seed 的結果還依賴呼叫方法及版本，且 patch 更新也可能改變資料集，因此本版鎖定確切版本。只使用文字 provider，不產生依「今天」變化的日期，也不呼叫姓名、地址或帳號 provider。商品標題帶 `Synthetic`、識別碼帶 `syn`／`SYN` 標記；生成文字可能偶然與現實文字相同，不能以文字本身作為唯一的合成來源證明。
 
-E 直接使用的 `Faker==40.44.0` 採 MIT License；本專案只呼叫其公開 API，沒有複製 Faker 原始碼或資料。Faker 安裝時帶入的 `tzdata` 是間接依賴，發行或部署時也要依實際解析出的版本保存其授權與版權聲明。Polyfactory 與 hypothesis-jsonschema 目前只是評估過的候選，沒有列入 `pyproject.toml`，因此不構成本版本的執行期依賴。完整直接依賴清單及授權界線見 README 的[開源軟體、模型與資料授權](../README.md#開源軟體模型與資料授權)。
+合成資料工具直接使用的 `Faker==40.44.0` 採 MIT License；本專案只呼叫其公開 API，沒有複製 Faker 原始碼或資料。Faker 安裝時帶入的 `tzdata` 是間接依賴，發行或部署時也要依實際解析出的版本保存其授權與版權聲明。Polyfactory 與 hypothesis-jsonschema 目前只是評估過的候選，沒有列入 `pyproject.toml`，因此不構成本版本的執行期依賴。完整直接依賴清單及授權界線見 README 的[開源軟體、模型與資料授權](../README.md#開源軟體模型與資料授權)。
 
 ## 執行方式
 
@@ -74,16 +74,16 @@ assert tool.get_product("not-found") is None
 
 每個工具 instance 綁定一個 `expected_scope`，所有回傳 model 都是深複本，呼叫端修改不影響其他查詢。工具只在建立時驗證固定快照，不會在每次 GET 消耗亂數。分頁 offset 不得為負，limit 為 1–1000；商品數 0–1000、每商品變體 1–20，總變體最多 10000。
 
-若 C 同時取得 D 的 `OperationContext`，可傳入 `profile=context`；身份不符即拒絕。E 沒有核准來源或網站綁定的權限，`profile.source.approved` 仍保持原值。未審的 D 來源仍應遵守 D 的離線預覽限制。
+若任務協調器同時取得平台規格工具的 `OperationContext`，可傳入 `profile=context`；身份不符即拒絕。合成資料工具沒有核准來源或網站綁定的權限，`profile.source.approved` 仍保持原值。未審的平台規格工具來源仍應遵守平台規格工具的離線預覽限制。
 
 舊 `inputs/synthetic/medusa/state.yaml` 仍是手寫草稿，不會被本工具當作匯入資料或自動遷移。第一版只從設定規則產生新資料，避免將舊 ID 配到不同版本／run。
 
 ## 模組有效性如何驗證
 
-測試檢查相同設定重建與 bytes 一致性、各隔離維度、全域亂數不受影響、父子關聯與唯一性、價格／庫存範圍、零資料與零值、嚴格型別、分頁及深複本、找不到 ID 不新增資料、保存再載入，以及合法型別但遭改動的資料會被拒絕。另用 repo 現有 Medusa 來源重建 D，取得商品操作後串接 E，確認身份一致與未審查狀態維持。
+測試檢查相同設定重建與 bytes 一致性、各隔離維度、全域亂數不受影響、父子關聯與唯一性、價格／庫存範圍、零資料與零值、嚴格型別、分頁及深複本、找不到 ID 不新增資料、保存再載入，以及合法型別但遭改動的資料會被拒絕。另用 repo 現有 Medusa 來源重建平台規格工具，取得商品操作後串接合成資料工具，確認身份一致與未審查狀態維持。
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests/test_synthetic.py -q
 ```
 
-這些測試驗證 E 的資料行為；它們不會宣稱 E 已生成符合完整 Medusa 契約的 HTTP 回應。
+這些測試驗證合成資料工具的資料行為；它們不會宣稱合成資料工具已生成符合完整 Medusa 契約的 HTTP 回應。

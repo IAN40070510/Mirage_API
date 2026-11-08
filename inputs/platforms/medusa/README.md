@@ -15,13 +15,13 @@
 
 | 檔案 | 目的 |
 | --- | --- |
-| `openapi.yaml` | 已修正的 Store/Auth 子集，供 I 的正式格式 Gate 使用（尚未啟用） |
-| `inputs/sources/medusa/openapi.yaml` | D 使用的同一份 bytes；與 Gate 契約完全相同 |
+| `openapi.yaml` | 已修正的 Store/Auth 子集，供契約驗證器的正式格式 Gate 使用（尚未啟用） |
+| `inputs/sources/medusa/openapi.yaml` | 平台規格工具使用的同一份 bytes；與 Gate 契約完全相同 |
 | `manifest.yaml.example` | 已更新固定來源 commit、子集 SHA-256；`approved: false`，不會載入 |
 | `api-scope.json` | 歷史 XGBoost 推論操作範圍記錄，**不作為驗證器輸入**；其中原始來源 SHA 與這次取得的官方完整 OpenAPI SHA 不相同 |
 | `input-audit.json` | 已更新子集 SHA、官方來源資訊及靜態修補狀態；靜態修補後的執行期測試仍待跑 |
 
-本地子集（D/I 使用相同 LF 格式）的 SHA-256：
+本地子集（平台規格工具/契約驗證器使用相同 LF 格式）的 SHA-256：
 
 ```text
 ced300a2de92b9829e6e600964588e894b760f07f8d79c1df657e1abe0529058
@@ -34,7 +34,7 @@ ced300a2de92b9829e6e600964588e894b760f07f8d79c1df657e1abe0529058
 - 本地 `components/schemas` 保留 133 個；補回原缺失的 `BaseRefund.properties.idempotency_key: string`。
 - 將官方 51 個 Store operation 的 `x-allowed` 欄位白名單保留在規格中；**格式驗證器並不自動執行白名單語意，也不能由其通過推論任意 `fields` 組合可用**。
 - 本地原有的 10 個「成功回應沒有 `content`」仍需要針對實際服務釐清；沒有猜測補齊 Response Schema。
-- 舊版 CRLF／LF 差異已消除，D/I 來源 byte-for-byte 相同。
+- 舊版 CRLF／LF 差異已消除，平台規格工具/契約驗證器來源 byte-for-byte 相同。
 
 ## 回歸測試
 
@@ -46,7 +46,7 @@ $env:PYTHONPATH = "$PWD/src"
 .\.venv\Scripts\python.exe -m deception.profile_builder --source inputs/sources/medusa/source.yaml --output generated
 ```
 
-此回歸測試核對 D/I 相同 bytes、固定 SHA、版本區分、77 operations、133 schemas、51 份 `x-allowed`、`BaseRefund` 新欄位與內部 `$ref`；**不能替代固定 Medusa 部署的實際 HTTP 對照測試**。
+此回歸測試核對平台規格工具/契約驗證器相同 bytes、固定 SHA、版本區分、77 operations、133 schemas、51 份 `x-allowed`、`BaseRefund` 新欄位與內部 `$ref`；**不能替代固定 Medusa 部署的實際 HTTP 對照測試**。
 
 ## 未完成的正式啟用條件
 

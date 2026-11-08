@@ -1,4 +1,4 @@
-# C/G 的本機模型設定。模型內容摘要必須與 ollama list / api/tags 完整值一致。
+# 任務協調與內容生成的本機模型設定。模型內容摘要必須與 ollama list / api/tags 完整值一致。
 # execution_mode: local 不會在服務不存在、模型能力不足或 digest 不符時降級成假模型。
 schema_version: 1
 execution_mode: local

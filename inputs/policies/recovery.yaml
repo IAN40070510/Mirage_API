@@ -1,5 +1,5 @@
-# N 備援政策；僅替換 G 已核准欄位，不能改 F 結果、HTTP metadata 或 E 事實。
-# 本範本預設停用。啟用前替換精確身份及 F/G 政策摘要，再以 H/I 驗證。
+# 修正與備援政策；僅替換內容生成器已核准欄位，不能改情境結果、HTTP metadata 或合成資料事實。
+# 本範本預設停用。啟用前替換精確身份及情境／生成政策摘要，再以回應組合與契約驗證檢查。
 schema_version: 1
 domain: ecommerce
 policy_id: product-content-recovery

@@ -1,6 +1,6 @@
-# C/G 生成政策範本；與 configs/generation.yaml 的 E 種子／資料規則分開。
+# 任務協調與內容生成政策範本；與 configs/generation.yaml 的合成資料種子／資料規則分開。
 # 這裡的精簡描述／錯誤欄位只示範政策格式，不是完整 Medusa 200 回應。
-# 啟用前須以 B/D 的實際部署契約及 F outcome 替換身份，並完成 H/I 驗證。
+# 啟用前須以平台識別與規格工具的實際部署契約及情境選定的 outcome 替換身份，並完成回應組合與契約驗證。
 schema_version: 1
 domain: ecommerce
 policy_id: product-content-generation
@@ -25,7 +25,7 @@ rules:
     outcome_id: found
     status_code: 200
     media_type: application/json
-    # 除明列的保護位置外，F 提供的所有 E 映射也會自動禁止生成覆寫。
+    # 除明列的保護位置外，情境選擇工具提供的所有合成資料映射也會自動禁止生成覆寫。
     protected_pointers: [/product/id, /product/title]
     fields:
       - field_id: description

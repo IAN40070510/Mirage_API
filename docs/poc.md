@@ -1,6 +1,6 @@
 # Mirage_API：Response Contract Validator PoC
 
-本頁是獨立、可重用的電商示意契約驗證工具，使用 Python 3.11+、FastAPI、Pydantic 2、jsonschema 4 與 JSON Schema Draft 2020-12。PoC 工具本身不調用 LLM、組合回應或修正重試；整個專案另有 C/G/H 模組，見 [工具文件索引](README.md)。
+本頁是獨立、可重用的電商示意契約驗證工具，使用 Python 3.11+、FastAPI、Pydantic 2、jsonschema 4 與 JSON Schema Draft 2020-12。PoC 工具本身不調用 LLM、組合回應或修正重試；整個專案另有任務協調與內容生成/回應組合器模組，見 [工具文件索引](README.md)。
 
 **所有 WooCommerce／Medusa 契約皆為 PoC 示意，不宣稱與任何官方 API 版本完全一致。** `poc-v1` 是本專案契約版本，不是平台版本。`get_product` 僅為示範操作 ID；200 為簡化商品，404 為本專案統一錯誤格式。`X-Request-ID` 亦為 PoC 自訂要求。
 
@@ -88,7 +88,7 @@ print(result.model_dump_json(indent=2))
 
 ## 套件授權
 
-PoC 直接使用 [jsonschema（MIT）](https://github.com/python-jsonschema/jsonschema/blob/main/COPYING) 與 [Pydantic（MIT）](https://github.com/pydantic/pydantic/blob/main/LICENSE)，HTTP 介面使用 FastAPI（MIT）；Python 標準庫隨 PSF 授權及聲明管理。測試使用 pytest（MIT）與 HTTPX（BSD-3-Clause）。共用版本與分發要求見 [專案授權清單](../README.md#開源軟體模型與資料授權)；示意契約不能替代正式 I 的來源及部署審查。
+PoC 直接使用 [jsonschema（MIT）](https://github.com/python-jsonschema/jsonschema/blob/main/COPYING) 與 [Pydantic（MIT）](https://github.com/pydantic/pydantic/blob/main/LICENSE)，HTTP 介面使用 FastAPI（MIT）；Python 標準庫隨 PSF 授權及聲明管理。測試使用 pytest（MIT）與 HTTPX（BSD-3-Clause）。共用版本與分發要求見 [專案授權清單](../README.md#開源軟體模型與資料授權)；示意契約不能替代正式契約驗證器的來源及部署審查。
 
 依賴設計參考：[FastAPI 的 Pydantic 2 說明](https://fastapi.tiangolo.com/how-to/migrate-from-pydantic-v1-to-pydantic-v2/)、[jsonschema 驗證與 iter_errors](https://python-jsonschema.readthedocs.io/en/v4.21.1/validate/)。實際測試版本以執行環境及 pyproject.toml 為準。
 

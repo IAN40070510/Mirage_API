@@ -44,8 +44,8 @@ def make_pipeline_handler(
     if not callable(assessment_provider):
         raise ValueError("A trusted assessment provider must be explicitly supplied")
     if (type(assessment_timeout_seconds) not in (int, float)
-            or not math.isfinite(assessment_timeout_seconds)
-            or not 0 < assessment_timeout_seconds <= 120):
+            or not 0 < assessment_timeout_seconds <= 120
+            or not math.isfinite(assessment_timeout_seconds)):
         raise ValueError("assessment_timeout_seconds must be finite and greater than 0 and at most 120")
     selected_renderer = ResponseRenderer(orchestrator.gate) if renderer is None else renderer
     if not callable(getattr(selected_renderer, "render", None)):

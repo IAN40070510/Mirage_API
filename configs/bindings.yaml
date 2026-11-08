@@ -1,4 +1,4 @@
-# B 的部署綁定範例；占位站點不代表已知部署，完成來源與部署審查前維持 disabled。
+# 平台識別器的部署綁定範例；占位站點不代表已知部署，完成來源與部署審查前維持 disabled。
 schema_version: 1
 bindings:
   - binding_id: medusa-demo

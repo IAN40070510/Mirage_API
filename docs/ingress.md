@@ -1,4 +1,4 @@
-# A：FastAPI HTTP 請求入口
+# FastAPI HTTP 請求入口
 
 `deception.api.app:app` 直接接收 HTTP 請求，把標準化的 `NormalizedRequest` 交給下一階段 handler。沒有另包一層 JSON 請求描述，也不會向 URL 發送網路請求。既有 `mirage_validator.api:app` 繼續提供獨立的驗證 API。
 
@@ -10,7 +10,7 @@ $env:PYTHONPATH = "$PWD/src"
 curl.exe -i "http://127.0.0.1:8001/store/products/prod_synthetic_001?fields=id&fields=title" -H "X-Request-ID: demo-001"
 ```
 
-B、C、N、M 已提供可選完整接入，但此原始入口使用診斷用預設 handler，因此仍回 **501**，不是商品回應或契約驗證通過：
+平台識別器、任務協調器、修正與備援工具、HTTP 回送器已提供可選完整接入，但此原始入口使用診斷用預設 handler，因此仍回 **501**，不是商品回應或契約驗證通過：
 
 ```json
 {
@@ -38,13 +38,13 @@ B、C、N、M 已提供可選完整接入，但此原始入口使用診斷用預
 
 此 app 的所有 path 都是目標 API 路徑，包括 `/`、`/docs`、`/openapi.json`；不保留文件端點，也不自動補斜線。CONNECT 與 WebSocket 不在目前範圍。
 
-`raw_url` 代表到達本服務的 URL，不會自動變成原商店 URL。上述本機測試 origin 是 `http://127.0.0.1:8001`。B 以明確部署 binding、已核准 manifest 與 host／origin 配置匹配；不能把任意 Host 或 forwarded header 當作平台審查依據。若 HTTP server／代理已重寫 scheme、host、path，A 無法還原重寫前的 URL。範例停用 proxy headers，使本機觀察結果直接來自連線與 Host。
+`raw_url` 代表到達本服務的 URL，不會自動變成原商店 URL。上述本機測試 origin 是 `http://127.0.0.1:8001`。平台識別器以明確部署 binding、已核准 manifest 與 host／origin 配置匹配；不能把任意 Host 或 forwarded header 當作平台審查依據。若 HTTP server／代理已重寫 scheme、host、path，HTTP 請求入口無法還原重寫前的 URL。範例停用 proxy headers，使本機觀察結果直接來自連線與 Host。
 
 ## 接上後續處理
 
-`create_app(handler=...)` 接受 `async (NormalizedRequest) -> Response`，入口先完成標準化，再呼叫 handler。一般診斷回應附上同一追蹤 ID；M 的 `ValidatedHTTPResponse` 則先核對原請求及封存狀態，不再於驗證後修改 header。預設 handler 只回報 501。`deception.api.identified:create_app --factory` 是僅接 B 的診斷入口，詳見 [B 使用方式](identifier.md)，成功仍回 501。
+`create_app(handler=...)` 接受 `async (NormalizedRequest) -> Response`，入口先完成標準化，再呼叫 handler。一般診斷回應附上同一追蹤 ID；HTTP 回送器的 `ValidatedHTTPResponse` 則先核對原請求及封存狀態，不再於驗證後修改 header。預設 handler 只回報 501。`deception.api.identified:create_app --factory` 是僅接平台識別器的診斷入口，詳見 [平台識別器使用方式](identifier.md)，成功仍回 501。
 
-完整接入由 `deception.api.pipeline.create_app` 或 `make_pipeline_handler` 提供，明確注入 [C 協調器](orchestration.md)、runtime、資料設定及伺服器可信的判定 provider，最後由 [M](renderer.md) 完成傳輸標頭並重新驗證同一候選後回送；需要時由 [N](recovery.md) 執行有上限修正或同分支備援。這不會自動建立外部判定來源認證服務，也不會信任訪客傳入的 verdict。設定、provider 期限與部署範例見 M 文件。
+完整接入由 `deception.api.pipeline.create_app` 或 `make_pipeline_handler` 提供，明確注入 [任務協調器](orchestration.md)、runtime、資料設定及伺服器可信的判定 provider，最後由 [HTTP 回送器](renderer.md) 完成傳輸標頭並重新驗證同一候選後回送；需要時由 [修正與備援工具](recovery.md) 執行有上限修正或同分支備援。這不會自動建立外部判定來源認證服務，也不會信任訪客傳入的 verdict。設定、provider 期限與部署範例見 HTTP 回送器文件。
 
 實作使用 [FastAPI Request 介面](https://fastapi.tiangolo.com/advanced/using-request-directly/) 讀取 HTTP 資料；這些原始輸入不會自動進行 Pydantic body 驗證。
 
@@ -54,6 +54,6 @@ B、C、N、M 已提供可選完整接入，但此原始入口使用診斷用預
 .\.venv\Scripts\python.exe -m pytest tests/test_ingress.py tests/test_identifier_integration.py -q
 ```
 
-涵蓋原始 URL／body、重複 query／headers、追蹤 ID、串流大小限制、方法與 path、不回顯憑證及可選 A→B 交接。完整 A→C/N→M 的 HTTP 回送、最終 headers 與失敗邊界另由 `tests/test_pipeline_api.py`、`tests/test_renderer.py` 驗證，見 [M 驗證說明](renderer.md#有效性驗證)；這些合成測試不代表已完成真實部署對照。
+涵蓋原始 URL／body、重複 query／headers、追蹤 ID、串流大小限制、方法與 path、不回顯憑證及可選 HTTP 請求入口→平台識別器交接。完整 HTTP 請求入口→任務協調與修正備援→HTTP 回送器的 HTTP 回送、最終 headers 與失敗邊界另由 `tests/test_pipeline_api.py`、`tests/test_renderer.py` 驗證，見 [HTTP 回送器驗證說明](renderer.md#有效性驗證)；這些合成測試不代表已完成真實部署對照。
 
-A 使用 [FastAPI（MIT）](https://github.com/fastapi/fastapi/blob/master/LICENSE)，其 Request／Response 基礎來自 [Starlette（BSD-3-Clause）](https://github.com/Kludex/starlette/blob/main/LICENSE.md)；標準庫 `dataclasses`、`uuid` 等隨 Python 的 PSF 授權及聲明管理。測試使用 pytest（MIT）與 HTTPX（BSD-3-Clause）。完整套件與間接依賴、分發聲明見 [共用授權說明](orchestration.md#套件模型與資料授權) 及 [專案授權清單](../README.md#開源軟體模型與資料授權)。
+HTTP 請求入口使用 [FastAPI（MIT）](https://github.com/fastapi/fastapi/blob/master/LICENSE)，其 Request／Response 基礎來自 [Starlette（BSD-3-Clause）](https://github.com/Kludex/starlette/blob/main/LICENSE.md)；標準庫 `dataclasses`、`uuid` 等隨 Python 的 PSF 授權及聲明管理。測試使用 pytest（MIT）與 HTTPX（BSD-3-Clause）。完整套件與間接依賴、分發聲明見 [共用授權說明](orchestration.md#套件模型與資料授權) 及 [專案授權清單](../README.md#開源軟體模型與資料授權)。

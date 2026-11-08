@@ -209,7 +209,8 @@ def test_pipeline_preserves_cancellation_from_the_assessment_provider(generation
     generator.cache.close()
 
 
-@pytest.mark.parametrize("timeout", [True, False, 0, -1, 121, float("nan"), float("inf"), "1", None])
+@pytest.mark.parametrize("timeout", [True, False, 0, -1, 121, float("nan"), float("inf"), "1", None,
+                                   pytest.param(10**400, id="oversized-integer")])
 def test_assessment_timeout_rejects_invalid_administrator_settings(generation_stack, timeout):
     """判定期限必須是有限正數且不超過 120 秒，布林及隱含轉型值不能通過。"""
     stack = generation_stack

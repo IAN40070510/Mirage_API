@@ -9,21 +9,24 @@ from urllib.parse import unquote, urlsplit
 ROOT = Path(__file__).resolve().parents[1]
 FUNCTION_ROOTS = ("src/deception", "mirage_validator", "tests", "tools")
 GUIDES = {
-    "A": ("src/deception/api", "docs/ingress.md"),
-    "B": ("src/deception/discovery", "docs/identifier.md"),
-    "C": ("src/deception/core/orchestrator.py", "docs/orchestration.md"),
-    "D": ("src/deception/profile_builder", "docs/profiles.md"),
-    "E": ("src/deception/synthetic", "docs/synthetic.md"),
-    "F": ("src/deception/scenarios", "docs/scenarios.md"),
-    "G": ("src/deception/generation", "docs/generation.md"),
-    "H": ("src/deception/core/composer.py", "docs/composer.md"),
-    "I": ("mirage_validator/gate.py", "docs/gate.md"),
-    "J": ("src/deception/generation/models.py", "docs/context.md"),
-    "M": ("src/deception/core/renderer.py", "docs/renderer.md"),
-    "N": ("src/deception/core/recovery.py", "docs/recovery.md"),
-    "P": ("src/deception/llm", "docs/llm.md"),
-    "PoC": ("mirage_validator/validator.py", "docs/poc.md"),
+    "ingress": ("src/deception/api", "docs/ingress.md"),
+    "identification": ("src/deception/discovery", "docs/identifier.md"),
+    "orchestration": ("src/deception/core/orchestrator.py", "docs/orchestration.md"),
+    "profiles": ("src/deception/profile_builder", "docs/profiles.md"),
+    "synthetic_data": ("src/deception/synthetic", "docs/synthetic.md"),
+    "scenarios": ("src/deception/scenarios", "docs/scenarios.md"),
+    "generation": ("src/deception/generation", "docs/generation.md"),
+    "composition": ("src/deception/core/composer.py", "docs/composer.md"),
+    "contract_validation": ("mirage_validator/gate.py", "docs/gate.md"),
+    "generation_context": ("src/deception/generation/models.py", "docs/context.md"),
+    "response_rendering": ("src/deception/core/renderer.py", "docs/renderer.md"),
+    "recovery": ("src/deception/core/recovery.py", "docs/recovery.md"),
+    "local_model": ("src/deception/llm", "docs/llm.md"),
+    "poc_validation": ("mirage_validator/validator.py", "docs/poc.md"),
     "documentation": ("tools/check_documentation.py", "docs/documentation.md"),
+    "demonstration_service": ("src/deception/api/demo.py", "docs/docker.md"),
+    "http_verification": ("tools/verify_ecommerce_api.py", "docs/verification.md"),
+    "container_packaging": ("Dockerfile", "docs/docker.md"),
 }
 
 

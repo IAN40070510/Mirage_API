@@ -1,6 +1,6 @@
-# F 政策範本：未審查前保持停用。此範本不是 Medusa 的完整回應模板。
-# 先用 B/D 的實際身份替換部署、版本、契約 hash、operation 與 path；
-# 再依 D 完整 schema 補齊 body，經 H/I 驗證及來源審查後啟用。
+# 情境選擇政策範本：未審查前保持停用。此範本不是 Medusa 的完整回應模板。
+# 先用平台識別與規格工具的實際身份替換部署、版本、契約 hash、operation 與 path；
+# 再依完整契約 schema 補齊 body，經回應組合、契約驗證及來源審查後啟用。
 schema_version: 1
 # 領域由管理者明確選擇；後續領域須先註冊自己的政策模型與處理器。
 domain: ecommerce
@@ -24,12 +24,12 @@ rules:
     operation_id: REPLACE_WITH_OPERATION_ID
     method: GET
     path: /products/{id}
-    # family 固定；不要分別用 product-found / product-missing 作 E 的 scenario_id。
+    # family 固定；不要分別用 product-found / product-missing 作合成資料的 scenario_id。
     scenario_id: product-lookup
     attack_types: []
     query_contexts: [{}]
     id_parameter: id
-    # raw 保留 B 的原始編碼；契約需要解碼時才改 percent_decode_once。
+    # raw 保留平台識別器取得的原始編碼；契約需要解碼時才改 percent_decode_once。
     id_decoding: raw
     product_id_target: /product/id
     found:

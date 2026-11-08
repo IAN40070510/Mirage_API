@@ -1,8 +1,8 @@
-# D：平台 Profile 工具
+# 平台 Profile 工具
 
 ## 本次確認的功能
 
-D 把使用者提供的固定 OpenAPI 來源轉為可追溯的 Profile，供 C 協調器取得生成上下文。輸入是 `inputs/sources/<platform>/source.yaml` 與同目錄的規格；輸出是 `generated/profiles/` 與 `generated/schemas/`。
+平台規格工具把使用者提供的固定 OpenAPI 來源轉為可追溯的 Profile，供任務協調器取得生成上下文。輸入是 `inputs/sources/<platform>/source.yaml` 與同目錄的規格；輸出是 `generated/profiles/` 與 `generated/schemas/`。
 
 | 功能 | 本次行為 |
 | --- | --- |
@@ -16,7 +16,7 @@ D 把使用者提供的固定 OpenAPI 來源轉為可追溯的 Profile，供 C �
 | 查詢 | 以明確的 platform/version/hash/method/path template 取得 operation 與完整規格 |
 | 可重現性 | 相同來源重建產物一致；不同來源、版本、雜湊或審查狀態禁止在同一平台檔案上靜默覆寫 |
 
-`approved` 由維護者完成來源審查後設定，雜湊只確認 bytes 一致。`spec_info_version` 與 `platform_version` 分開記錄；兩者文字相同也不代表官方來源或部署已核實。D 不執行網站識別（B）、LLM 推論（C/G）、情境選擇（F）或回應驗證（I）。平台慣例只有規格明示部分會被保留，不依描述推導價格型別、庫存邏輯或缺少的 404 schema。
+`approved` 由維護者完成來源審查後設定，雜湊只確認 bytes 一致。`spec_info_version` 與 `platform_version` 分開記錄；兩者文字相同也不代表官方來源或部署已核實。平台規格工具不執行網站識別（平台識別器）、LLM 推論（任務協調與內容生成）、情境選擇（情境選擇工具）或回應驗證（契約驗證器）。平台慣例只有規格明示部分會被保留，不依描述推導價格型別、庫存邏輯或缺少的 404 schema。
 
 ## 現成專案評估與選擇
 
@@ -27,7 +27,7 @@ D 把使用者提供的固定 OpenAPI 來源轉為可追溯的 Profile，供 C �
 | [openapi-core 0.19.5](https://openapi-core.readthedocs.io/en/0.19.5/) | OpenAPI 3.0／3.1 規格、請求與回應驗證 | **重用現有依賴**；用 `OpenAPI.from_dict` 驗證，另實作本專案的來源識別、摘要與查詢 |
 | [Prance](https://github.com/RonnyPfannschmidt/prance) | 解析規格、解析內外部引用 | 可作未來 discovery 的離線打包工具；這次只接受已打包內部引用，故不新增依賴 |
 | [openapi-pydantic](https://github.com/mike-oakley/openapi-pydantic) | OpenAPI 3.0／3.1 的 Pydantic 型別模型 | 可用於型別化操作；這次保留原始 schema 與引用，用現有 Pydantic 定義 Profile 格式 |
-| [openapi-python-client](https://github.com/openapi-generators/openapi-python-client) | 從 OpenAPI 產生 Python client SDK | 其輸出用途是 SDK；D 需要來源與生成契約上下文，這次沒有引入 |
+| [openapi-python-client](https://github.com/openapi-generators/openapi-python-client) | 從 OpenAPI 產生 Python client SDK | 其輸出用途是 SDK；平台規格工具需要來源與生成契約上下文，這次沒有引入 |
 
 這些專案提供解析、型別或 SDK 生成能力；本次評估選擇在既有驗證元件上增加專案需要的 Profile 層，未複製上游程式碼，也未新增依賴。
 
@@ -53,7 +53,7 @@ $env:PYTHONPATH = "$PWD/src"
 .\.venv\Scripts\python.exe -m deception.profile_builder --source inputs/sources/medusa/source.yaml --output generated
 ```
 
-目前 Medusa 輸入已依官方 `v2.22.4` 固定 commit 的完整 OpenAPI 修補子集：補上 `BaseRefund.idempotency_key`、51 個 operation 的 `x-allowed`，D 與 I 規格檔 bytes 一致。目標平台版本 `2.22.4` 與官方規格 `info.version: 2.22.3` 分別記錄；來源仍維持 `approved: false`，尚未驗證實際部署。輸出有 77 個 operations。WooCommerce 只有 `source.yaml.example`，必須先提供固定規格才能執行，不能用現有 PoC schema 替代。
+目前 Medusa 輸入已依官方 `v2.22.4` 固定 commit 的完整 OpenAPI 修補子集：補上 `BaseRefund.idempotency_key`、51 個 operation 的 `x-allowed`，平台規格工具與契約驗證器規格檔 bytes 一致。目標平台版本 `2.22.4` 與官方規格 `info.version: 2.22.3` 分別記錄；來源仍維持 `approved: false`，尚未驗證實際部署。輸出有 77 個 operations。WooCommerce 只有 `source.yaml.example`，必須先提供固定規格才能執行，不能用現有 PoC schema 替代。
 
 輸出如下，兩類產物均可由來源重建：
 
@@ -67,7 +67,7 @@ schema 快照保留原始 bytes，Profile 內的 `schema_file` 指向它；opera
 
 CLI 為單次離線建置用途，不支援多個程序同時發布同一平台。寫入時先發布規格快照再原子替換 Profile。更新版本或審查設定後使用新的輸出目錄，例如 `--output generated/releases/medusa-reviewed`，以保留舊 run 的身份；若 build 失敗不會改寫既有有效 Profile。
 
-## 給 C 使用的查詢介面
+## 給任務協調器使用的查詢介面
 
 ```python
 from pathlib import Path
@@ -84,9 +84,9 @@ context = ProfileTool(Path("generated")).get_operation(
 print(context.operation.responses.keys())
 ```
 
-`allow_unreviewed` 預設為 `False`。查詢時會檢查版本／雜湊、原始規格快照與重新擷取的 Profile 是否一致，再回傳 `source`、`operation`、`specification`。path 必須是精確 template；將實際 URL 對應 template 屬於 B，D 不自行猜測。未知操作、不符身份、遭改動的快照或摘要都拋出 `ProfileError`。
+`allow_unreviewed` 預設為 `False`。查詢時會檢查版本／雜湊、原始規格快照與重新擷取的 Profile 是否一致，再回傳 `source`、`operation`、`specification`。path 必須是精確 template；將實際 URL 對應 template 屬於平台識別器，平台規格工具不自行猜測。未知操作、不符身份、遭改動的快照或摘要都拋出 `ProfileError`。
 
-這個工具以 Python 與 CLI 提供，C 已依精確身份讀取 Profile；可選的 [A→C/N→M HTTP app](renderer.md) 使用同一查詢流程。取得 Profile 不等於正式回應 gate 放行；I 仍依另一份已審查的部署 manifest、網站與 query 上下文驗證，M 對最終傳輸候選再驗 I。現有 Medusa 部署審查狀態不變。
+這個工具以 Python 與 CLI 提供，任務協調器已依精確身份讀取 Profile；可選的 [HTTP 請求入口→任務協調與修正備援→HTTP 回送器 HTTP app](renderer.md) 使用同一查詢流程。取得 Profile 不等於正式回應 gate 放行；契約驗證器仍依另一份已審查的部署 manifest、網站與 query 上下文驗證，HTTP 回送器對最終傳輸候選再執行契約驗證。現有 Medusa 部署審查狀態不變。
 
 ## 驗證與套件授權
 
@@ -96,4 +96,4 @@ print(context.operation.responses.keys())
 
 驗證來源 bytes／SHA-256、Profile 重建、操作查詢、內部引用與未審來源預覽；固定 Medusa 子集的回歸不表示實際部署已核准。
 
-D 重用 [Pydantic（MIT）](https://github.com/pydantic/pydantic/blob/main/LICENSE)、[PyYAML（MIT）](https://github.com/yaml/pyyaml/blob/6.0.3/LICENSE) 及 [openapi-core 0.19.5（BSD-3-Clause）](https://github.com/python-openapi/openapi-core/blob/0.19.5/LICENSE)。標準庫 `hashlib`、`json`、`pathlib`、`tempfile` 等隨 Python 的 PSF 授權及聲明管理；測試使用 pytest（MIT）。主要共用驗證依賴與分發要求見 [H 套件表](composer.md#使用的套件與授權)，來源 OpenAPI／文件權利與程式套件授權分開管理。
+平台規格工具重用 [Pydantic（MIT）](https://github.com/pydantic/pydantic/blob/main/LICENSE)、[PyYAML（MIT）](https://github.com/yaml/pyyaml/blob/6.0.3/LICENSE) 及 [openapi-core 0.19.5（BSD-3-Clause）](https://github.com/python-openapi/openapi-core/blob/0.19.5/LICENSE)。標準庫 `hashlib`、`json`、`pathlib`、`tempfile` 等隨 Python 的 PSF 授權及聲明管理；測試使用 pytest（MIT）。主要共用驗證依賴與分發要求見 [回應組合器套件表](composer.md#使用的套件與授權)，來源 OpenAPI／文件權利與程式套件授權分開管理。

@@ -1,10 +1,10 @@
-# E 的可重現資料規則；site_id 是測試隔離標籤，不會連線到真實商店。
+# 合成資料工具的可重現資料規則；site_id 是測試隔離標籤，不會連線到真實商店。
 schema_version: 1
 scope:
   site_id: shop-example
   platform_id: medusa
   platform_version: '2.22.4'
-  # 必須與同一 run 使用的 D Profile 一致，規格更新後應重新設定。
+  # 必須與同一 run 使用的平台規格 Profile 一致，規格更新後應重新設定。
   spec_sha256: 65b6917fb04c52d3a2394cabe8c391db8ebfa74e5aec336eb88069ed5e14ba0b
   scenario_id: product-found
   run_id: demo-001

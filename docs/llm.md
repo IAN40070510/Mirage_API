@@ -1,6 +1,6 @@
-# P／LLM：模型連線、選擇與共用預算工具
+# 本機模型連線、選擇與共用預算工具
 
-`src/deception/llm/` 提供 C 的受控規劃、G 的結構輸出、本機模型選擇與整體用量限制。它透過 Pydantic AI 連到受信任的 Ollama 端點；C 流程見 [協調器說明](orchestration.md)，G 的欄位政策與快取見 [內容生成工具](generation.md)。
+`src/deception/llm/` 提供任務協調器的受控規劃、內容生成器的結構輸出、本機模型選擇與整體用量限制。它透過 Pydantic AI 連到受信任的 Ollama 端點；任務協調器流程見 [協調器說明](orchestration.md)，內容生成器的欄位政策與快取見 [內容生成工具](generation.md)。
 
 ## 工具分工與輸入輸出
 
@@ -11,7 +11,7 @@
 | 模型選擇函式 | 已核對設定、明確模型名稱及可選摘要要求 | 只讀本機清單、選唯一已安裝模型，回傳固定摘要的設定副本 |
 | `RunBudget` | `RunLimits` | 在同一 run 追蹤期限、模型請求、工具嘗試與回報 token |
 
-模型工具選擇與輸出都受主機程式核對。模型不提供來源核准、不修改部署／契約身份，也不能自行宣告 H/I 已通過。backend 只提供模型結果，正式 HTTP 輸出仍由後續 M 處理。
+模型工具選擇與輸出都受主機程式核對。模型不提供來源核准、不修改部署／契約身份，也不能自行宣告回應組合與契約驗證已通過。backend 只提供模型結果，正式 HTTP 輸出仍由後續 HTTP 回送器處理。
 
 ## 設定與預設模型
 
@@ -48,7 +48,7 @@ max_output_tokens: 1024
 
 `structured_actions` 適用沒有原生工具能力的模型。模型透過 `NativeOutput` 回傳嚴格 JSON 動作，主機驗證後才呼叫已註冊的零參數唯讀工具。存在 `read_contract` 時先讀契約，之後讓模型選其他可用讀取或 `complete`；同一工具在一次規劃中最多執行一次。讀取動作的 `result` 必須為 null，完成動作必須包含型別化結果。未知動作、額外欄位或超額工具不會被當成可執行指令。
 
-G 的 `generate()` 使用獨立的 `NativeOutput` Agent，沒有可執行函式工具。規劃及生成對話歷史分開，仍共用同一 `RunBudget`。模型的普通文字工具描述不會被模糊修復成原生工具呼叫，也不會在本機執行失敗後降級成假模型。
+內容生成器的 `generate()` 使用獨立的 `NativeOutput` Agent，沒有可執行函式工具。規劃及生成對話歷史分開，仍共用同一 `RunBudget`。模型的普通文字工具描述不會被模糊修復成原生工具呼叫，也不會在本機執行失敗後降級成假模型。
 
 ## 模型 API 與生命週期
 
@@ -61,7 +61,7 @@ G 的 `generate()` 使用獨立的 `NativeOutput` Agent，沒有可執行函式�
 | `await backend.generate(prompt, output_type, budget)` | 以 JSON Schema 原生輸出生成並重驗 `output_type`，不執行函式工具 |
 | `await backend.aclose()` | 冪等關閉自有 client；測試注入模型的其他資源由測試呼叫端管理 |
 
-本機每次推論前後都重新核對權重摘要；C 在發布前還會確認模型身份未變。若 tag 換權重或 metadata 含 remote model／host 標記，結果會被拒絕。metadata 每次讀取最多 1 MiB，backend 提示最多 128 KiB；G 另有更小的提示限制。結構動作工具結果最多 64 KiB。
+本機每次推論前後都重新核對權重摘要；任務協調器在發布前還會確認模型身份未變。若 tag 換權重或 metadata 含 remote model／host 標記，結果會被拒絕。metadata 每次讀取最多 1 MiB，backend 提示最多 128 KiB；內容生成器另有更小的提示限制。結構動作工具結果最多 64 KiB。
 
 ```python
 from pathlib import Path
@@ -71,7 +71,7 @@ from deception.profile_builder.builder import read_yaml
 
 config = LLMConfig.model_validate(read_yaml(Path("configs/llm.yaml").read_bytes()))
 backend = PydanticAIBackend(config)
-# 將 backend 注入 ContentGenerator，再交由 C 管理同一個 RunBudget。
+# 將 backend 注入 ContentGenerator，再交由任務協調器管理同一個 RunBudget。
 # 應用程式結束時：await backend.aclose()
 ```
 
@@ -98,7 +98,7 @@ $env:PYTHONPATH = "$PWD/src"
 
 ## 共用預算工具
 
-`RunBudget` 由 C 建立，再傳給規劃與生成。切換 Agent、工具或有限修正不會重新起算。
+`RunBudget` 由任務協調器建立，再傳給規劃與生成。切換 Agent、工具或有限修正不會重新起算。
 
 | `RunLimits` | 預設 | 意義 |
 | --- | --- | --- |
@@ -107,7 +107,7 @@ $env:PYTHONPATH = "$PWD/src"
 | `max_tool_calls` | 8 | 原生函式工具嘗試或主機執行的結構動作工具額度 |
 | `max_input_tokens` | 32000 | 累積服務回報的輸入 token |
 | `max_output_tokens` | 4096 | 累積服務回報的輸出 token |
-| `max_repairs` | 1 | C 對允許生成／組合錯誤的重新生成上限 |
+| `max_repairs` | 1 | 任務協調器對允許生成／組合錯誤的重新生成上限 |
 
 | 方法 | 功能 |
 | --- | --- |
@@ -122,13 +122,13 @@ $env:PYTHONPATH = "$PWD/src"
 
 ## 錯誤與驗證
 
-直接呼叫可能遇到設定／metadata 的 `ValueError`、`BudgetExceeded`、框架輸出錯誤、HTTP 錯誤或取消。C 會轉為固定且不回顯憑證的失敗結果；它不把模型錯誤當成空模板或已驗證回應。明確配置的 [N 備援](recovery.md) 可在已完成 B/D/F/E/G 核對後，以同分支固定欄位值重新經 H/I；這類結果標示 `source: fallback`，不冒充模型輸出，也不寫入模型內容快取。總預算、到期或取消不會觸發備援。`test` 模式明確標示測試模型，不會記為真本機模型。
+直接呼叫可能遇到設定／metadata 的 `ValueError`、`BudgetExceeded`、框架輸出錯誤、HTTP 錯誤或取消。任務協調器會轉為固定且不回顯憑證的失敗結果；它不把模型錯誤當成空模板或已驗證回應。明確配置的 [修正與備援工具備援](recovery.md) 可在已完成平台識別、規格及情境工具/合成資料工具/內容生成器核對後，以同分支固定欄位值重新經回應組合與契約驗證；這類結果標示 `source: fallback`，不冒充模型輸出，也不寫入模型內容快取。總預算、到期或取消不會觸發備援。`test` 模式明確標示測試模型，不會記為真本機模型。
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests/test_llm_backend.py tests/test_model_selection.py tests/test_orchestrator.py -q
 ```
 
-測試覆蓋工具／JSON 動作、輸出別名、未知工具、預算、metadata、摘要變更、cloud／remote 拒絕及模型選擇。真本機生成另用上方 `--demo` 命令，依報告的 `success`、`real_model`、checks、模型身份及各次 I 結果判讀。Foundation 與 Qwen 的既有合成展示紀錄見 [C/G 實測證據](orchestration.md#本次真本機模型展示證據2026-11-08)；它不代表所有列出模型或真實平台都已相容。
+測試覆蓋工具／JSON 動作、輸出別名、未知工具、預算、metadata、摘要變更、cloud／remote 拒絕及模型選擇。真本機生成另用上方 `--demo` 命令，依報告的 `success`、`real_model`、checks、模型身份及各次契約驗證器結果判讀。Foundation 與 Qwen 的既有合成展示紀錄見 [任務協調與內容生成實測證據](orchestration.md#本次真本機模型展示證據2026-11-08)；它不代表所有列出模型或真實平台都已相容。
 
 ## 程式與模型授權
 
@@ -141,6 +141,6 @@ $env:PYTHONPATH = "$PWD/src"
 | [Ollama runtime](https://github.com/ollama/ollama/blob/main/LICENSE) | MIT | 獨立安裝的模型服務；本次未安裝 Ollama Python SDK |
 | Python 標準庫 | PSF 及隨附聲明 | 非同步、時間、JSON、URL、簽章檢查等支援 |
 
-完整版本、主要間接依賴及發布聲明見 [C/G 授權表](orchestration.md#套件模型與資料授權)。Galah（Apache-2.0）僅作設計參考，未引入其執行環境或複製原碼；新增本文件沒有增加套件依賴。
+完整版本、主要間接依賴及發布聲明見 [任務協調與內容生成授權表](orchestration.md#套件模型與資料授權)。Galah（Apache-2.0）僅作設計參考，未引入其執行環境或複製原碼；新增本文件沒有增加套件依賴。
 
 預設 Foundation Reasoning 量化模型的權重條款須另外保存：官方 [NOTICE](https://huggingface.co/fdtn-ai/Foundation-Sec-8B-Reasoning/blob/main/NOTICE.md) 區分底層 **Llama 3.1 Community License** 與 Cisco 修改部分 **Apache-2.0**。不能把整份權重或其他 Foundation 變體簡化成程式套件的 MIT／Apache 授權。每次改選模型時，按該精確權重與 tokenizer 的 LICENSE／NOTICE 記錄；模型選擇工具不會替權重授權作自動核准。
