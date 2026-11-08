@@ -21,14 +21,14 @@ Mirage_API 的製作目標是整合不同部署環境的 HTTP 流量入口，接
 | 核心能力 | 已有基礎 | 尚待完成 |
 | --- | --- | --- |
 | 多環境流量攔截整合 | A：FastAPI HTTP 入口；B：明確環境／部署綁定識別及可選 A→B 接入 | 各環境流量攔截／轉送接入、可信代理與統一轉接介面 |
-| 外部攻擊判定接收 | A 可保留 request ID 供後續關聯 | 判定資料格式、來源驗證、請求關聯與情境選擇 |
+| 外部攻擊判定接收 | A 保留 request ID；F 已有判定模型、時效／請求關聯及情境選擇 | 判定接收器、來源認證與完整流程串接 |
 | 依多服務契約生成 | B：唯一契約與操作識別；D：固定 OpenAPI 的 Profile；H：候選組合；I：契約驗證 | C/G 生成、完整流程串接、更多服務對映 |
 | 跨 API 虛構資料與互動狀態 | E：可重現、可查詢的商品／變體資料與關聯 | 跨請求狀態更新、寫入操作、互動／session 隔離與並行一致性 |
 | 本地 LLM 動態生成 | 圖中的 C、G、P 與其資料邊界已規劃 | Ollama 整合、模型選定、工具調用與生成流程 |
 | 契約一致的 HTTP 輸出 | H：候選組合及契約 preflight；I：獨立驗證 API | M、修正／備援，以及入口到輸出的完整串接 |
 | 多環境集中管理 | 本地來源／生成設定、B 部署 binding 與可信 runtime context | 集中設定儲存、管理介面、版本發布與代理整合 |
 
-目前 A、B、D、E、H、I 可各自使用，也有可選的 A→B 入口；B 識別成功後仍回 `501 orchestrator_not_implemented`，因 C 尚未接上。原始 A 入口預設仍回 `501 pipeline_not_implemented`。H 接收明確指令及可選的 E 映射，輸出仍待 I 部署 gate 驗證的候選。現有 E 是可查詢的固定資料快照，尚不提供互動造成的狀態更新。本文所有「規劃」格式只定義預期介面，不能當作現有 API 使用。
+目前 A、B、D、E、F、H、I 可各自使用，也有可選的 A→B 入口；B 識別成功後仍回 `501 orchestrator_not_implemented`，因 C 尚未接上。原始 A 入口預設仍回 `501 pipeline_not_implemented`。F 已能依同一 E 快照選商品存在／不存在分支，交給 H 組合，再由 I 驗證；尚未接上正式 HTTP 主流程。現有 E 是可查詢的固定資料快照，尚不提供互動造成的狀態更新。本文所有「規劃」格式只定義預期介面，不能當作現有 API 使用。
 
 ## 系統架構與整合邊界
 
@@ -77,7 +77,7 @@ flowchart TB
 
 跨環境的整合層負責流量導入與回送，服務 Profile 負責契約差異，C–I 的核心流程使用一致的內部資料介面。擴充某個應用框架或部署環境時，應增加對應的轉接與設定，維持核心生成流程共用。目前 FastAPI 是 Mirage_API 自身的入口框架，目標服務可採用其他框架；具體框架的相容性仍需逐一驗證。
 
-外部判定須與 `request_id`、環境及服務身份關聯。判定本身用來選擇情境和策略，不能取代 API 契約或放寬驗證規則。尚未收到判定、判定不明、重複或延遲到達時的處理策略仍待實作；不能把任意用戶端 header 直接當作可信攻擊判定。
+外部判定須與 `request_id`、環境及服務身份關聯。判定本身用來選擇情境和策略，不能取代 API 契約或放寬驗證規則。F 會拒絕缺少、未知、過期或與請求不符的判定；來源白名單並不是來源認證。接收層的認證、事件去重及流量導向仍待實作，不能把任意用戶端 header 直接當作可信攻擊判定。
 
 集中管理屬於設定管理能力：預期將環境、部署、服務版本、契約雜湊、Profile、情境、生成策略與模型設定綁定成可追溯的設定版本。請求處理使用確定的一份設定，避免執行中混用不同版本。目前只有本地檔案與工具，尚無集中管理服務。
 
@@ -92,7 +92,7 @@ flowchart TB
 | C 任務協調器與 P Ollama | 識別結果、外部攻擊判定、生成策略 → 向 D–G 取材、限制 LLM 工具與輪次、指示 H；Ollama 提供本地推論 | 未實作；未選定模型 |
 | D 平台 Profile 工具 | 固定來源與 OpenAPI → 可追溯的操作、參數、狀態碼、媒體類型、schema 上下文 | **已實作**：`src/deception/profile_builder/`；提供 CLI 建立及 Python 查詢，尚未接上 C；不推測平台慣例 |
 | E 合成資料工具 | 種子、隔離身份、資料規則 → 跨操作可引用的虛構實體；未來維護互動造成的狀態變更 | **已實作**：`src/deception/synthetic/` 的商品／變體生成、保存、驗證與只讀查詢；顧客、訂單及互動狀態更新尚未實作 |
-| F 安全情境工具 | 外部攻擊判定、情境白名單與請求上下文 → 允許的情境和限制，例如實體不存在或資源不足 | 未實作；不執行攻擊偵測 |
+| F 安全情境工具 | 可信整合層的判定、白名單與 B/D → 固定 family；再依同一 E 快照選分支與 H 計畫 | **已實作**：`src/deception/scenarios/`；GET 商品 200／404、可追溯決策與交接完整性；不偵測攻擊或更新交易狀態，詳見 [F 功能、驗證與授權](docs/scenarios.md) |
 | G 內容生成工具 | Profile、合成資料、情境、模型提示 → 動態文字與欄位候選 | 未實作 |
 | J Generation Context | D–G 的資料及來源 → 交回 C，記錄環境／部署／服務身份、判定關聯、契約版本、種子、情境及狀態版本 | 未實作 |
 | H 回應組合工具 | 明確指令、D 契約、可選 E 映射 → status、headers、已序列化 body | **已實作**：`src/deception/core/`；UTF-8 JSON、嚴格 metadata 與契約 preflight，產物仍需 I 驗證；C/J 尚未串接 |
@@ -113,10 +113,10 @@ A → B → C；C 關聯外部攻擊判定，分別調用 D/E/F/G，匯成 J，�
 | HTTP Request | 原始 method、URL、query、headers、body 與追蹤 ID | A 的 `NormalizedRequest` 已實作 |
 | API Specification | 固定版本的操作、參數、狀態碼、headers 與回應 schema | D 的 `inputs/sources/`；I 另讀 `inputs/platforms/` 的部署契約 |
 | Platform Profile | 服務版本、契約來源、operation 摘要及生成上下文 | D 已建立 `generated/profiles/`；完整服務慣例與回應對映仍待擴充 |
-| Scenario Configuration | 情境白名單、適用操作及外部判定的情境選擇規則 | F 尚未實作；現有情境草稿未串接 |
+| Scenario Configuration | 情境白名單、適用操作及外部判定的情境選擇規則 | F 讀取 `inputs/policies/deception.yaml` 格式；現有 `inputs/scenarios/` 草稿不自動載入 |
 | Synthetic State | 跨 API 共用的虛構實體、關聯與互動狀態 | E 已有商品／變體快照；狀態更新尚未實作 |
 | Generation Policy | 模型、工具權限、生成限制、修正上限與備援策略 | 策略草稿未串接；`configs/generation.yaml` 目前只管理 E 的資料生成規則 |
-| 外部攻擊判定 | 與請求關聯的攻擊標籤、來源與判定依據 | 接收、驗證與關聯介面待實作 |
+| 外部攻擊判定 | 與請求關聯的攻擊標籤、來源與判定依據 | F 已有嚴格模型與關聯檢查；接收及來源認證介面待實作 |
 | 部署與環境設定 | 環境／部署／服務綁定及本次使用的設定版本 | 本地設定可供個別工具使用；集中管理待實作 |
 
 ```text
@@ -128,12 +128,14 @@ Mirage_API/
 ├─ src/deception/discovery/         # B：明確部署綁定、唯一契約與操作識別
 ├─ src/deception/profile_builder/   # D：來源檢查、Profile 建立與操作查詢
 ├─ src/deception/synthetic/         # E：合成商品、變體、資料關聯與有效性驗證
+├─ src/deception/scenarios/         # F：情境 family、結果分支與 H 計畫
 ├─ src/deception/core/              # H：明確模板、E 映射與候選回應組合
 ├─ configs/generation.yaml          # E：隔離身份、種子、數量與生成規則
 ├─ configs/composition.yaml         # H：明確狀態、headers、body 與映射指令
 ├─ configs/bindings.yaml            # B：環境／部署／站點與固定契約綁定
 ├─ inputs/sources/                  # D：source.yaml 與固定 OpenAPI 輸入
-├─ generated/                       # D/E/H：profiles、schemas、synthetic_data、responses
+├─ inputs/policies/deception.yaml    # F：停用的部署／情境政策範本
+├─ generated/                       # D/E/F/H：profiles、schemas、synthetic_data、scenarios、responses
 ├─ mirage_validator/                 # 已實作的驗證 API、網站契約 gate、PoC 驗證
 │  └─ contracts/*.json               # 與正式契約隔離的 PoC 示意契約
 ├─ inputs/platforms/
@@ -155,6 +157,8 @@ Mirage_API/
 **D 的人工輸入與系統產物**：提供 `inputs/sources/<platform>/source.yaml` 與同目錄固定規格後，D 產生 `generated/profiles/<platform>.yaml` 和 `generated/schemas/<platform>/<sha256>.yaml`。未審來源可離線預覽，但查詢預設拒絕使用；D 不改寫驗證器的 manifest。下方早期 `inputs/profiles/` 範例仍是生成規則的規劃格式，不是 D 的 parser。情境與種子草稿也尚未接上執行流程。Profile 不能放寬 OpenAPI 回應契約。
 
 **E 的輸入與產物**：`configs/generation.yaml` 定義種子、站點／版本／規格／情境／run 隔離與數量、價格、庫存規則。E 產生 `generated/synthetic_data/<platform>/<namespace>.json`，保留完整設定及生成器／Faker 版本，並驗證資料關聯與可重現性。J 的 context 與 `samples/` 實測對照尚未實作。現有 `input-audit.json` 是檢查產物，`api-scope.json` 是範圍紀錄，兩者均不參與驗證執行。
+
+**F 的輸入與產物**：`inputs/policies/deception.yaml` 提供停用的政策範本。`ScenarioEngine.prepare` 先核對可信整合層的判定與 B/D，選出固定 family scope；`resolve` 再依同一 E 快照選 200／404，回傳 H 計畫與政策／模板／資料摘要。`python -m deception.scenarios --demo` 可執行合成契約的離線整合展示並保存 `generated/scenarios/` 報告；用法、功能註解、有效性測試及套件授權見 [F 說明](docs/scenarios.md)。購買扣款、庫存更新及真實 HTTP 串接仍待擴充。
 
 ### 現有 manifest 格式示例（未啟用）
 
@@ -356,10 +360,10 @@ curl.exe -X POST http://127.0.0.1:8000/v1/poc/validate -H "Content-Type: applica
 | 類別 | 專案 | 上游授權／來源 | 用途與界線 |
 | --- | --- | --- | --- |
 | 採用 | [FastAPI](https://github.com/fastapi/fastapi/blob/master/LICENSE) | MIT | 現有驗證 API |
-| 採用 | [Pydantic](https://github.com/pydantic/pydantic/blob/main/LICENSE) | MIT | 嚴格輸入／輸出模型 |
+| 採用 | [Pydantic](https://github.com/pydantic/pydantic/blob/main/LICENSE) | MIT | 嚴格輸入／輸出模型與 F 白名單政策 |
 | 採用 | [openapi-core](https://github.com/python-openapi/openapi-core/blob/master/LICENSE) | BSD-3-Clause | 正式 OpenAPI 驗證；保留版權、授權與免責聲明，不用作者名稱背書 |
 | 採用 | [Werkzeug](https://github.com/pallets/werkzeug/blob/3.1.1/LICENSE.txt) | BSD-3-Clause | H／I 的 HTTP headers adapter |
-| 採用 | [PyYAML](https://github.com/yaml/pyyaml/blob/6.0.3/LICENSE) | MIT | 來源、Profile 與組合指令讀取 |
+| 採用 | [PyYAML](https://github.com/yaml/pyyaml/blob/6.0.3/LICENSE) | MIT | 來源、Profile、F 政策與組合指令讀取 |
 | 採用 | [jsonschema](https://github.com/python-jsonschema/jsonschema/blob/main/COPYING) | MIT | PoC 自訂契約及既有 OpenAPI 驗證依賴鏈；不代替網站部署 gate |
 | 規劃 | [Ollama](https://github.com/ollama/ollama/blob/main/LICENSE) | MIT，限此**程式碼** | 圖中的本地推論服務；模型權重有各自條款，不能從 Ollama 授權推定模型可商用或再散布 |
 | 可選 | [Pydantic AI](https://github.com/pydantic/pydantic-ai/blob/main/LICENSE) | MIT | 可協助 C 的工具調用；目前未依賴 |

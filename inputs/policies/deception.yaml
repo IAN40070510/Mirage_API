@@ -1,0 +1,58 @@
+# F 政策範本：未審查前保持停用。此範本不是 Medusa 的完整回應模板。
+# 先用 B/D 的實際身份替換部署、版本、契約 hash、operation 與 path；
+# 再依 D 完整 schema 補齊 body，經 H/I 驗證及來源審查後啟用。
+schema_version: 1
+policy_id: product-lookup-policy
+policy_version: '1'
+enabled: false
+# 此白名單不驗證來源；整合層須先驗證外部判定服務的身分。
+trusted_sources: [reviewed-detector]
+max_age_seconds: 300
+rules:
+  - rule_id: product-detail
+    enabled: false
+    priority: 100
+    environment_id: replace-environment
+    deployment_id: replace-deployment
+    service_id: replace-service
+    site_id: replace-site
+    platform_id: replace-platform
+    platform_version: REPLACE_WITH_DEPLOYED_VERSION
+    spec_sha256: '0000000000000000000000000000000000000000000000000000000000000000'
+    operation_id: REPLACE_WITH_OPERATION_ID
+    method: GET
+    path: /products/{id}
+    # family 固定；不要分別用 product-found / product-missing 作 E 的 scenario_id。
+    scenario_id: product-lookup
+    attack_types: []
+    query_contexts: [{}]
+    id_parameter: id
+    # raw 保留 B 的原始編碼；契約需要解碼時才改 percent_decode_once。
+    id_decoding: raw
+    product_id_target: /product/id
+    found:
+      status_code: 200
+      media_type: application/json
+      template_id: product-found
+    missing:
+      status_code: 404
+      media_type: application/json
+      template_id: product-missing
+templates:
+  - template_id: product-found
+    headers: {}
+    body:
+      product:
+        id: ''
+        title: ''
+    bindings:
+      - source_field: id
+        target_pointer: /product/id
+      - source_field: title
+        target_pointer: /product/title
+  - template_id: product-missing
+    headers: {}
+    body:
+      type: not_found
+      message: Product was not found
+    bindings: []
