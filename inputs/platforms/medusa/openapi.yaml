@@ -23219,6 +23219,10 @@ components:
           type: object
         refund_reason:
           $ref: '#/components/schemas/BaseRefundReason'
+        idempotency_key:
+          type: string
+          title: idempotency_key
+          description: The refund's idempotency key.
     BaseCollection:
       type: object
       description: The product collection's details.
@@ -23846,10 +23850,6 @@ components:
           type: number
           title: discount_tax_total
           description: The total amount of discounts applied to the line item's tax. Represents the tax portion of discounts.
-        idempotency_key:
-          type: string
-          title: idempotency_key
-          description: The refund's idempotency key.
     BaseRefundReason:
       type: object
       description: The refund reason's details.

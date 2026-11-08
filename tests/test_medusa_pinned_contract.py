@@ -16,7 +16,7 @@ PROFILE_SPEC = ROOT / "inputs/sources/medusa/openapi.yaml"
 SOURCE_CONFIG = ROOT / "inputs/sources/medusa/source.yaml"
 MANIFEST_EXAMPLE = ROOT / "inputs/platforms/medusa/manifest.yaml.example"
 PINNED_COMMIT = "81edb06c323812773c9c0dcc4da2d9784f3b3319"
-PINNED_SUBSET_SHA256 = "15c794cf596866f13bf96b715db66470011406f659e2eadbf4761dfdbb2ccc96"
+PINNED_SUBSET_SHA256 = "ced300a2de92b9829e6e600964588e894b760f07f8d79c1df657e1abe0529058"
 HTTP_METHODS = {"get", "post", "put", "patch", "delete", "head", "options"}
 
 

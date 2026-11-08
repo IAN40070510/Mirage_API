@@ -3,7 +3,7 @@ platform_id: medusa
 platform_version: '2.22.4'
 source_url: https://github.com/medusajs/medusa/blob/81edb06c323812773c9c0dcc4da2d9784f3b3319/www/apps/api-reference/specs/store/openapi.full.yaml
 source_revision: 81edb06c323812773c9c0dcc4da2d9784f3b3319
-spec_sha256: 15c794cf596866f13bf96b715db66470011406f659e2eadbf4761dfdbb2ccc96
+spec_sha256: ced300a2de92b9829e6e600964588e894b760f07f8d79c1df657e1abe0529058
 approved: false
 openapi_file: openapi.yaml
 # paths 已含 /store 與 /auth，此處填網站 origin；以下只是占位值。

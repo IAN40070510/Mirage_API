@@ -2,7 +2,7 @@
   "test_target_version": "2.22.4",
   "target_source_revision": "v2.22.4",
   "target_status": "static_subset_patched_pending_runtime_validation",
-  "spec_sha256": "15c794cf596866f13bf96b715db66470011406f659e2eadbf4761dfdbb2ccc96",
+  "spec_sha256": "ced300a2de92b9829e6e600964588e894b760f07f8d79c1df657e1abe0529058",
   "scope_sha256": "cce318b62a355184cd7cac51e67ea30d131c15e3ff0d6b662aac116b79a5007f",
   "source_sha256_in_scope": "438ac1daa9b3d6e27944e05a553986dcc4a3f3dbde72dd4d3b978575d6eaf328",
   "openapi": "3.0.0",
@@ -87,10 +87,10 @@
       "200"
     ]
   ],
-  "openapi_validation": "not_rerun_after_static_patch",
+  "openapi_validation": "awaiting_ci_rerun",
   "schemas": 133,
   "scope_meaning": "Requests selected for XGBoost inference; not evidence of detection accuracy or training coverage.",
-  "registry_load": "not_rerun_after_static_patch",
+  "registry_load": "awaiting_ci_rerun",
   "unapproved_contract_blocked": true,
   "official_provenance_verified": false,
   "deployment_version_verified": false,
@@ -118,6 +118,7 @@
       "externalDocs",
       "x-*"
     ],
-    "query_behavior_and_deployment_untested": true
+    "query_behavior_and_deployment_untested": true,
+    "idempotency_key_fix": "corrected placement within BaseRefund.properties after initial CI failure"
   }
 }

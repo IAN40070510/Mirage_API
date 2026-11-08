@@ -4,8 +4,6 @@ on:
   push:
     branches:
       - main
-      - 'audit/**'
-      - 'feature/**'
   pull_request:
     branches:
       - main

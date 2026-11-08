@@ -8,7 +8,7 @@
 - 依上游 `openapi.full.yaml` 逐操作補回 **51 個 `x-allowed` 區塊**；修補後比對：**51/51 與上游相同操作的區塊文字完全一致**。
 - 依官方 `BaseRefund` 定義補回可選的 `idempotency_key: string`。
 - 更新 D 來源與 I 未啟用 manifest 範本的 `source_revision` 為固定 commit `81edb06c323812773c9c0dcc4da2d9784f3b3319`，`source_url` 指向固定 commit 的官方 `openapi.full.yaml`。
-- 本地修補後契約 SHA-256：`15c794cf596866f13bf96b715db66470011406f659e2eadbf4761dfdbb2ccc96`。D/I 規格 bytes 完全相同，`source.yaml` 與 `manifest.yaml.example` 記錄相同雜湊。
+- 本地修補後契約 SHA-256：`ced300a2de92b9829e6e600964588e894b760f07f8d79c1df657e1abe0529058`。D/I 規格 bytes 完全相同，`source.yaml` 與 `manifest.yaml.example` 記錄相同雜湊。
 - 更新 `.gitattributes`，防止 Git 在 Windows 對 D 或 I 的 `openapi.yaml` 重新改寫換行。
 - 新增 `tests/test_medusa_pinned_contract.py`（離線回歸測試）。該測試**已提交但尚未在 Python pytest 執行**；不可標示為已通過 CI。
 - 本次對修補後內容執行額外靜態檢查：67 paths、77 operations、51/51 `x-allowed` 官方文字一致、710 個 `#/components/...` 引用均有本地定義，兩份規格內容完全一致。這是直接比對及引用存在性檢查，不等同完整 OpenAPI runtime validator 測試。
@@ -110,3 +110,7 @@
 - [ ] 維護者完成審查後才能批准來源與部署契約；目前 **維持 `approved=false`**。
 
 本次已核對靜態規格，**沒有進行 Medusa 運行環境與正式 Gate 的動態測試、沒有修改現有 `openapi.yaml`／hash／批准設定，也沒有宣稱官方已完整相容**。
+
+### CI 首輪失敗與結構位置修復（2026-11-08）
+
+GitHub Actions 首輪 pytest 為 `179 passed, 1 failed`；失敗點為 `BaseRefund.properties.idempotency_key` 未找到。原因：上一輪文字修補誤將 `idempotency_key` 放到鄰近的 `BaseCartLineItem.properties`。已將欄位移回官方的 `BaseRefund.properties`，並同步更新 D/I 規格及 SHA-256。之前文件中的靜態文字存在性檢查不足以證明 YAML 結構正確；本次以 pytest YAML 解析回歸測試驗收。CI 重新執行結果須以最新 GitHub Actions run 為準。
