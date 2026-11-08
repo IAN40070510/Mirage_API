@@ -1,9 +1,9 @@
-# 使用者提供的本地快照；版本與部署尚待比對，approved 不自動提升。
+# 固定官方 v2.22.4 commit 的 Store API 子集；文檔 info.version=2.22.3。來源可追溯但部署未經核實。
 schema_version: 1
 platform_id: medusa
 platform_version: 2.22.4
-source_url: https://github.com/medusajs/medusa/tree/v2.22.4
-source_revision: v2.22.4
-spec_sha256: 65b6917fb04c52d3a2394cabe8c391db8ebfa74e5aec336eb88069ed5e14ba0b
+source_url: https://github.com/medusajs/medusa/blob/81edb06c323812773c9c0dcc4da2d9784f3b3319/www/apps/api-reference/specs/store/openapi.full.yaml
+source_revision: 81edb06c323812773c9c0dcc4da2d9784f3b3319
+spec_sha256: 15c794cf596866f13bf96b715db66470011406f659e2eadbf4761dfdbb2ccc96
 approved: false
 openapi_file: openapi.yaml
