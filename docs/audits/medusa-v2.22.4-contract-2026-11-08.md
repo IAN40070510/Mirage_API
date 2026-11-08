@@ -46,3 +46,44 @@
 ## 範圍說明
 
 本次透過 GitHub 連接器讀取本地 repo 和官方固定 tag 的原始文本，並執行結構摘要／雜湊比對；沒有部署或呼叫 Medusa 參考服務，沒有執行本專案 pytest，也未取得上游超大型 `openapi.full.yaml` 進行完整語意差異分析。**77/77 一致只適用 operation ID 和宣告 status keys，不代表整體 API 相容性。**
+
+## 第二輪：官方完整 Store OpenAPI 結構比對（2026-11-08）
+
+### 官方來源與版本身份
+
+- 已由官方 `v2.22.4` Git tag（commit `81edb06c323812773c9c0dcc4da2d9784f3b3319`）取得 `www/apps/api-reference/specs/store/openapi.full.yaml`；Git blob SHA-1 `000dcd0fb6d124a9675e5168b49ef7b354ac8a19`。
+- 讀取的上游完整檔案 UTF-8 內容 SHA-256：`ac76bf98207021e17455819ec9db5eee3742efa6172a76b4d83d67b06d97af4d`。
+- `api-scope.json` 既有 `source_sha256` 為 `438ac1daa9b3d6e27944e05a553986dcc4a3f3dbde72dd4d3b978575d6eaf328`，**不等於**此固定 tag 的完整上游規格；在取得原始 `openapi.full.yaml` 與其產生流程前，不可聲稱此 metadata 已驗證官方來源。
+- 官方 `packages/medusa/package.json` 在 `v2.22.4` 確實宣告版本 `2.22.4`；但同 tag Store API Reference `openapi.yaml`、`openapi.full.yaml` 的 `info.version` 是 `2.22.3`。交叉檢查 `v2.22.3` tag 的 Store API Reference `info.version` 為 `2.22.2`。這顯示文件版本文字存在一版落差，但**不因此推論部署相容性**。
+
+### 核實方式與結果
+
+讀入官方完整規格及本地 `inputs/platforms/medusa/openapi.yaml`，將 YAML 內容轉為結構樹後，依路徑／操作 ID 比對操作、參數、requestBody、response status、media type、Schema `$ref`、required、型別、限制、enum 等結構屬性。為避免文字與排版干擾，比對時排除 `description`、`summary`、`title`、`example(s)`、`externalDocs` 等說明性欄位與 `x-*` 擴充欄位；**`x-allowed` 另外逐一統計，不視為已通過**。比對器為此審查執行的離線結構檢查，非正式 Gate 的整合測試。
+
+| 核實範圍 | 官方完整規格 | 本地子集 | 結果 |
+| --- | ---: | ---: | --- |
+| HTTP paths | 69 | 67 | 本地 67 條皆存在於官方 |
+| HTTP operations | 79 | 77 | **77/77 核心結構一致** |
+| `components/schemas` | 617 | 133 | **132/133 核心結構一致** |
+| `components/responses` | 8 | 6 | **6/6 一致** |
+| `components/securitySchemes` | 3 | 3 | **3/3 一致** |
+| `components/examples` | 7 | 6 | **6/6 一致（排除說明性欄位）** |
+| `x-allowed` | 52 個操作有此擴充（完整規格） | 0 | **子集對應的 51 個 Store operations 缺失** |
+
+**唯一發現的核心 Schema 差異**：本地 `components/schemas/BaseRefund/properties/idempotency_key` 缺少官方定義 `type: string`。此欄位在官方 Schema 中並非 `required`；缺少宣告仍使子集不完整，不可聲稱全數一致。
+
+**其他限制**：
+- `x-allowed` 是實際限制 Store API `fields` 存取範圍的擴充資料（Medusa v2.21.0 起已有 strict allowed fields；詳見 [官方 release](https://github.com/medusajs/medusa/releases/tag/v2.21.0)）。現有 OpenAPI Schema gate **不會自動推導或執行此白名單**，必須由明確策略、已審查 query 情境與服務實測共同保證。不能僅把 `x-allowed` 放回 YAML 就宣稱安全檢查完整。
+- 本地未收錄的 `/store/search` 和 `/store/payment-collections/{id}/payment-sessions/{session_id}` 是選擇性子集，應保持未支援，除非另行擴充且核實。
+- 結構一致性不證明執行時的商品價格、外掛、授權、locale、`fields`、header、業務狀態與回應完全一致。
+
+### 修復與核准前驗收（更新）
+
+- [ ] 以官方固定 commit 的完整 `openapi.full.yaml` 為 **可重現的唯讀上游輸入**，建立子集生成工具；生成時保留 `x-allowed` 等必要行為擴充欄位，還原 `BaseRefund.idempotency_key`。
+- [ ] 明確分離 `platform_version=2.22.4`（目標套件／部署版本）及上游文檔 `info.version=2.22.3`；不得篡改來源版本以假裝檔案是官方原始物。
+- [ ] 對源規格與生成子集分別計算 SHA-256，保存固定 commit、來源 blob SHA、子集產物雜湊與產生程式版本；同步 D、I 用到的契約與更新快照。跨環境若需逐 byte 身份，先處理 CRLF/LF 差異。
+- [ ] 新增自動回歸測試：77 個操作／133 個 schema 的核心映射、`x-allowed` 保留、`BaseRefund.idempotency_key`、無未知 `$ref`、格式 Gate 的 pass/reject/unverifiable 和非預期來源 fail-closed。
+- [ ] 取得目標測試站點的已驗證部署身份與真實回應對照（包含正常、404、缺少 publishable key、`fields` 與其他已批准 query）。
+- [ ] 維護者完成審查後才能批准來源與部署契約；目前 **維持 `approved=false`**。
+
+本次已核對靜態規格，**沒有進行 Medusa 運行環境與正式 Gate 的動態測試、沒有修改現有 `openapi.yaml`／hash／批准設定，也沒有宣稱官方已完整相容**。
