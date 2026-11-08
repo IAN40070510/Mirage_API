@@ -1,6 +1,7 @@
 """本地識別診斷入口；不發出 HTTP 請求或抓取遠端規格。"""
 
 import argparse
+import sys
 from pathlib import Path
 
 from . import PlatformIdentifier, RuntimeContext
@@ -8,6 +9,10 @@ from . import PlatformIdentifier, RuntimeContext
 
 def main():
     """輸出結構化識別結果；無法確認時以非零結束碼停止後續處理。"""
+    # Windows 的預設編碼可能不是 UTF-8；固定輸出，避免中文錯誤原因成為亂碼。
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description="Identify one explicitly bound HTTP API operation")
     parser.add_argument("--platforms", type=Path, default=Path("inputs/platforms"))
     parser.add_argument("--bindings", type=Path, default=Path("configs/bindings.yaml"))

@@ -1,6 +1,10 @@
 """用臨時合成契約驗證 A/B/D/E/H/I；不核准 repo 的 Medusa 或 WooCommerce。"""
 
 import hashlib
+import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -128,3 +132,42 @@ def test_repo_medusa_contract_is_not_approved_by_enabled_binding(tmp_path):
     assert result.decision == "unverifiable"
     assert result.errors[0].code == "contract_not_approved"
     assert (root / "inputs/sources/medusa/openapi.yaml").read_bytes() == raw
+
+
+def test_a_b_factory_reads_explicit_server_configuration(stack, tmp_path, monkeypatch):
+    """正式 --factory 入口使用伺服器環境變數，不依賴全域預設 registry。"""
+    from deception.api.identified import create_app as identified_factory
+
+    identifier, _, _, directory, _ = stack
+    config_path = tmp_path / "bindings.yaml"
+    config_path.write_text(yaml.safe_dump(identifier.bindings.model_dump(mode="json")), encoding="utf-8")
+    monkeypatch.setenv("MIRAGE_PLATFORMS_DIR", str(directory.parent))
+    monkeypatch.setenv("MIRAGE_BINDINGS_FILE", str(config_path))
+    for name, value in (("MIRAGE_ENVIRONMENT_ID", "test-env"), ("MIRAGE_DEPLOYMENT_ID", "test-deploy"),
+                        ("MIRAGE_SERVICE_ID", "store")):
+        monkeypatch.setenv(name, value)
+    response = TestClient(identified_factory(), base_url="https://shop.test").get("/api/products/test")
+    assert response.status_code == 501
+    assert response.json()["identification"]["binding_id"] == "test-binding"
+    monkeypatch.delenv("MIRAGE_SERVICE_ID")
+    with pytest.raises(ValueError, match="All three"):
+        identified_factory()
+
+
+@pytest.mark.parametrize("origin,expected_code,decision", [
+    ("https://shop.test", 0, "identified"), ("https://unknown.test", 1, "unverifiable")])
+def test_identifier_cli_returns_utf8_json_and_meaningful_exit_code(stack, tmp_path, origin, expected_code, decision):
+    """執行真正的 CLI，確認成功／失敗結束碼及 Windows 中文 JSON 都可讀取。"""
+    identifier, _, _, directory, _ = stack
+    config_path = tmp_path / "bindings.yaml"
+    config_path.write_text(yaml.safe_dump(identifier.bindings.model_dump(mode="json")), encoding="utf-8")
+    root = Path(__file__).resolve().parents[1]
+    environment = dict(os.environ, PYTHONPATH=str(root / "src"))
+    result = subprocess.run([sys.executable, "-m", "deception.discovery", "--platforms", str(directory.parent),
+                             "--bindings", str(config_path), "--url", origin + "/api/products/test"],
+                            cwd=root, env=environment, capture_output=True, text=True, encoding="utf-8")
+    assert result.returncode == expected_code, result.stderr
+    data = json.loads(result.stdout)
+    assert data["decision"] == decision
+    if expected_code:
+        assert data["errors"][0]["reason"] == "找不到唯一的環境／部署／站點綁定"
