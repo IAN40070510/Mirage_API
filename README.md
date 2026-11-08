@@ -136,7 +136,7 @@ Mirage_API/
 │  ├─ woocommerce/
 │  │  └─ manifest.yaml.example       # 人工待填範本；不載入
 │  └─ medusa/
-│     ├─ openapi.yaml                # 使用者提供的 Store／Auth 子集；來源待核實
+│     ├─ openapi.yaml                # 固定官方來源修正的 Store／Auth 子集；部署待核實
 │     ├─ manifest.yaml.example       # 人工待審範本；不載入
 │     ├─ api-scope.json              # 使用者提供的操作範圍；程式不讀
 │     ├─ input-audit.json            # 已產生的檢查紀錄；程式不讀
@@ -215,7 +215,7 @@ synthetic_seed: 42
 | 平台 | 第一個規劃操作 | 人工須提供與核實 | 現況 |
 | --- | --- | --- | --- |
 | WooCommerce | `GET /wp-json/wc/v3/products/{id}` 的 200／404 | 目標部署版本、對應官方規格或有來源的補充契約、實際站點前綴與查詢上下文；[wc/v3 商品文件](https://developer.woocommerce.com/docs/apis/rest-api/v3/products/) 只作參考，勿與舊 `/wc-api/v3` 混用 | 只有示意 PoC 契約及 manifest 範本 |
-| Medusa（測試目標 `v2.22.4`） | Store API 商品讀取的一個 operation 與 200／404 | 對應測試目標的 [Store API 規格](https://docs.medusajs.com/api/store)、部署 origin、`fields` 等 query 上下文與參考服務對照 | 有使用者提供的 Store／Auth 快照，可供 D/E 離線使用；完整官方來源與部署仍待核實；見[輸入檢查](inputs/platforms/medusa/README.md) |
+| Medusa（測試目標 `v2.22.4`） | Store API 商品讀取的一個 operation 與 200／404 | 對應測試目標的 [Store API 規格](https://docs.medusajs.com/api/store)、部署 origin、`fields` 等 query 上下文與參考服務對照 | Store／Auth 子集已比對固定官方 commit 並補齊 Schema 與 `x-allowed`；部署及動態行為尚待測試，`approved: false`；見[輸入檢查](inputs/platforms/medusa/README.md) |
 
 先讓一個站點、單一 operation 和少數狀態碼形成可驗證閉環，再擴充。`poc-v1` 是本專案示意契約版本，**不是平台版本**。若官方規格未描述動態欄位、外掛、授權或商業規則，維持未涵蓋，另做參考服務對照。
 
@@ -240,7 +240,7 @@ $env:PYTHONPATH = "$PWD/src"
 .\.venv\Scripts\python.exe -m deception.profile_builder --source inputs/sources/medusa/source.yaml --output generated
 ```
 
-目前可從使用者提供的 Medusa 規格建立 77 個 operations；來源仍為 `approved: false`。`ProfileTool.get_operation` 以平台、版本、規格雜湊、method 和 path template 精確查詢，保留 schema 引用與規格缺口。尚未提供來源的 WooCommerce 只有設定範本。
+目前固定 Medusa 官方來源修正的子集涵蓋 77 個 operations；來源仍為 `approved: false`，且官方同 tag 的 OpenAPI 文件 `info.version` 為 `2.22.3`（測試目標服務版本為 `2.22.4`）。`ProfileTool.get_operation` 以平台、版本、規格雜湊、method 和 path template 精確查詢，保留 schema 引用與規格缺口。尚未提供來源的 WooCommerce 只有設定範本。
 
 ## 已實作的 A：HTTP 請求入口
 
@@ -340,7 +340,7 @@ curl.exe -X POST http://127.0.0.1:8000/v1/poc/validate -H "Content-Type: applica
 | 可選 | [Schemathesis](https://github.com/schemathesis/schemathesis/blob/master/LICENSE) | MIT | 契約測試；通過仍不等於官方行為一致 |
 | 未採用 | [WireMock](https://github.com/wiremock/wiremock/blob/master/LICENSE.txt) | Apache-2.0 | 可作替代 mock server；目前無依賴 |
 | 參考資料 | [WooCommerce REST API 文件](https://developer.woocommerce.com/docs/apis/rest-api/v3/products/)／[外掛授權標示](https://github.com/woocommerce/woocommerce/blob/trunk/plugins/woocommerce/readme.txt) | 文件、程式碼與範例權利須分開核對；外掛標示 GPLv3+ | 僅參考 API 行為，未複製其程式碼。閱讀 GPL 專案文件不會使獨立實作自動受 GPL 約束；若複製程式碼或大量文件，須另評估 |
-| 參考資料 | [Medusa Store API 文件](https://docs.medusajs.com/api/store)／[核心授權](https://github.com/medusajs/medusa/blob/develop/LICENSE) | 核心儲存庫除企業版材料外為 MIT；企業版另有條款 | 現有輸入規格由使用者提供，來源與再散布權未核實；發行前核對固定版本的規格及文件授權 |
+| 參考資料 | [Medusa Store API 文件](https://docs.medusajs.com/api/store)／[核心授權](https://github.com/medusajs/medusa/blob/develop/LICENSE) | 核心儲存庫除企業版材料外為 MIT；企業版另有條款 | 現有子集已依官方固定 commit 核實核心結構並修正；實際部署尚未對照，規格與文件的再散布權仍須逐項核對 |
 
 `pyproject.toml` 還列有 `uvicorn`、`PyYAML`、`werkzeug`、`Faker==40.44.0`，測試 extra 有 `pytest`、`httpx`；它們及**間接依賴**（例如 Faker 安裝帶入的 `tzdata`）也須按實際解析出的版本納入第三方清單。E 只使用 Faker 的公開 API，不複製其原始碼或資料。Polyfactory 與 hypothesis-jsonschema 僅是評估過、未安裝的候選。上表不是完整 SBOM，也未替 Mirage_API 原始碼選定授權；目前根目錄沒有 `LICENSE`，不可暗示本專案已用某種開源授權發布。
 
