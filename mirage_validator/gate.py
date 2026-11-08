@@ -135,7 +135,7 @@ class PlatformRegistry:
             for template, item in bound.get("paths", {}).items():
                 if template.startswith("x-"):
                     continue
-                item = deref(bound, item)
+                item = deref(bound, item, path_item=True)
                 if "servers" in item or any(isinstance(v, dict) and "servers" in v for v in item.values()):
                     raise ValueError("Operation/path server overrides require an explicit adapter")
             for base in manifest.base_urls:

@@ -285,6 +285,25 @@ def test_path_vendor_extension_is_not_loaded_as_a_route(tmp_path):
     assert result.identity.operation_id == "getProduct"
 
 
+@pytest.mark.parametrize("intermediate", [False, True])
+def test_path_reference_cannot_hide_server_override_in_a_sibling(tmp_path, intermediate):
+    """3.0 的合法引用不能讓原始或中間 Path Item 的 servers 覆寫被丟掉後放行。"""
+    def change(spec):
+        spec["openapi"] = "3.0.3"
+        target = copy.deepcopy(spec["paths"]["/products/{id}"])
+        spec["x-path-items"] = {"Product": target}
+        overridden = {"$ref": "#/x-path-items/Product", "servers": [{"url": "https://other.test"}]}
+        if intermediate:
+            spec["x-path-items"]["Intermediate"] = overridden
+            spec["paths"]["/products/{id}"] = {"$ref": "#/x-path-items/Intermediate"}
+        else:
+            spec["paths"]["/products/{id}"] = overridden
+
+    source_package(tmp_path, change=change)
+    with pytest.raises(ValueError):
+        PlatformRegistry(tmp_path)
+
+
 @pytest.mark.parametrize("url", ["https://shop.test/api/products/one\ntwo",
                                   "https://shop.test/api/products/%ZZ",
                                   "https://shop.test:65536/api/products/1",
@@ -297,3 +316,73 @@ def test_b_and_i_reject_the_same_malformed_url_before_selection(tmp_path, url):
     assert_failure(result, "invalid_url")
     assert checked.decision == "unverifiable" and checked.valid is False
     assert checked.errors[0].code == "invalid_url"
+
+
+def add_compound_operation(spec, template):
+    """建立同一個 segment 中有兩個參數的合法合成操作。"""
+    operation = copy.deepcopy(spec["paths"]["/products/{id}"]["get"])
+    operation["operationId"] = "getCombined"
+    operation["parameters"] = [{"name": name, "in": "path", "required": True, "schema": {"type": "string"}}
+                               for name in ("first", "second")]
+    spec["paths"][template] = {"get": operation}
+
+
+@pytest.mark.parametrize("template,actual", [("/combined/{first}{second}", "/combined/abcd"),
+                                            ("/combined/{first}-{second}", "/combined/alpha-beta-gamma")])
+def test_parameter_split_ambiguity_is_not_resolved_by_regex_greediness(tmp_path, template, actual):
+    """同一 template 可以有多組參數拆法時，B/I 都不可任選 greedy 的第一組。"""
+    manifest = source_package(tmp_path, change=lambda spec: add_compound_operation(spec, template))
+    url = "https://shop.test/api" + actual
+    result = identifier(tmp_path, manifest).identify(url, "GET")
+    checked = OfficialResponseGate(PlatformRegistry(tmp_path)).validate(gate_request(url))
+    assert_failure(result, "operation_not_unique")
+    assert checked.valid is False and checked.decision == "unverifiable"
+    assert checked.errors[0].code == "operation_not_unique"
+
+
+def test_compound_segment_with_one_parameter_split_remains_supported(tmp_path):
+    """明確分隔點只有一個時，兩個參數仍能取得唯一值。"""
+    manifest = source_package(tmp_path, change=lambda spec: add_compound_operation(spec, "/combined/{first}-{second}"))
+    url = "https://shop.test/api/combined/alpha-beta"
+    result = identifier(tmp_path, manifest).identify(url, "GET")
+    assert result.decision == "identified", result
+    assert result.identity.path_parameters == {"first": "alpha", "second": "beta"}
+    checked = OfficialResponseGate(PlatformRegistry(tmp_path)).validate(gate_request(url))
+    assert checked.valid is True, checked
+    assert checked.operation_id == result.identity.operation_id == "getCombined"
+
+
+def test_exact_path_precedes_a_template_with_ambiguous_parameter_splits(tmp_path):
+    """靜態 exact path 本來有唯一操作，其他動態路由的拆分歧義不應阻擋它。"""
+    def change(spec):
+        add_compound_operation(spec, "/combined/{first}{second}")
+        responses = copy.deepcopy(spec["paths"]["/products/{id}"]["get"]["responses"])
+        spec["paths"]["/combined/abcd"] = {"get": {"operationId": "getExact", "responses": responses}}
+
+    manifest = source_package(tmp_path, change=change)
+    url = "https://shop.test/api/combined/abcd"
+    result = identifier(tmp_path, manifest).identify(url, "GET")
+    assert result.decision == "identified", result
+    assert result.identity.operation_id == "getExact"
+    assert result.identity.path_parameters == {}
+    checked = OfficialResponseGate(PlatformRegistry(tmp_path)).validate(gate_request(url))
+    assert checked.valid is True, checked
+    assert checked.operation_id == "getExact"
+
+
+def test_exact_path_precedes_a_template_with_duplicate_parameter_names(tmp_path):
+    """未選定動態路由中的重複參數名，不能阻擋已明確匹配的靜態操作。"""
+    def change(spec):
+        dynamic = copy.deepcopy(spec["paths"]["/products/{id}"])
+        dynamic["get"]["operationId"] = "getRepeated"
+        spec["paths"]["/{id}/{id}"] = dynamic
+        responses = copy.deepcopy(spec["paths"]["/products/{id}"]["get"]["responses"])
+        spec["paths"]["/products/exact"] = {"get": {"operationId": "getExact", "responses": responses}}
+
+    manifest = source_package(tmp_path, change=change)
+    url = "https://shop.test/api/products/exact"
+    result = identifier(tmp_path, manifest).identify(url, "GET")
+    assert result.decision == "identified", result
+    assert result.identity.operation_id == "getExact"
+    checked = OfficialResponseGate(PlatformRegistry(tmp_path)).validate(gate_request(url))
+    assert checked.valid is True, checked

@@ -79,7 +79,7 @@ def select_site(bundles, url: SplitResult) -> SiteMatch:
     return matches[0]
 
 
-def deref(spec, node):
+def deref(spec, node, *, path_item: bool = False):
     """解析內部 URI fragment 一次，再處理 JSON Pointer；無效引用不逃出 gate。"""
     seen = set()
     try:
@@ -87,6 +87,10 @@ def deref(spec, node):
             ref = node["$ref"]
             if not isinstance(ref, str) or not ref.startswith("#/") or ref in seen:
                 raise ValueError("Invalid or cyclic reference at contract selection")
+            if path_item and node.keys() - {"$ref", "summary", "description"}:
+                # 與 D 的明確引用限制一致；不可把 servers 等結構 sibling 在解引用時丟掉。
+                # 每一層引用都要檢查，避免透過中間 Path Item 隱藏部署覆寫。
+                raise ValueError("Structural Path Item reference siblings require an explicit adapter")
             seen.add(ref)
             node = spec
             for token in unquote(ref[2:], errors="strict").split("/"):
@@ -101,7 +105,7 @@ def deref(spec, node):
                     node = node[key]
         return node
     except (LookupError, TypeError, ValueError) as exc:
-        raise SelectionError("contract_reference_error", "契約內部引用無法解析或產生循環") from exc
+        raise SelectionError("contract_reference_error", "契約內部引用無法解析、產生循環或包含不支援的結構覆寫") from exc
 
 
 @dataclass(frozen=True)
@@ -121,20 +125,30 @@ def select_operation(spec: dict, method: str, path: str) -> OperationMatch:
             continue
         names = []
         pieces = []
+        minimal_pieces = []
         offset = 0
         for parameter in re.finditer(r"\{([^{}]+)\}", template):
             pieces.extend((re.escape(template[offset:parameter.start()]), "([^/]+)"))
+            minimal_pieces.extend((re.escape(template[offset:parameter.start()]), "([^/]+?)"))
             names.append(parameter.group(1))
             offset = parameter.end()
         pieces.append(re.escape(template[offset:]))
+        minimal_pieces.append(re.escape(template[offset:]))
         match = re.fullmatch("".join(pieces), path)
         if match:
-            if len(names) != len(set(names)):
-                raise SelectionError("operation_not_unique", "路徑參數名稱重複，無法唯一識別")
-            routes.append((template, deref(spec, item), dict(zip(names, match.groups()))))
+            routes.append((template, deref(spec, item, path_item=True), names, match.groups(), "".join(minimal_pieces)))
     exact = [route for route in routes if route[0] == path]
     routes = exact or routes
     if len(routes) != 1 or method.lower() not in routes[0][1]:
         raise SelectionError("operation_not_unique", "找不到唯一的 HTTP 方法與端點契約")
-    template, item, parameters = routes[0]
-    return OperationMatch(template, item[method.lower()], parameters)
+    template, item, names, values, minimal_pattern = routes[0]
+    # 先選 exact／唯一操作，再檢查其參數；未選到的動態模板不可擋住有效靜態路由。
+    if len(names) != len(set(names)):
+        raise SelectionError("operation_not_unique", "路徑參數名稱重複，無法唯一識別")
+    if len(names) > 1:
+        # pattern 只含 escaped literals 與 path-segment captures。最大／最小貪婪拆分
+        # 若不同，就存在多種合法參數分割；不能任意把其中一組交給 C 或 E 查詢。
+        minimal = re.fullmatch(minimal_pattern, path)
+        if minimal is None or minimal.groups() != values:
+            raise SelectionError("operation_not_unique", "路徑參數有多種合法拆分，無法唯一識別")
+    return OperationMatch(template, item[method.lower()], dict(zip(names, values)))

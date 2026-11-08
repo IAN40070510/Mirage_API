@@ -107,9 +107,9 @@ A 原有的 `deception.api.app:app` 仍是獨立入口。B 不信任任意 Forwa
 
 - origin 的 hostname 大小寫不影響匹配；scheme、明確 port 與 path prefix 維持 I 的嚴格語意。例如 `https://host` 與 `https://host:443` 不自動合併。
 - prefix 只在 segment 邊界吻合；兩個命中的 base 或兩個版本不採最長 prefix／載入順序自動選擇。disabled 的重疊 binding 也不會被偷偷略過作為版本回退。
-- 靜態 path 優先於 template，之後才檢查 method。不自動把 HEAD 當 GET，也不補斜線、合併 slash 或做重導向。
+- 靜態 path 優先於 template，之後才檢查 method；未選到的動態 template 不會因重複參數名而擋住有效靜態路由。對選定 template，若同一 URL 有多種合法參數拆分，例如 `/{first}{second}` 或多個分隔符造成 `{first}-{second}` 不唯一，會回 `operation_not_unique`。只有唯一可拆分的參數才交給下游。不自動把 HEAD 當 GET，也不補斜線、合併 slash 或做重導向。
 - path 不解碼；`prod%2F1` 仍是單一路徑參數的原始編碼值。query 解碼為 UTF-8，保留空值與重複值的順序；不合法 percent、UTF-8、port、userinfo、fragment、控制字元或反斜線會失敗。
-- 內部 `$ref` fragment 先解碼一次再解析 Pointer，解析失敗回 `contract_reference_error`。合法的 `paths.x-*` 註記不參與路由；鎖版驗證器的副本會排除這些註記，D 與 H 共用同一相容處理。原始檔、hash 及 response／schema 限制不改寫；引用該註記作為契約內容的用法仍不支援。
+- 內部 `$ref` fragment 先解碼一次再解析 Pointer，解析失敗回 `contract_reference_error`。Path Item 引用只支援 summary／description sibling，其他結構 sibling（例如 servers）在原始或中間引用任何一層都會拒絕載入，與 D 的限制一致，避免解引用時丟失部署覆寫。合法的 `paths.x-*` 註記不參與路由；鎖版驗證器的副本會排除這些註記，D 與 H 共用同一相容處理。原始檔、hash 及 response／schema 限制不改寫；引用該註記作為契約內容的用法仍不支援。
 
 測試使用暫存合成契約驗證 B/I 操作一致、靜態／動態歧義、query、percent encoding、設定與版本隔離、偽造 headers，以及 A→B、B→D→E→H→I 的整合。另以 repo 的 Medusa 快照確認 enabled binding 仍不能核准未審來源，不會更改 repo 的 approved 設定。
 
