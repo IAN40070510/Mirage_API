@@ -27,6 +27,7 @@ class _TrueSchemaResponseValidator(StrictV31ResponseValidator):
     """0.19.5 的 literal true schema adapter：保留 JSON 解析與 header 檢查。"""
 
     def _get_content_and_schema(self, raw, content, mimetype=None):
+        """解析 JSON body 並驗證非 true schema；literal true 僅略過 body schema 檢查。"""
         value, schema = super()._get_content_schema_value_and_schema(raw, content, mimetype)
         # 此上層擴充點只處理 response body；複合 header 使用未覆寫的下層方法。
         # 不可在下層一律丟棄 schema，否則會連 header.content 的限制一起跳過。
@@ -41,6 +42,7 @@ class CompositionError(ValueError):
     """附機器可讀 code 的組合失敗，失敗時不產生候選、不重試或修正。"""
 
     def __init__(self, code: str, message: str):
+        """保存可分類的組合錯誤碼，並建立包含固定錯誤碼的例外訊息。"""
         self.code = code
         super().__init__(f"{code}: {message}")
 
@@ -55,6 +57,7 @@ def _tokens(pointer: str) -> tuple[str, ...]:
 
 
 def _key(node, token: str):
+    """依容器型別取得物件鍵或標準陣列索引，拒絕指向純量或非法索引。"""
     if isinstance(node, list):
         if not re.fullmatch(r"0|[1-9][0-9]*", token):
             raise CompositionError("invalid_binding", "Array index must be a nonnegative canonical integer")
@@ -65,6 +68,7 @@ def _key(node, token: str):
 
 
 def _get(node, tokens: tuple[str, ...]):
+    """依已解析的 Pointer tokens 讀取既有 JSON 值，不新增或改動資料。"""
     for token in tokens:
         node = node[_key(node, token)]
     return node
@@ -170,6 +174,7 @@ class ResponseComposer:
     """H 工具：每次從 D 重讀已校驗的 Profile，不跨版本或契約自動回退。"""
 
     def __init__(self, profile_root: Path):
+        """記錄 D 產物根目錄，實際組合時再讀取並核對對應契約。"""
         self.profile_root = profile_root
 
     def compose(self, plan: CompositionPlan, *, dataset: SyntheticDataset | None = None,

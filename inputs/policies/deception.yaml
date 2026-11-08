@@ -2,6 +2,8 @@
 # 先用 B/D 的實際身份替換部署、版本、契約 hash、operation 與 path；
 # 再依 D 完整 schema 補齊 body，經 H/I 驗證及來源審查後啟用。
 schema_version: 1
+# 領域由管理者明確選擇；後續領域須先註冊自己的政策模型與處理器。
+domain: ecommerce
 policy_id: product-lookup-policy
 policy_version: '1'
 enabled: false

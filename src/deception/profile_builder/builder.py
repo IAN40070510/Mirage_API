@@ -28,6 +28,7 @@ class _UniqueLoader(yaml.SafeLoader):
 
 
 def _unique_mapping(loader, node, deep=False):
+    """建立安全 YAML mapping；非字串鍵或重複鍵直接拒絕，避免契約被後值覆寫。"""
     result = {}
     for key_node, value_node in node.value:
         key = loader.construct_object(key_node, deep=deep)
@@ -74,6 +75,7 @@ def resolve_pointer(spec: dict, ref: str):
 
 
 def _check_refs(spec, node):
+    """遞迴確認內部引用均可解析，並拒絕目前無法可靠處理的動態引用。"""
     if isinstance(node, dict):
         if "$dynamicRef" in node:
             raise ProfileError("$dynamicRef is not supported by this Profile builder")

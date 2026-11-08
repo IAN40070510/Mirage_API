@@ -44,6 +44,7 @@ def source_package(root, *, version="3.1.0", approved=True, change=None):
 
 
 def setup_composer(tmp_path, **changes):
+    """建立 D 產物、固定 E 快照與相符 scope，回傳可供 H/I 整合測試使用的工具。"""
     source_path, source, data = source_package(tmp_path / "source", **changes)
     output = tmp_path / "generated"
     build_profile(source_path, output)
@@ -78,6 +79,7 @@ def gate_for(root, source, data, *, approved=True, base="https://shop.test"):
 
 @pytest.mark.parametrize("version", ["3.0.3", "3.1.0"])
 def test_d_e_h_i_preserves_exact_candidate_and_passes_synthetic_contract(tmp_path, version):
+    """確認 D/E/H/I 交接保留同一份候選 triple 與身份，且不修改原計畫或資料快照。"""
     composer, scope, dataset, source, data = setup_composer(tmp_path, version=version)
     plan = plan_for(scope, headers={"X-Synthetic-Trace": "test-001"})
     original_plan = plan.model_dump(mode="json")
@@ -107,6 +109,7 @@ def test_d_e_h_i_preserves_exact_candidate_and_passes_synthetic_contract(tmp_pat
 
 
 def test_explicit_404_body_passes_same_contract_without_dataset(tmp_path):
+    """確認不使用 E 映射的明確 404 JSON body 可依同一操作契約組合並通過 I。"""
     composer, scope, _, source, data = setup_composer(tmp_path)
     candidate = composer.compose(plan_for(scope, status_code=404, bindings=[],
                                          body={"type": "not_found", "message": "Synthetic product not found"}))
@@ -117,6 +120,7 @@ def test_explicit_404_body_passes_same_contract_without_dataset(tmp_path):
 
 
 def test_candidate_and_identity_are_frozen_and_detached_from_inputs(tmp_path):
+    """確認候選及身份不可賦值修改，外部模板或 E 資料變動也不影響已序列化 body。"""
     composer, scope, dataset, _, _ = setup_composer(tmp_path)
     plan = plan_for(scope)
     candidate = composer.compose(plan, dataset=dataset)
@@ -132,6 +136,7 @@ def test_candidate_and_identity_are_frozen_and_detached_from_inputs(tmp_path):
 
 
 def test_composition_is_deterministic_and_keeps_unicode(tmp_path):
+    """確認相同明確指令產生相同候選 bytes，並保留原始 Unicode 文字。"""
     composer, scope, _, _, _ = setup_composer(tmp_path)
     plan = plan_for(scope, bindings=[], body={"product": {"id": "prod-test", "title": "合成商品"}})
     first = composer.compose(plan)
@@ -150,6 +155,7 @@ def test_composition_is_deterministic_and_keeps_unicode(tmp_path):
     {"bindings": [], "body": {"product": {"id": "prod-test", "title": "test", "extra": True}}},
 ])
 def test_unsupported_or_invalid_candidates_are_rejected_without_repair(tmp_path, changes):
+    """確認未支援方法／媒體、錯誤狀態或 body 契約違規都直接拒絕，不自動修正。"""
     composer, scope, dataset, _, _ = setup_composer(tmp_path)
     with pytest.raises(CompositionError):
         composer.compose(plan_for(scope, **changes), dataset=dataset)
@@ -161,6 +167,7 @@ def test_unsupported_or_invalid_candidates_are_rejected_without_repair(tmp_path,
     {"Transfer-Encoding": "chunked"}, {"Connection": "close"},
 ])
 def test_headers_do_not_allow_ambiguity_injection_or_transport_override(tmp_path, headers):
+    """確認 header 注入、大小寫重複、Content-Type 衝突與傳輸層覆寫均被拒絕。"""
     composer, scope, dataset, _, _ = setup_composer(tmp_path)
     with pytest.raises(CompositionError):
         composer.compose(plan_for(scope, headers=headers), dataset=dataset)
@@ -176,12 +183,14 @@ def test_headers_do_not_allow_ambiguity_injection_or_transport_override(tmp_path
      DataBinding(source_pointer="/products/0/id", target_pointer="/product/id")],
 ])
 def test_bindings_require_explicit_existing_nonoverlapping_targets(tmp_path, bindings):
+    """確認映射來源及目標須存在且互不重疊，不能讀取 E 的設定或建立錯誤欄位。"""
     composer, scope, dataset, _, _ = setup_composer(tmp_path)
     with pytest.raises(CompositionError):
         composer.compose(plan_for(scope, bindings=bindings), dataset=dataset)
 
 
 def test_binding_requires_dataset_and_matching_scope(tmp_path):
+    """確認有 E 映射時必須提供資料，且資料與指令的完整隔離 scope 相符。"""
     composer, scope, dataset, _, _ = setup_composer(tmp_path)
     with pytest.raises(CompositionError):
         composer.compose(plan_for(scope))
@@ -191,6 +200,7 @@ def test_binding_requires_dataset_and_matching_scope(tmp_path):
 
 
 def test_unreviewed_source_requires_explicit_preview_and_remains_unapproved(tmp_path):
+    """確認未審來源只可顯式預覽，成功組合也仍保留未審查身份。"""
     composer, scope, dataset, _, _ = setup_composer(tmp_path, approved=False)
     with pytest.raises(CompositionError):
         composer.compose(plan_for(scope), dataset=dataset)
@@ -226,6 +236,7 @@ def test_real_medusa_404_preflight_does_not_approve_source_or_deployment(tmp_pat
 def test_status_range_and_default_response_selection_match_i(tmp_path, status):
     """H 與 I 必須使用相同的明確狀態／狀態範圍／default 選擇規則。"""
     def change(spec):
+        """把成功與錯誤回應分別移為 2XX 與 default，建立狀態選擇優先序案例。"""
         responses = spec["paths"]["/products/{id}"]["get"]["responses"]
         responses["2XX"] = responses.pop("200")
         responses["default"] = responses.pop("404")
@@ -241,7 +252,9 @@ def test_status_range_and_default_response_selection_match_i(tmp_path, status):
 
 
 def test_required_response_header_is_case_insensitive_and_validated(tmp_path):
+    """確認必填 header 名稱不分大小寫，但其數值仍須符合原契約型別。"""
     def change(spec):
+        """加入必填整數 X-Count 回應 header，涵蓋缺值、錯型與合法值。"""
         response = spec["paths"]["/products/{id}"]["get"]["responses"]["200"]
         response["headers"] = {"X-Count": {"required": True, "schema": {"type": "integer"}}}
 
@@ -260,6 +273,7 @@ def test_required_response_header_is_case_insensitive_and_validated(tmp_path):
 def test_json_schema_false_rejects_and_empty_schema_is_not_missing(tmp_path):
     """3.1 布林 false 是禁止任何 body；空 schema 則允許任意 JSON，兩者都不是缺規格。"""
     def change(spec):
+        """分別設定 false 與空 schema，區分禁止內容及允許任意內容的回應契約。"""
         responses = spec["paths"]["/products/{id}"]["get"]["responses"]
         responses["200"]["content"]["application/json"]["schema"] = False
         responses["404"]["content"]["application/json"]["schema"] = {}
@@ -276,6 +290,7 @@ def test_json_schema_false_rejects_and_empty_schema_is_not_missing(tmp_path):
 def test_json_schema_true_accepts_any_json_body(tmp_path, body):
     """3.1 true 適配不可繞過 header 檢查或改寫來源，只允許原 schema 已允許的 JSON。"""
     def change(spec):
+        """設定 literal true body 及必填整數 header，以檢查兩種驗證路徑仍各自生效。"""
         response = spec["paths"]["/products/{id}"]["get"]["responses"]["200"]
         response["content"]["application/json"]["schema"] = True
         response["headers"] = {"X-Count": {"required": True, "schema": {"type": "integer"}}}
@@ -295,7 +310,9 @@ def test_json_schema_true_accepts_any_json_body(tmp_path, body):
 
 @pytest.mark.parametrize("value", [True, "3"])
 def test_body_json_types_are_not_cast_to_schema_integer(tmp_path, value):
+    """確認 JSON 布林與字串不會被轉成契約整數，合法整數則保持原始型別。"""
     def change(spec):
+        """將商品 ID 契約改為整數，建立原始 JSON 型別不可隱含轉換的案例。"""
         spec["components"]["schemas"]["Product"]["properties"]["id"] = {"type": "integer"}
 
     composer, scope, _, _, _ = setup_composer(tmp_path, change=change)
@@ -310,6 +327,7 @@ def test_body_json_types_are_not_cast_to_schema_integer(tmp_path, value):
 def test_true_body_schema_still_validates_header_content_schema(tmp_path, header_body):
     """body 的 true adapter 不能略過共用解析路徑中的 header JSON schema。"""
     def change(spec):
+        """設定不限制 body 的 schema 與帶 JSON 整數內容契約的 X-Count header。"""
         response = spec["paths"]["/products/{id}"]["get"]["responses"]["200"]
         response["content"]["application/json"]["schema"] = True
         response["headers"] = {
@@ -329,6 +347,7 @@ def test_true_body_schema_still_validates_header_content_schema(tmp_path, header
 def test_binding_json_pointer_escapes_and_array_indexes(tmp_path):
     """Binding 使用字串 JSON Pointer；escaped key 有意義，負索引與前導零不可接受。"""
     def change(spec):
+        """建立包含斜線與波浪號的 JSON key，驗證 Pointer escape 能正確定位目標。"""
         spec["paths"]["/products/{id}"]["get"]["responses"]["200"]["content"]["application/json"]["schema"] = {
             "type": "object", "properties": {"a/b": {"type": "object", "properties": {"~id": {"type": "string"}}}}}
 

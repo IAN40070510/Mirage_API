@@ -28,6 +28,7 @@ def namespace_for(config: SyntheticConfig) -> str:
 
 
 def _digest(namespace: str, entity: str, index: int) -> str:
+    """由資料 namespace、實體種類與索引產生可重現摘要，供 ID 與欄位亂數使用。"""
     return hashlib.sha256(f"{namespace}:{entity}:{index}".encode("ascii")).hexdigest()
 
 

@@ -59,6 +59,7 @@ def profile_for(scope, **changes):
 
 
 def test_same_configuration_rebuilds_identically_without_global_random_side_effects():
+    """確認固定設定可重建相同資料與來源標記，且不改動 Python 全域亂數狀態。"""
     settings = config()
     random.seed(123)
     original_random_state = random.getstate()
@@ -86,6 +87,7 @@ def test_same_configuration_rebuilds_identically_without_global_random_side_effe
     ("scenario_id", "product-missing"), ("run_id", "run-other"),
 ])
 def test_every_scope_dimension_isolates_ids_and_namespace(field, value):
+    """確認任一隔離身份變更都建立不同 namespace，商品與變體 ID 不會混用。"""
     settings = config()
     first = generate_dataset(settings)
     scope_data = settings.scope.model_dump()
@@ -97,6 +99,7 @@ def test_every_scope_dimension_isolates_ids_and_namespace(field, value):
 
 
 def test_different_seed_isolates_dataset():
+    """確認相同隔離範圍下不同 seed 仍產生不同資料身份與內容。"""
     first = generate_dataset(config(seed=1))
     second = generate_dataset(config(seed=2))
     assert first.namespace != second.namespace
@@ -104,6 +107,7 @@ def test_different_seed_isolates_dataset():
 
 
 def test_relations_uniqueness_and_generation_ranges():
+    """確認商品／變體關聯、ID 與 SKU 唯一性，以及價格和庫存範圍與整數型別。"""
     settings = config(product_count=20, variants_per_product=4, currency_code="twd",
                       inventory_min=0, inventory_max=3, price_min_minor=101, price_max_minor=105)
     dataset = generate_dataset(settings)
@@ -129,6 +133,7 @@ def test_relations_uniqueness_and_generation_ranges():
 
 
 def test_zero_products_is_a_valid_empty_dataset():
+    """確認零商品設定產生可驗證的空快照，查詢介面也正確回傳空結果。"""
     settings = config(product_count=0)
     dataset = generate_dataset(settings)
     assert dataset.products == []
@@ -141,12 +146,14 @@ def test_zero_products_is_a_valid_empty_dataset():
 
 
 def test_fixed_zero_stock_and_zero_price_are_supported():
+    """確認價格與庫存上下限皆為零時，生成結果保留合法零值。"""
     dataset = generate_dataset(config(inventory_min=0, inventory_max=0,
                                       price_min_minor=0, price_max_minor=0))
     assert all(v.inventory_quantity == 0 and v.price.amount_minor == 0 for v in dataset.variants)
 
 
 def test_queries_paginate_and_return_independent_snapshots():
+    """確認分頁與關聯查詢結果正確，修改回傳複本不會污染工具保存的資料。"""
     settings = config()
     dataset = generate_dataset(settings)
     tool = SyntheticTool(dataset, expected_scope=settings.scope)
@@ -178,11 +185,13 @@ def test_queries_paginate_and_return_independent_snapshots():
     {"price_min_minor": -1},
 ])
 def test_invalid_generation_rules_are_rejected(changes):
+    """確認布林偽整數、負值或顛倒的價格／庫存範圍會在生成前被拒絕。"""
     with pytest.raises((ValidationError, SyntheticError)):
         generate_dataset(config(**changes))
 
 
 def test_save_and_reload_round_trip_is_deterministic(tmp_path):
+    """確認保存路徑依 namespace 定址，載入與重新生成保存均維持相同 bytes。"""
     settings = config()
     dataset = generate_dataset(settings)
     path = save_dataset(dataset, tmp_path)
@@ -193,6 +202,7 @@ def test_save_and_reload_round_trip_is_deterministic(tmp_path):
 
 
 def test_loading_with_another_configuration_is_rejected(tmp_path):
+    """確認載入工具不會用另一份 seed 或設定接受既有合成資料檔。"""
     path = save_dataset(generate_dataset(config()), tmp_path)
     with pytest.raises(SyntheticError):
         load_dataset(path, config(seed=99))
@@ -200,6 +210,7 @@ def test_loading_with_another_configuration_is_rejected(tmp_path):
 
 @pytest.mark.parametrize("change", ["title", "relation", "namespace", "provider_version"])
 def test_validly_typed_but_tampered_data_is_rejected(tmp_path, change):
+    """確認文字、關聯、namespace 或 provider 版本遭改寫時，即使 JSON 可解析仍拒絕載入。"""
     settings = config()
     dataset = generate_dataset(settings)
     path = save_dataset(dataset, tmp_path)
@@ -218,6 +229,7 @@ def test_validly_typed_but_tampered_data_is_rejected(tmp_path, change):
 
 
 def test_verification_reports_failure_and_save_rejects_changed_data(tmp_path):
+    """確認資料內容偏離種子重建結果時，驗證回報錯誤且保存入口拒絕寫入。"""
     settings = config()
     dataset = generate_dataset(settings)
     dataset.products[0].title = "Valid string but not generated from this seed"
@@ -252,6 +264,7 @@ def test_provenance_and_schema_version_do_not_coerce_scalar_types(field, value):
 
 
 def test_tool_rejects_wrong_scope():
+    """確認查詢工具不能以另一站點的隔離身份包裝同一份資料快照。"""
     settings = config()
     scope_data = settings.scope.model_dump()
     scope_data["site_id"] = "another-shop"
@@ -264,6 +277,7 @@ def test_tool_rejects_wrong_scope():
     {"spec_sha256": "b" * 64},
 ])
 def test_d_profile_identity_must_match(changes):
+    """確認綁定 D 時平台、版本與規格 hash 都必須吻合 E 的預期 scope。"""
     settings = config()
     dataset = generate_dataset(settings)
     with pytest.raises(SyntheticError):
@@ -271,6 +285,7 @@ def test_d_profile_identity_must_match(changes):
 
 
 def test_d_profile_identity_binding_does_not_promote_source_approval():
+    """確認 D/E 身份相符可供內部查詢，但不會因此提升 D 來源核准狀態。"""
     settings = config()
     dataset = generate_dataset(settings)
     profile = profile_for(settings.scope)

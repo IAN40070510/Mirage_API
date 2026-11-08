@@ -15,7 +15,7 @@ E 的第一版範圍是平台無關的商品／變體資料，供 C、F、H 查�
 | 有效性驗證 | `verify_dataset` 回傳報告；CLI `verify` 可獨立驗證既有檔案，失敗回非零結束碼 |
 | 與 D 配合 | `SyntheticTool(..., profile=context)` 核對平台、版本與契約雜湊，保持 D 的審查狀態 |
 
-這些是內部資料實體。現有 Medusa `StoreProduct` 還要求 options、images、timestamps 等欄位，庫存也不能直接套用成 StoreProductVariant 的回應欄位。因此 E 的驗證只證明內部資料符合規則與可重現性；完整平台 body 映射由 H 處理，正式 HTTP 契約由 I 驗證。E 尚未接上 A 的 handler 或未實作的 C。
+這些是內部資料實體。現有 Medusa `StoreProduct` 還要求 options、images、timestamps 等欄位，庫存也不能直接套用成 StoreProductVariant 的回應欄位。因此 E 的驗證只證明內部資料符合規則與可重現性；完整平台 body 映射由 H 處理，正式 HTTP 契約由 I 驗證。C 已核對並使用同一 E 快照，完整 A/M HTTP handler 串接仍待完成。
 
 ## 現成專案評估
 

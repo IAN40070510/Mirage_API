@@ -6,20 +6,18 @@ import json
 import secrets
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import unquote
 
 from deception.api.ingress import NormalizedRequest
-from deception.core.models import CompositionPlan, DataBinding
 from deception.discovery.models import IdentificationResult
 from deception.profile_builder.builder import read_yaml
 from deception.profile_builder.models import OperationContext
-from deception.synthetic.generator import checked_dataset
-from deception.synthetic.models import DatasetScope, SyntheticDataset
-from mirage_validator.request_matching import (deref, match_base_url, parse_query,
+from deception.synthetic.models import DatasetScope
+from mirage_validator.request_matching import (match_base_url, parse_query,
                                                parse_request_url, select_operation)
 
-from .models import (AttackAssessment, PreparedScenario, ScenarioDecision, ScenarioIssue,
-                     ScenarioPolicy, ScenarioPreparation)
+from .models import (AttackAssessment, DomainOutcome, DomainPolicy, PreparedScenario,
+                     ScenarioDecision, ScenarioIssue, ScenarioPreparation)
+from .registry import DomainRegistry, default_registry
 
 IDENTITY_KEYS = ("environment_id", "deployment_id", "service_id", "site_id", "platform_id",
                  "platform_version", "spec_sha256", "operation_id", "method", "path")
@@ -45,15 +43,26 @@ def fingerprint_request(request: NormalizedRequest) -> str:
                     "body_sha256": hashlib.sha256(request.body).hexdigest()})
 
 
-def load_policy(path: Path) -> ScenarioPolicy:
-    """只讀本地安全 YAML；沿用 D 的重複 key／非 JSON 值拒絕規則。"""
-    return ScenarioPolicy.model_validate(read_yaml(path.read_bytes()))
+def load_policy(path: Path, *, domain: str | None = None,
+                registry: DomainRegistry | None = None) -> DomainPolicy:
+    """依明確領域選擇嚴格政策模型；未知或與呼叫端選擇不符時不回退。"""
+    value = read_yaml(path.read_bytes())
+    if not isinstance(value, dict) or not isinstance(value.get("domain"), str):
+        raise ValueError("Scenario policy requires an explicit domain")
+    if domain is not None and domain != value["domain"]:
+        raise ValueError("Selected domain does not match policy domain")
+    handler = (default_registry() if registry is None else registry).get(value["domain"])
+    checked = handler.policy_type.model_validate(value)
+    if checked.domain != value["domain"] or checked.domain != handler.domain_id:
+        raise ValueError("Domain handler and policy model disagree")
+    return checked
 
 
 class _Refusal(ValueError):
     """內部失敗分支，只攜帶固定訊息，不回顯請求內容。"""
 
     def __init__(self, code: str, reason: str):
+        """保存情境拒絕的固定錯誤碼與原因，交由 prepare／resolve 建立失敗結果。"""
         self.code, self.reason = code, reason
         super().__init__(reason)
 
@@ -91,25 +100,21 @@ def _check_identity(request, identification, profile):
     return identity, selected.operation
 
 
-def _check_contract(profile, operation, rule):
-    """兩個分支都須有明確 JSON schema；完整值／headers 留給 H 和 I 驗證。"""
-    responses = operation.get("responses", {})
-    for outcome in (rule.found, rule.missing):
-        status = outcome.status_code
-        response = responses.get(str(status), responses.get(f"{status // 100}XX", responses.get("default")))
-        response = deref(profile.specification, response)
-        content = response.get("content", {}) if isinstance(response, dict) else {}
-        media = content.get(outcome.media_type, content.get("application/*", content.get("*/*")))
-        if not isinstance(media, dict) or "schema" not in media or media["schema"] is False:
-            raise _Refusal("outcome_contract_missing", "情境分支沒有可用的回應 schema")
-
-
 class ScenarioEngine:
-    """使用政策快照的純工具；prepared 封套只適用於同一個引擎實例。"""
+    """依政策選領域的共用引擎；業務驗證與資料選擇交給已註冊處理器。"""
 
-    def __init__(self, policy: ScenarioPolicy):
-        """重驗可變模型並保存獨立快照，原 policy 的後續修改不影響此引擎。"""
-        checked = ScenarioPolicy.model_validate(policy.model_dump(mode="json"))
+    def __init__(self, policy: DomainPolicy, *, domain: str | None = None,
+                 registry: DomainRegistry | None = None):
+        """選擇並核對領域，以該領域模型重驗快照，不讓政策變更或 registry 增補改變此選擇。"""
+        if domain is not None and domain != policy.domain:
+            raise ValueError("Selected domain does not match policy domain")
+        handler = (default_registry() if registry is None else registry).get(policy.domain)
+        checked = handler.policy_type.model_validate(policy.model_dump(mode="json"))
+        if checked.domain != policy.domain or checked.domain != handler.domain_id:
+            raise ValueError("Domain handler and policy model disagree")
+        self._domain_id = checked.domain
+        self._handler = handler
+        self._policy_type = handler.policy_type
         self._policy_json = checked.model_dump_json()
         self._policy_sha256 = _digest(checked.model_dump(mode="json"))
         self._seal_key = secrets.token_bytes(32)
@@ -119,9 +124,14 @@ class ScenarioEngine:
         """公開唯讀的真實政策摘要，避免外部賦值污染後續追溯記錄。"""
         return self._policy_sha256
 
-    def _policy(self) -> ScenarioPolicy:
-        """每次取得獨立模型，不向呼叫者暴露可修改的內部政策。"""
-        return ScenarioPolicy.model_validate_json(self._policy_json)
+    @property
+    def domain_id(self) -> str:
+        """唯讀選擇結果，避免執行中改用另一個領域解讀同一封套。"""
+        return self._domain_id
+
+    def _policy(self) -> DomainPolicy:
+        """以原選定領域模型取得獨立政策，保留該領域的欄位與驗證規則。"""
+        return self._policy_type.model_validate_json(self._policy_json)
 
     def _seal(self, payload: dict) -> str:
         """封存完整交接內容，避免 resolve 使用被篡改的 ID、scope 或期限。"""
@@ -172,21 +182,19 @@ class ScenarioEngine:
             if len(matching) != 1:
                 raise _Refusal("rule_not_unique", "多條同優先序規則命中，無法唯一選擇情境")
             rule = matching[0]
-            _check_contract(profile, operation, rule)
-            product_id = identity.path_parameters.get(rule.id_parameter)
-            if not product_id:
-                raise _Refusal("product_id_missing", "請求沒有政策指定的商品 ID")
-            if rule.id_decoding == "percent_decode_once":
-                product_id = unquote(product_id, errors="strict")
+            # 處理器只取得獨立副本，不可藉修改參數改寫已核對的請求或政策身份。
+            domain_context = self._handler.prepare(rule.model_copy(deep=True), identity.model_copy(deep=True),
+                                                   profile.model_copy(deep=True), json.loads(_encoded(operation)))
             scope = DatasetScope(site_id=identity.site_id, platform_id=identity.platform_id,
                                  platform_version=identity.platform_version, spec_sha256=identity.spec_sha256,
                                  scenario_id=rule.scenario_id, run_id=run_id)
-            payload = dict(policy_sha256=self.policy_sha256, rule_id=rule.rule_id, scope=scope.model_dump(),
+            payload = dict(domain=self.domain_id, policy_sha256=self.policy_sha256,
+                           rule_id=rule.rule_id, scope=scope.model_dump(),
                            request_id=request.request_id, request_fingerprint=fingerprint,
                            assessment_id=assessment.assessment_id, assessment_source=assessment.source_id,
                            environment_id=identity.environment_id, deployment_id=identity.deployment_id,
                            service_id=identity.service_id, operation_id=identity.operation_id,
-                           method=identity.method, path=identity.path, product_id=product_id,
+                           method=identity.method, path=identity.path, domain_context=domain_context,
                            valid_from=clock.isoformat(), valid_until=deadline.isoformat(),
                            offline_preview=allow_unreviewed or not profile.source.approved)
             # 用 JSON mode 統一 aware datetime 的表示，確保 prepare/resolve 封存完全相同內容。
@@ -200,50 +208,45 @@ class ScenarioEngine:
             return ScenarioPreparation(decision="unverifiable", errors=[ScenarioIssue(
                 code="preparation_failed", reason="無法可靠核對情境輸入，未產生計畫")])
 
-    def resolve(self, prepared: PreparedScenario, dataset: SyntheticDataset, *,
+    def resolve(self, prepared: PreparedScenario, dataset: object, *,
                 now: datetime | None = None) -> ScenarioDecision:
-        """依同一份已驗證 E 快照選 found／missing，產生 H 計畫但不修改商品或交易。"""
+        """驗證領域交接後由處理器檢查資料、選分支；核心不假設資料是電商商品。"""
         try:
             clock = _time(now)
             prepared = PreparedScenario.model_validate(prepared.model_dump(mode="python"))
             payload = prepared.model_dump(mode="json", exclude={"seal"})
-            if not hmac.compare_digest(prepared.seal, self._seal(payload)) or prepared.policy_sha256 != self.policy_sha256:
+            if (prepared.domain != self.domain_id or
+                    not hmac.compare_digest(prepared.seal, self._seal(payload)) or
+                    prepared.policy_sha256 != self.policy_sha256):
                 raise _Refusal("prepared_mismatch", "交接封套不是此引擎的原始選擇結果")
             if not prepared.valid_from <= clock < prepared.valid_until:
                 raise _Refusal("prepared_expired", "交接封套尚未生效或已過期")
             policy = self._policy()
             rule = next(rule for rule in policy.rules if rule.rule_id == prepared.rule_id)
-            checked = checked_dataset(dataset, dataset.config)
-            if checked.config.scope != prepared.scope:
-                raise _Refusal("dataset_scope", "E 資料與選定的情境、版本或 run 不符")
-            product_index = next((index for index, product in enumerate(checked.products)
-                                  if product.id == prepared.product_id), None)
-            outcome_id = "found" if product_index is not None else "missing"
-            outcome = rule.found if outcome_id == "found" else rule.missing
+            outcome = self._handler.resolve(policy.model_copy(deep=True), rule.model_copy(deep=True),
+                                             prepared.model_copy(deep=True), dataset)
+            outcome = DomainOutcome.model_validate(outcome.model_dump(mode="python"))
+            plan = outcome.composition_plan
+            if (plan.scope, plan.method, plan.path) != (prepared.scope, prepared.method, prepared.path):
+                raise _Refusal("domain_plan_mismatch", "領域處理器的計畫與選定的 scope 或操作不符")
             template = next(template for template in policy.templates if template.template_id == outcome.template_id)
-            bindings = [DataBinding(source_pointer=f"/products/{product_index}/{binding.source_field}",
-                                    target_pointer=binding.target_pointer) for binding in template.bindings]
-            plan = CompositionPlan(scope=prepared.scope, method=prepared.method, path=prepared.path,
-                                   status_code=outcome.status_code, media_type=outcome.media_type,
-                                   headers=template.headers, body=template.body, bindings=bindings)
-            state_digest = _digest(checked.model_dump(mode="json"))
-            trace = dict(policy_id=policy.policy_id, policy_version=policy.policy_version,
+            trace = dict(domain=self.domain_id, policy_id=policy.policy_id, policy_version=policy.policy_version,
                          policy_sha256=self.policy_sha256, rule_id=rule.rule_id,
                          preparation_id=prepared.preparation_id, request_id=prepared.request_id,
                          request_fingerprint=prepared.request_fingerprint,
                          assessment_id=prepared.assessment_id, assessment_source=prepared.assessment_source,
                          environment_id=prepared.environment_id, deployment_id=prepared.deployment_id,
                          service_id=prepared.service_id, scope=prepared.scope.model_dump(mode="json"),
-                         operation_id=prepared.operation_id, outcome_id=outcome_id,
-                         status_code=outcome.status_code, media_type=outcome.media_type,
+                         operation_id=prepared.operation_id, outcome_id=outcome.outcome_id,
+                         status_code=plan.status_code, media_type=plan.media_type,
                          template_id=template.template_id, template_sha256=_digest(template.model_dump(mode="json")),
-                         data_namespace=checked.namespace, state_sha256=state_digest,
-                         reason_code="product_exists" if outcome_id == "found" else "product_absent",
+                         data_namespace=outcome.data_namespace, state_sha256=outcome.state_sha256,
+                         reason_code=outcome.reason_code,
                          offline_preview=prepared.offline_preview)
             trace["decision_id"] = _digest(trace)
-            return ScenarioDecision(decision="selected", outcome_id=outcome_id, composition_plan=plan, trace=trace)
+            return ScenarioDecision(decision="selected", outcome_id=outcome.outcome_id, composition_plan=plan, trace=trace)
         except _Refusal as exc:
             return ScenarioDecision(decision="unverifiable", errors=[ScenarioIssue(code=exc.code, reason=exc.reason)])
         except Exception:
             return ScenarioDecision(decision="unverifiable", errors=[ScenarioIssue(
-                code="resolution_failed", reason="無法可靠驗證情境或 E 資料，未產生計畫")])
+                code="resolution_failed", reason="無法可靠驗證情境或領域資料，未產生計畫")])

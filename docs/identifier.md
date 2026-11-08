@@ -14,7 +14,7 @@ B 以明確部署設定識別 A 收到的請求，輸出唯一的站點、平台
 | query | 只接受 manifest 明列的已審組合，保留空值與重複值順序 |
 | 原始編碼 | 使用 A 的 `raw_url`，不使用已解碼 `path` 重新選路由；path parameters 保留 percent encoding |
 | 識別結果 | `identified` 或 `unverifiable`；不使用 I 的 response `pass`／`valid` 語意 |
-| 下游介面 | `identity.profile_arguments()` 提供 D 的精確查詢 keys；A→B 接入成功後回報 C 尚未實作 |
+| 下游介面 | `identity.profile_arguments()` 提供 D 的精確查詢 keys；A→B 可選 handler 尚未接上 C/M，成功仍回 501 |
 
 識別成功要求部署 binding 已 enabled、契約 manifest 已 approved、平台／版本／hash／base URL 一致、query 已審查，以及 operation 唯一。binding 的 enabled 不代表來源核准，B 也不會改寫來源、D Profile 或 I manifest。
 

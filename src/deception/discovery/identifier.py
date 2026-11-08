@@ -15,6 +15,7 @@ METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
 
 
 def _failure(code: str, reason: str, request_id: str | None = None) -> IdentificationResult:
+    """建立無法確認身份的結果，保留追蹤 ID 與固定錯誤分類供上層處理。"""
     return IdentificationResult(decision="unverifiable", request_id=request_id,
                                 errors=[IdentificationIssue(code=code, reason=reason)])
 
@@ -23,6 +24,7 @@ class PlatformIdentifier:
     """綁定到一份明確 registry 與設定快照，與 I 共用 URL／query／route 規則。"""
 
     def __init__(self, registry: PlatformRegistry, bindings: BindingConfig):
+        """綁定已載入契約並複製部署設定，避免外部修改原模型而影響後續識別。"""
         self.registry = registry
         # 避免呼叫者修改原 model 後悄悄變更這個 instance 的部署設定。
         self.bindings = BindingConfig.model_validate(bindings.model_dump(mode="json"))

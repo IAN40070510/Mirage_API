@@ -38,6 +38,7 @@ def source_package(root, *, folder="test", base="https://shop.test/api", approve
 
 
 def binding_for(manifest, **changes):
+    """由測試 manifest 建立明確部署綁定，並套用指定的身份或啟用狀態變更。"""
     values = {"binding_id": "shop-binding", "environment_id": "test-env", "deployment_id": "test-deploy",
               "service_id": "store", "site_id": "shop-test", "base_url": manifest["base_urls"][0],
               "platform_id": manifest["platform_id"], "platform_version": manifest["platform_version"],
@@ -47,15 +48,18 @@ def binding_for(manifest, **changes):
 
 
 def identifier(root, manifest, **changes):
+    """以臨時契約目錄及單一部署綁定建立供測試使用的 B 識別器。"""
     return PlatformIdentifier(PlatformRegistry(root), BindingConfig(bindings=[binding_for(manifest, **changes)]))
 
 
 def gate_request(url, method="GET"):
+    """建立固定合法商品回應，讓 I 核對指定 URL 與 HTTP 方法的契約。"""
     return GateRequest(request_url=url, request_method=method, status_code=200,
                        headers={"Content-Type": "application/json"}, body='{"id":"synthetic-product"}')
 
 
 def assert_failure(result, code):
+    """確認識別結果保持無法確認，並包含預期的首個機器可讀錯誤碼。"""
     assert result.decision == "unverifiable", result
     assert result.errors and result.errors[0].code == code, result
 
@@ -71,6 +75,7 @@ def normalized(url, *, headers=None):
 
 
 def test_identifies_explicit_deployment_and_same_operation_as_i(tmp_path):
+    """明確部署須產生完整操作身份，且 B 與 I 核對到同一份契約。"""
     manifest = source_package(tmp_path)
     result = identifier(tmp_path, manifest).identify("https://shop.test/api/products/prod-1", "GET")
     assert result.decision == "identified", result
@@ -95,6 +100,7 @@ def test_identifies_explicit_deployment_and_same_operation_as_i(tmp_path):
 @pytest.mark.parametrize("url", ["https://unknown.test/api/products/1", "https://shop.test/apix/products/1",
                                   "http://shop.test/api/products/1", "https://shop.test:443/api/products/1"])
 def test_binding_requires_exact_origin_and_prefix_boundary(tmp_path, url):
+    """origin、連接埠或 API 前綴邊界不符時，不得猜測另一份部署綁定。"""
     manifest = source_package(tmp_path)
     assert_failure(identifier(tmp_path, manifest).identify(url, "GET"), "binding_not_unique")
 
@@ -104,17 +110,21 @@ def test_binding_requires_exact_origin_and_prefix_boundary(tmp_path, url):
                                        ("https://shop.test/api/products/1", "HEAD"),
                                        ("https://shop.test/api/products/1/", "GET")])
 def test_unknown_route_method_and_trailing_slash_are_not_inferred(tmp_path, url, method):
+    """未知路徑、方法及額外尾斜線不能透過自動修正取得操作身份。"""
     manifest = source_package(tmp_path)
     assert_failure(identifier(tmp_path, manifest).identify(url, method), "operation_not_unique")
 
 
 def test_unsupported_method_is_explicit(tmp_path):
+    """未支援的 TRACE 方法須回明確錯誤，不進入契約路由推測。"""
     manifest = source_package(tmp_path)
     assert_failure(identifier(tmp_path, manifest).identify("https://shop.test/api/products/1", "TRACE"), "unsupported_method")
 
 
 def test_static_path_precedes_template_before_method_selection(tmp_path):
+    """靜態路徑先於動態模板選定，不能因方法不符而退回另一個操作。"""
     def change(spec):
+        """新增只接受 POST 的靜態搜尋操作，與既有商品明細模板形成競爭。"""
         response = copy.deepcopy(spec["paths"]["/products/{id}"]["get"]["responses"])
         spec["paths"]["/products/search"] = {"post": {"operationId": "searchProducts", "responses": response}}
 
@@ -131,12 +141,15 @@ def test_static_path_precedes_template_before_method_selection(tmp_path):
 
 
 def test_overlapping_dynamic_routes_are_rejected(tmp_path):
+    """同一實際路徑同時匹配兩個動態模板時，識別器須拒絕任選一個。"""
     def operation(name, parameter):
+        """建立含指定 path 參數名稱的 GET 操作，用來組成歧義路由。"""
         return {"get": {"operationId": name, "parameters": [
             {"name": parameter, "in": "path", "required": True, "schema": {"type": "string"}}],
             "responses": {"200": {"description": "test"}}}}
 
     def change(spec):
+        """新增會在 /a/fixed 同時命中的兩個動態路徑模板。"""
         spec["paths"]["/a/{id}"] = operation("getA", "id")
         spec["paths"]["/{kind}/fixed"] = operation("getFixed", "kind")
 
@@ -145,6 +158,7 @@ def test_overlapping_dynamic_routes_are_rejected(tmp_path):
 
 
 def test_query_preserves_duplicate_values_empty_values_and_reviewed_context(tmp_path):
+    """重複值、空值及值的順序須原樣保留，只有明列的 query 組合可使用。"""
     query = {"fields": ["id", "title"], "empty": [""]}
     manifest = source_package(tmp_path, contexts=[query])
     tool = identifier(tmp_path, manifest)
@@ -157,6 +171,7 @@ def test_query_preserves_duplicate_values_empty_values_and_reviewed_context(tmp_
 
 
 def test_percent_encoded_path_is_not_decoded_into_another_route(tmp_path):
+    """B 以原始編碼選路由，參數中的編碼斜線不得被解成額外路徑層級。"""
     manifest = source_package(tmp_path)
     request = normalized("https://shop.test/api/products/prod%2F1")
     assert request.path == "/api/products/prod/1"
@@ -171,11 +186,13 @@ def test_percent_encoded_path_is_not_decoded_into_another_route(tmp_path):
                                   "https://user@shop.test/api/products/1", "https://@shop.test/api/products/1",
                                   "https://shop.test/api/products/1#fragment", "/api/products/1"])
 def test_invalid_urls_fail_before_any_guess(tmp_path, url):
+    """非法 origin、帳密、fragment 或非完整 URL 必須在選契約前被拒絕。"""
     manifest = source_package(tmp_path)
     assert_failure(identifier(tmp_path, manifest).identify(url, "GET"), "invalid_url")
 
 
 def test_invalid_query_utf8_does_not_get_replaced_and_matched(tmp_path):
+    """無效 UTF-8 query 不可被替代字元改寫後誤匹配已審查組合。"""
     manifest = source_package(tmp_path, contexts=[{"q": ["\ufffd"]}])
     result = identifier(tmp_path, manifest).identify("https://shop.test/api/products/1?q=%FF", "GET")
     assert result.decision == "unverifiable"
@@ -183,6 +200,7 @@ def test_invalid_query_utf8_does_not_get_replaced_and_matched(tmp_path):
 
 
 def test_unreviewed_contract_and_disabled_binding_fail_closed(tmp_path):
+    """未審契約與停用綁定都須失敗關閉，不能因另一項設定有效而放行。"""
     manifest = source_package(tmp_path, approved=False)
     assert_failure(identifier(tmp_path, manifest).identify("https://shop.test/api/products/1", "GET"), "contract_not_approved")
     assert_failure(identifier(tmp_path, manifest, enabled=False).identify("https://shop.test/api/products/1", "GET"), "binding_disabled")
@@ -191,12 +209,14 @@ def test_unreviewed_contract_and_disabled_binding_fail_closed(tmp_path):
 @pytest.mark.parametrize("change", [{"platform_id": "other"}, {"platform_version": "2.0"},
                                      {"spec_sha256": "0" * 64}])
 def test_binding_contract_identity_must_match_exactly(tmp_path, change):
+    """部署綁定的平台、版本及規格摘要必須與已載入契約逐項相符。"""
     manifest = source_package(tmp_path)
     assert_failure(identifier(tmp_path, manifest, **change).identify("https://shop.test/api/products/1", "GET"),
                    "binding_contract_mismatch")
 
 
 def test_duplicate_bindings_are_ambiguous_even_if_one_is_disabled(tmp_path):
+    """重疊綁定即使其中一份停用，仍須回報歧義而非默默略過它。"""
     manifest = source_package(tmp_path)
     bindings = BindingConfig(bindings=[binding_for(manifest), binding_for(manifest, binding_id="other", enabled=False)])
     tool = PlatformIdentifier(PlatformRegistry(tmp_path), bindings)
@@ -204,6 +224,7 @@ def test_duplicate_bindings_are_ambiguous_even_if_one_is_disabled(tmp_path):
 
 
 def test_multiple_contract_versions_are_not_resolved_by_binding_preference(tmp_path):
+    """同一站點載入多個契約版本時，不能依部署偏好替 I 隱藏歧義。"""
     first = source_package(tmp_path, folder="first")
     source_package(tmp_path, folder="second", platform_version="2.0")
     tool = identifier(tmp_path, first)
@@ -211,12 +232,14 @@ def test_multiple_contract_versions_are_not_resolved_by_binding_preference(tmp_p
 
 
 def test_registry_overlapping_prefixes_are_not_resolved_by_longest_prefix(tmp_path):
+    """多份契約的 API 前綴同時命中時，不採最長前綴規則猜測來源。"""
     manifest = source_package(tmp_path, folder="api")
     source_package(tmp_path, folder="root", base="https://shop.test")
     assert_failure(identifier(tmp_path, manifest).identify("https://shop.test/api/products/1", "GET"), "site_not_unique")
 
 
 def test_trusted_runtime_context_can_select_environment_but_not_registry_version(tmp_path):
+    """伺服器提供的可信環境可縮小部署選擇，識別結果仍須遵守 registry 規則。"""
     manifest = source_package(tmp_path)
     bindings = BindingConfig(bindings=[binding_for(manifest), binding_for(
         manifest, binding_id="stage-binding", environment_id="stage-env", deployment_id="stage-deploy", site_id="stage-shop")])
@@ -231,6 +254,7 @@ def test_trusted_runtime_context_can_select_environment_but_not_registry_version
 
 
 def test_forwarded_and_claimed_platform_headers_do_not_override_runtime_binding(tmp_path):
+    """訪客自稱的轉送、平台及環境 headers 不得覆寫伺服器部署身份。"""
     manifest = source_package(tmp_path)
     request = normalized("https://shop.test/api/products/1", headers=(
         ("host", "shop.test"), ("forwarded", "host=other.test;proto=http"),
@@ -243,12 +267,14 @@ def test_forwarded_and_claimed_platform_headers_do_not_override_runtime_binding(
 
 
 def test_duplicate_host_headers_are_rejected(tmp_path):
+    """多個 Host header 無法建立唯一 origin，必須拒絕識別。"""
     manifest = source_package(tmp_path)
     request = normalized("https://shop.test/api/products/1", headers=(("host", "shop.test"), ("Host", "other.test")))
     assert_failure(identifier(tmp_path, manifest).identify_request(request), "ambiguous_host")
 
 
 def test_from_paths_reads_binding_config_without_mutating_files(tmp_path):
+    """從本地檔案建立識別器後仍能正確匹配，且不得改寫原綁定設定。"""
     manifest = source_package(tmp_path / "contracts")
     config = BindingConfig(bindings=[binding_for(manifest)])
     path = tmp_path / "bindings.yaml"
@@ -262,6 +288,7 @@ def test_from_paths_reads_binding_config_without_mutating_files(tmp_path):
 def test_percent_encoded_internal_path_item_reference_matches_in_b_and_i(tmp_path):
     """合法 URI fragment 先解碼再解析 Pointer，不可讓 I 在已載入規格上拋 KeyError。"""
     def change(spec):
+        """將商品 Path Item 改成含 URI 編碼片段的內部引用。"""
         item = copy.deepcopy(spec["paths"]["/products/{id}"])
         spec["components"] = {"pathItems": {"Product": item}}
         spec["paths"]["/products/{id}"] = {"$ref": "#/components/pathItems/%50roduct"}
@@ -289,6 +316,7 @@ def test_path_vendor_extension_is_not_loaded_as_a_route(tmp_path):
 def test_path_reference_cannot_hide_server_override_in_a_sibling(tmp_path, intermediate):
     """3.0 的合法引用不能讓原始或中間 Path Item 的 servers 覆寫被丟掉後放行。"""
     def change(spec):
+        """在原始或中間引用旁加入 servers，驗證覆寫不能於解引用時消失。"""
         spec["openapi"] = "3.0.3"
         target = copy.deepcopy(spec["paths"]["/products/{id}"])
         spec["x-path-items"] = {"Product": target}
@@ -355,6 +383,7 @@ def test_compound_segment_with_one_parameter_split_remains_supported(tmp_path):
 def test_exact_path_precedes_a_template_with_ambiguous_parameter_splits(tmp_path):
     """靜態 exact path 本來有唯一操作，其他動態路由的拆分歧義不應阻擋它。"""
     def change(spec):
+        """同時加入參數拆分歧義模板與可唯一匹配的靜態路徑。"""
         add_compound_operation(spec, "/combined/{first}{second}")
         responses = copy.deepcopy(spec["paths"]["/products/{id}"]["get"]["responses"])
         spec["paths"]["/combined/abcd"] = {"get": {"operationId": "getExact", "responses": responses}}
@@ -373,6 +402,7 @@ def test_exact_path_precedes_a_template_with_ambiguous_parameter_splits(tmp_path
 def test_exact_path_precedes_a_template_with_duplicate_parameter_names(tmp_path):
     """未選定動態路由中的重複參數名，不能阻擋已明確匹配的靜態操作。"""
     def change(spec):
+        """新增重複參數名的動態路由及明確靜態路由，檢查選擇優先序。"""
         dynamic = copy.deepcopy(spec["paths"]["/products/{id}"])
         dynamic["get"]["operationId"] = "getRepeated"
         spec["paths"]["/{id}/{id}"] = dynamic

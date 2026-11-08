@@ -46,6 +46,7 @@ class BindingConfig(StrictModel):
     @field_validator("schema_version", mode="before")
     @classmethod
     def check_version_type(cls, value):
+        """要求版本欄位確實是整數，拒絕 bool 等值被 Literal 隱含視為版本 1。"""
         if type(value) is not int:
             raise ValueError("schema_version must be an integer")
         return value

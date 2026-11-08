@@ -15,7 +15,9 @@ from deception.synthetic import DatasetScope, SyntheticConfig, generate_dataset
 from mirage_validator.gate import OfficialResponseGate, PlatformRegistry
 
 from .engine import ScenarioEngine, fingerprint_request
-from .models import AttackAssessment, ScenarioPolicy
+from .models import AttackAssessment
+from .domains.ecommerce import ScenarioPolicy
+from .registry import default_registry
 
 
 def _json_bytes(value) -> bytes:
@@ -51,7 +53,8 @@ def _policy(scope: DatasetScope) -> ScenarioPolicy:
                 found={"status_code": 200, "template_id": "found"},
                 missing={"status_code": 404, "template_id": "missing"})
     return ScenarioPolicy.model_validate(dict(
-        policy_id="offline-demo", policy_version="1", enabled=True, trusted_sources=["offline-demo-detector"],
+        domain="ecommerce", policy_id="offline-demo", policy_version="1", enabled=True,
+        trusted_sources=["offline-demo-detector"],
         rules=[rule], templates=[
             {"template_id": "found", "body": {"product": {"id": "", "title": ""}}, "bindings": [
                 {"source_field": "id", "target_pointer": "/product/id"},
@@ -67,8 +70,11 @@ def _request(product_id: str, sequence: int) -> NormalizedRequest:
                              query_string=b"", query=(), headers=(("host", "shop.invalid"),), body=b"")
 
 
-def run_demo(output_root: Path) -> Path:
-    """串接 B/D/E/F/H/I，驗證 200→404→200 及唯讀一致性，再原子保存報告。"""
+def run_demo(output_root: Path, *, domain: str) -> Path:
+    """明確選電商後串接 B/D/E/F/H/I，驗證 200→404→200 與唯讀一致性。"""
+    default_registry().get(domain)
+    if domain != "ecommerce":
+        raise ValueError("This synthetic product demo is available for ecommerce only")
     clock = datetime.now(timezone.utc)
     spec = _specification()
     raw = _json_bytes(spec)
@@ -81,7 +87,7 @@ def run_demo(output_root: Path) -> Path:
     dataset = generate_dataset(config)
     original_dataset = dataset.model_dump_json()
     policy = _policy(scope)
-    engine = ScenarioEngine(policy)
+    engine = ScenarioEngine(policy, domain=domain)
     runtime = RuntimeContext(environment_id="offline-demo", deployment_id="offline-demo", service_id="demo-store")
     results = []
     with TemporaryDirectory(prefix="mirage-f-synthetic-demo-") as temporary:
@@ -133,7 +139,7 @@ def run_demo(output_root: Path) -> Path:
                                 candidate=candidate.to_dict(), gate=validation.model_dump(mode="json")))
     if results[0]["candidate"]["body"] != results[2]["candidate"]["body"]:
         raise RuntimeError("Synthetic demo repeat lookup returned a different product")
-    report = dict(test_only=True, generated_at=clock.isoformat(), contract=spec, contract_source=source,
+    report = dict(test_only=True, domain=domain, generated_at=clock.isoformat(), contract=spec, contract_source=source,
                   scope=scope.model_dump(mode="json"), policy=policy.model_dump(mode="json"),
                   policy_sha256=engine.policy_sha256, dataset_config=config.model_dump(mode="json"),
                   dataset_namespace=dataset.namespace, state_sha256=results[0]["decision"]["trace"]["state_sha256"],

@@ -92,7 +92,7 @@ def scenario_stack(tmp_path):
                 product_id_target="/product/id",
                 found=dict(status_code=200, media_type="application/json", template_id="found"),
                 missing=dict(status_code=404, media_type="application/json", template_id="missing"))
-    policy_data = dict(schema_version=1, policy_id="test-policy", policy_version="1", enabled=True,
+    policy_data = dict(schema_version=1, domain="ecommerce", policy_id="test-policy", policy_version="1", enabled=True,
                        trusted_sources=["detector"], max_age_seconds=300, rules=[rule], templates=[
                            dict(template_id="found", headers={}, body={"product": {"id": "", "title": ""}},
                                 bindings=[dict(source_field="id", target_pointer="/product/id"),
@@ -125,7 +125,7 @@ def test_found_product_uses_its_actual_index_and_passes_h_i(scenario_stack, prod
     engine, preparation = prepare(stack, request=request, identified=identified)
     assert preparation.decision == "prepared", preparation
     assert preparation.prepared.scope == stack["scope"]
-    assert preparation.prepared.product_id == product.id
+    assert preparation.prepared.domain_context["product_id"] == product.id
     result = engine.resolve(preparation.prepared, dataset, now=NOW)
     assert result.decision == "selected" and result.outcome_id == "found", result
     assert result.composition_plan.status_code == 200
@@ -331,7 +331,7 @@ def test_tied_priorities_in_other_sites_do_not_make_matching_rule_ambiguous(scen
 
 
 @pytest.mark.parametrize("changes", [
-    {"product_id": "prod-missing"}, {"rule_id": "other-rule"}, {"request_id": "other-request"},
+    {"domain_context": {"product_id": "prod-missing"}}, {"rule_id": "other-rule"}, {"request_id": "other-request"},
     {"seal": "0" * 64},
 ])
 def test_tampered_preparation_cannot_resolve(scenario_stack, changes):
@@ -454,7 +454,7 @@ def test_percent_decoding_does_not_decode_twice(scenario_stack):
     policy_data["rules"][0]["id_decoding"] = "percent_decode_once"
     engine, preparation = prepare(stack, request=request, identified=identified, policy_data=policy_data)
     assert preparation.decision == "prepared", preparation
-    assert preparation.prepared.product_id != product_id
+    assert preparation.prepared.domain_context["product_id"] != product_id
     result = engine.resolve(preparation.prepared, stack["dataset"], now=NOW)
     assert result.decision == "selected" and result.outcome_id == "missing", result
 

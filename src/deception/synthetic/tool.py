@@ -11,6 +11,7 @@ class SyntheticTool:
 
     def __init__(self, dataset: SyntheticDataset, *, expected_scope: DatasetScope,
                  profile: OperationContext | None = None):
+        """驗證 E 重建結果及預期隔離身份，選擇性核對 D 契約後建立私有查詢索引。"""
         checked = checked_dataset(dataset, dataset.config)
         if checked.config.scope != expected_scope:
             raise SyntheticError("Dataset scope does not match expected scope")

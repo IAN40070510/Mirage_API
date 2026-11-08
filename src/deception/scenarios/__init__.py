@@ -1,10 +1,13 @@
-"""F：可信判定與固定政策 → 情境 family → E 事實 → H 組合計畫。"""
+"""F：選擇領域 → 可信判定與政策 → 情境 family → 領域資料 → H 計畫。"""
 
 from .engine import ScenarioEngine, fingerprint_request, load_policy
-from .models import (AttackAssessment, OutcomeDefinition, PreparedScenario, ResponseTemplate,
-                     ScenarioDecision, ScenarioPolicy, ScenarioPreparation, ScenarioRule,
-                     TemplateBinding)
+from .models import (AttackAssessment, DomainOutcome, DomainPolicy, PreparedScenario,
+                     ResponseTemplateBase, ScenarioDecision, ScenarioPreparation, ScenarioRuleBase)
+from .domains.ecommerce import (OutcomeDefinition, ResponseTemplate, ScenarioPolicy,
+                                ScenarioRule, TemplateBinding)
+from .registry import DomainRegistry, ScenarioDomain, default_registry
 
-__all__ = ["AttackAssessment", "OutcomeDefinition", "PreparedScenario", "ResponseTemplate",
+__all__ = ["AttackAssessment", "DomainOutcome", "DomainPolicy", "DomainRegistry", "OutcomeDefinition",
+           "PreparedScenario", "ResponseTemplate", "ResponseTemplateBase", "ScenarioDomain",
            "ScenarioDecision", "ScenarioEngine", "ScenarioPolicy", "ScenarioPreparation",
-           "ScenarioRule", "TemplateBinding", "fingerprint_request", "load_policy"]
+           "ScenarioRule", "ScenarioRuleBase", "TemplateBinding", "default_registry", "fingerprint_request", "load_policy"]

@@ -10,7 +10,7 @@ $env:PYTHONPATH = "$PWD/src"
 curl.exe -i "http://127.0.0.1:8001/store/products/prod_synthetic_001?fields=id&fields=title" -H "X-Request-ID: demo-001"
 ```
 
-B 平台識別器與 C 生成協調器尚未實作，預設回 **501**，不是商品回應或契約驗證通過：
+B 與 C 已各自實作，但原始入口的預設 handler 尚未接完整生成及回送流程，因此仍回 **501**，不是商品回應或契約驗證通過：
 
 ```json
 {
@@ -42,6 +42,16 @@ B 平台識別器與 C 生成協調器尚未實作，預設回 **501**，不是�
 
 ## 接上後續處理
 
-`create_app(handler=...)` 接受 `async (NormalizedRequest) -> Response`，入口先完成標準化，再呼叫 handler，並附上同一追蹤 ID。預設 handler 只回報 501。現在可透過 `deception.api.identified:create_app --factory` 接上 B，詳見 [B 使用方式](identifier.md)；識別成功後仍待 C。完整 handler 仍需 C／M 與 H／I 的串接，必須在候選回應通過 gate 後才渲染；此介面本身不構成驗證或放行。
+`create_app(handler=...)` 接受 `async (NormalizedRequest) -> Response`，入口先完成標準化，再呼叫 handler，並附上同一追蹤 ID。預設 handler 只回報 501。現在可透過 `deception.api.identified:create_app --factory` 接上 B，詳見 [B 使用方式](identifier.md)；該可選 handler 識別成功後尚未調用 C/M。C 已有 [內部生成流程](orchestration.md)，正式 handler 仍須接上 M，並確保最終 headers 與驗證候選一致；此介面本身不構成驗證或放行。
 
 實作使用 [FastAPI Request 介面](https://fastapi.tiangolo.com/advanced/using-request-directly/) 讀取 HTTP 資料；這些原始輸入不會自動進行 Pydantic body 驗證。
+
+## 驗證與套件授權
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_ingress.py tests/test_identifier_integration.py -q
+```
+
+涵蓋原始 URL／body、重複 query／headers、追蹤 ID、串流大小限制、方法與 path、不回顯憑證及可選 A→B 交接。這些測試不表示 M 或整個正式 HTTP 生成流程已接上。
+
+A 使用 [FastAPI（MIT）](https://github.com/fastapi/fastapi/blob/master/LICENSE)，其 Request／Response 基礎來自 [Starlette（BSD-3-Clause）](https://github.com/Kludex/starlette/blob/main/LICENSE.md)；標準庫 `dataclasses`、`uuid` 等隨 Python 的 PSF 授權及聲明管理。測試使用 pytest（MIT）與 HTTPX（BSD-3-Clause）。完整套件與間接依賴、分發聲明見 [共用授權說明](orchestration.md#套件模型與資料授權) 及 [專案授權清單](../README.md#開源軟體模型與資料授權)。

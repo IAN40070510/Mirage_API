@@ -84,6 +84,7 @@ def source_package(root, *, version="3.1.0", approved=False, spec_change=None, s
 
 
 def operation_context(output, profile, **changes):
+    """以測試 Profile 的精確身份查詢商品操作，允許個別案例覆寫查詢條件。"""
     options = {
         "platform_id": "synthetic",
         "platform_version": "1.2.3",
@@ -98,6 +99,7 @@ def operation_context(output, profile, **changes):
 
 @pytest.mark.parametrize("version", ["3.0.3", "3.1.0"])
 def test_build_preserves_contract_and_source_bytes(tmp_path, version):
+    """確認不同 OpenAPI 版本的操作摘要、來源身份與原始規格快照均完整保留。"""
     source, data, spec = source_package(tmp_path / "source", version=version)
     output = tmp_path / "generated"
     profile = build_profile(source, output)
@@ -123,6 +125,7 @@ def test_build_preserves_contract_and_source_bytes(tmp_path, version):
 
 
 def test_parameter_override_and_security_inheritance(tmp_path):
+    """確認操作參數覆寫 path 參數，並正確繼承或清空來源定義的安全需求。"""
     source, _, spec = source_package(tmp_path / "source")
     output = tmp_path / "generated"
     profile = build_profile(source, output)
@@ -139,7 +142,9 @@ def test_parameter_override_and_security_inheritance(tmp_path):
 
 
 def test_boolean_and_recursive_schemas_are_preserved(tmp_path):
+    """確認布林與遞迴 schema 原樣保留，擷取 Profile 時不展開或改寫引用。"""
     def change(spec):
+        """在遞迴商品 schema 加入 true／false 欄位以驗證原始結構保存。"""
         spec["components"]["schemas"]["Product"]["properties"].update({"allowed": True, "forbidden": False})
 
     source, _, spec = source_package(tmp_path / "source", spec_change=change)
@@ -153,6 +158,7 @@ def test_boolean_and_recursive_schemas_are_preserved(tmp_path):
 
 
 def test_unreviewed_profile_requires_explicit_preview(tmp_path):
+    """確認未審來源預設不可查詢，顯式預覽也不會提升 approved 狀態。"""
     source, _, _ = source_package(tmp_path / "source")
     output = tmp_path / "generated"
     profile = build_profile(source, output)
@@ -162,6 +168,7 @@ def test_unreviewed_profile_requires_explicit_preview(tmp_path):
 
 
 def test_explicitly_reviewed_source_can_be_queried(tmp_path):
+    """確認已明確審查的來源可在一般查詢模式下取得操作。"""
     source, _, _ = source_package(tmp_path / "source", approved=True)
     output = tmp_path / "generated"
     profile = build_profile(source, output)
@@ -175,6 +182,7 @@ def test_explicitly_reviewed_source_can_be_queried(tmp_path):
     {"path": "/products/actual-id"},
 ])
 def test_lookup_requires_exact_identity_and_operation(tmp_path, changes):
+    """確認版本、hash、方法或 path template 不符時拒絕跨身份查詢。"""
     source, _, _ = source_package(tmp_path / "source")
     output = tmp_path / "generated"
     profile = build_profile(source, output)
@@ -183,6 +191,7 @@ def test_lookup_requires_exact_identity_and_operation(tmp_path, changes):
 
 
 def test_hash_mismatch_is_rejected_before_output(tmp_path):
+    """確認來源宣告摘要與規格 bytes 不符時，不發布任何 Profile 產物。"""
     source, _, _ = source_package(tmp_path / "source", source_change={"spec_sha256": "0" * 64})
     output = tmp_path / "generated"
     with pytest.raises(ProfileError):
@@ -192,7 +201,9 @@ def test_hash_mismatch_is_rejected_before_output(tmp_path):
 
 @pytest.mark.parametrize("reference", ["https://example.org/schema.json", "#/components/schemas/Missing"])
 def test_external_and_unresolved_references_are_rejected(tmp_path, reference):
+    """確認建置拒絕外部或不存在的引用，不以下載或猜測補足契約。"""
     def change(spec):
+        """將商品回應改為指定的外部或無法解析引用，建立拒絕案例。"""
         spec["paths"]["/products/{id}"]["get"]["responses"]["200"]["content"]["application/json"]["schema"] = {
             "$ref": reference
         }
@@ -203,6 +214,7 @@ def test_external_and_unresolved_references_are_rejected(tmp_path, reference):
 
 
 def test_source_file_cannot_escape_source_directory(tmp_path):
+    """確認 openapi_file 不可經父目錄路徑讀取來源目錄外的檔案。"""
     source, data, _ = source_package(tmp_path / "source", source_change={"openapi_file": "../outside.yaml"})
     (tmp_path / "outside.yaml").write_bytes(data)
     with pytest.raises(ProfileError):
@@ -211,6 +223,7 @@ def test_source_file_cannot_escape_source_directory(tmp_path):
 
 @pytest.mark.parametrize("artifact", ["profile", "specification"])
 def test_corrupted_generated_artifacts_are_rejected(tmp_path, artifact):
+    """確認 Profile 或原始規格快照遭破壞後，查詢會重新驗證並拒絕使用。"""
     source, _, _ = source_package(tmp_path / "source")
     output = tmp_path / "generated"
     profile = build_profile(source, output)
@@ -224,6 +237,7 @@ def test_corrupted_generated_artifacts_are_rejected(tmp_path, artifact):
 
 
 def test_rebuilding_same_identity_is_deterministic(tmp_path):
+    """確認相同來源重建得到相同模型與 Profile bytes，不引入不穩定產物。"""
     source, _, _ = source_package(tmp_path / "source")
     output = tmp_path / "generated"
     first = build_profile(source, output)
@@ -235,6 +249,7 @@ def test_rebuilding_same_identity_is_deterministic(tmp_path):
 
 @pytest.mark.parametrize("change", ["version", "specification"])
 def test_different_identity_cannot_silently_replace_profile(tmp_path, change):
+    """確認同一輸出位置不可被不同版本或規格靜默覆寫，既有產物保持原值。"""
     source, _, _ = source_package(tmp_path / "source")
     output = tmp_path / "generated"
     build_profile(source, output)
@@ -250,7 +265,9 @@ def test_different_identity_cannot_silently_replace_profile(tmp_path, change):
 
 @pytest.mark.parametrize("version", ["3.0.3", "3.1.0"])
 def test_reference_objects_resolve_without_expanding_schemas(tmp_path, version):
+    """確認參數、header、回應及 requestBody 引用可解析，而 schema 引用仍維持原樣。"""
     def change(spec):
+        """將內嵌契約物件移至 components 並建立引用，涵蓋各類 Reference Object。"""
         components = spec["components"]
         item = spec["paths"]["/products/{id}"]
         components["parameters"] = {"ProductId": item["parameters"][0]}
@@ -279,7 +296,9 @@ def test_reference_objects_resolve_without_expanding_schemas(tmp_path, version):
 
 
 def test_false_schema_is_a_present_contract(tmp_path):
+    """確認 false 是存在且禁止所有值的 schema，不會被誤報為缺少契約。"""
     def change(spec):
+        """把商品成功回應設為 literal false，建立布林 schema 測試輸入。"""
         spec["paths"]["/products/{id}"]["get"]["responses"]["200"]["content"]["application/json"]["schema"] = False
 
     source, _, _ = source_package(tmp_path / "source", spec_change=change)
@@ -292,6 +311,7 @@ def test_false_schema_is_a_present_contract(tmp_path):
 
 @pytest.mark.parametrize("artifact", ["source", "specification"])
 def test_duplicate_yaml_keys_cannot_replace_source_or_contract(tmp_path, artifact):
+    """確認來源設定或規格出現重複 YAML key 時拒絕載入，即使摘要已同步更新。"""
     source, data, _ = source_package(tmp_path / "source")
     if artifact == "source":
         source.write_bytes(source.read_bytes() + b"\napproved: true\n")
@@ -307,6 +327,7 @@ def test_duplicate_yaml_keys_cannot_replace_source_or_contract(tmp_path, artifac
 
 
 def test_validly_typed_but_modified_operation_is_rejected(tmp_path):
+    """確認型別仍合法的操作摘要篡改也會因與原始快照不符而被拒絕。"""
     source, _, _ = source_package(tmp_path / "source")
     output = tmp_path / "generated"
     profile = build_profile(source, output)
@@ -319,7 +340,9 @@ def test_validly_typed_but_modified_operation_is_rejected(tmp_path):
 
 
 def test_path_item_reference_points_to_existing_operation(tmp_path):
+    """確認 Path Item 引用產生可解析的操作 Pointer，paths 擴充欄位不當作 API。"""
     def change(spec):
+        """將商品 Path Item 移至 components，並加入不代表操作的 paths 擴充欄位。"""
         item = spec["paths"].pop("/products/{id}")
         spec["components"]["pathItems"] = {"ProductPath": item}
         spec["paths"]["/products/{id}"] = {"$ref": "#/components/pathItems/ProductPath"}

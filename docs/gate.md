@@ -2,7 +2,7 @@
 
 `POST /v1/validate` 改用網站綁定的 OpenAPI 驗證。原示意契約只供 `/v1/poc/validate` 使用，不能作正式放行依據。這是輸入格式的破壞性變更。
 
-**目前尚無已認證的 WooCommerce／Medusa 官方契約，也沒有官方服務的對照測試；預設不放行任何網站。** 目前已收錄使用者提供的 Medusa Store／Auth 規格子集，但來源版本與部署尚未核實，因此仍未啟用；詳見 inputs/platforms/medusa/README.md。單元測試規格是自建資料。不能把通過這些測試當作官方相容性證據。
+**目前沒有完成部署審查的 WooCommerce／Medusa 契約，也沒有實際官方服務的對照測試；預設不放行任何網站。** Medusa Store／Auth 子集已固定官方來源 commit，D/I 使用相同 bytes，但部署、origin 與行為對照尚未核實，仍維持未審查；詳見 [來源狀態](../inputs/platforms/medusa/README.md)。合成規格測試與固定來源離線回歸均不等於真實部署的官方相容性證據。
 
 `pass` 只證明符合已載入契約描述的規則。要聲稱與官方實際回應完全一致，仍須有精確版本、部署環境、可重現測試資料及官方服務對照測試。若官方規格缺少動態欄位、外掛、授權、headers 或業務規則，單靠 OpenAPI 套件不能補足保證。
 
@@ -88,4 +88,8 @@ Medusa 的 [Store API 文件](https://docs.medusajs.com/api/store) 提供 OpenAP
 
 目前只支援 JSON body 與單值 headers 字典；無 body schema 的回應（包括尚未實作的 204／HEAD 情境）、非 JSON、未審查 query 組合、未知或重複網站匹配都不放行。不支援自動爬站推導規格、完整業務語意、多值 HTTP headers 或官方執行環境對照。
 
-只實作驗證所需目錄，不建立尚無行為的 orchestrator、LLM、scenarios、synthetic 等模組。
+I 可獨立作為驗證工具，也已由 C/H 內部流程調用；生成及情境工具各有獨立模組，見 [工具文件索引](README.md)。I 本身不生成內容、修改候選或更新互動狀態。
+
+## 套件授權
+
+I 重用 [openapi-core 0.19.5（BSD-3-Clause）](https://github.com/python-openapi/openapi-core/blob/0.19.5/LICENSE)、[Pydantic（MIT）](https://github.com/pydantic/pydantic/blob/main/LICENSE)、[PyYAML（MIT）](https://github.com/yaml/pyyaml/blob/6.0.3/LICENSE) 與 [Werkzeug（BSD-3-Clause）](https://github.com/pallets/werkzeug/blob/3.1.1/LICENSE.txt)；HTTP API 使用 FastAPI（MIT）。標準庫隨 Python 的 PSF 授權及聲明管理。主要 schema／OpenAPI 間接依賴、測試套件及分發要求見 [H 套件表](composer.md#使用的套件與授權) 與 [專案授權清單](../README.md#開源軟體模型與資料授權)。來源規格的權利與實際部署核准另行管理。

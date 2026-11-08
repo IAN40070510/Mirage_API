@@ -2,6 +2,8 @@
 
 **跨環境、跨框架、可擴充的 API 誘餌回應生成平台。**
 
+各工具的用途、輸入輸出、用法、驗證及授權集中在 [工具文件索引](docs/README.md)。新增或修改函式須同步維護功能 docstring，規範與檢查方式見 [文件維護說明](docs/documentation.md)。
+
 Mirage_API 的製作目標是整合不同部署環境的 HTTP 流量入口，接收外部系統提供的攻擊判定結果，依目標 Web 服務的 API 契約、虛構資料及互動狀態，使用本地 LLM 動態生成誘餌回應，並在驗證後輸出符合原服務契約的 HTTP Response。多個部署環境及其設定由集中管理能力統一維護。
 
 電商是初期驗證案例，範圍包含 Medusa（測試目標 `v2.22.4`）與 WooCommerce；整體平台的設計目標涵蓋其他 Web 服務、應用框架與部署方式。F 以 `domain: ecommerce` 選擇電商領域；此處的「Platform」表示該領域下的目標服務及其契約、版本與部署設定。領域可透過型別化政策及處理器擴充，目前內建可用領域只有電商。
@@ -22,17 +24,17 @@ Mirage_API 的製作目標是整合不同部署環境的 HTTP 流量入口，接
 | --- | --- | --- |
 | 多環境流量攔截整合 | A：FastAPI HTTP 入口；B：明確環境／部署綁定識別及可選 A→B 接入 | 各環境流量攔截／轉送接入、可信代理與統一轉接介面 |
 | 外部攻擊判定接收 | A 保留 request ID；F 已有判定模型、時效／請求關聯及情境選擇 | 判定接收器、來源認證與完整流程串接 |
-| 依多服務契約生成 | B：唯一契約與操作識別；D：固定 OpenAPI 的 Profile；H：候選組合；I：契約驗證 | C/G 生成、完整流程串接、更多服務對映 |
+| 依多服務契約生成 | B/D：固定身份與契約；C/G/J：受控本機模型生成流程；H/I：候選組合與驗證 | 正式 HTTP 主流程、更多服務與生成欄位對映 |
 | 跨 API 虛構資料與互動狀態 | E：可重現、可查詢的商品／變體資料與關聯 | 跨請求狀態更新、寫入操作、互動／session 隔離與並行一致性 |
-| 本地 LLM 動態生成 | 圖中的 C、G、P 與其資料邊界已規劃 | Ollama 整合、模型選定、工具調用與生成流程 |
+| 本地 LLM 動態生成 | C 自家控制流程、Pydantic AI 受控工具規劃、G 本機 Ollama 結構生成與衍生內容快取 | 更多真實樣本、模型品質與效能評估，及入口／輸出完整串接 |
 | 契約一致的 HTTP 輸出 | H：候選組合及契約 preflight；I：獨立驗證 API | M、修正／備援，以及入口到輸出的完整串接 |
 | 多環境集中管理 | 本地來源／生成設定、B 部署 binding 與可信 runtime context | 集中設定儲存、管理介面、版本發布與代理整合 |
 
-目前 A、B、D、E、F、H、I 可各自使用，也有可選的 A→B 入口；B 識別成功後仍回 `501 orchestrator_not_implemented`，因 C 尚未接上。原始 A 入口預設仍回 `501 pipeline_not_implemented`。F 可明確選擇電商領域，再依同一 E 快照選商品存在／不存在分支，交給 H 組合，再由 I 驗證；共用引擎與領域處理器已分開，尚未接上正式 HTTP 主流程或圖形選擇介面。現有 E 是可查詢的固定資料快照，尚不提供互動造成的狀態更新。本文所有「規劃」格式只定義預期介面，不能當作現有 API 使用。
+目前 A、B、C、D、E、F、G、H、I 可各自使用；C/J 已把固定身份、情境、資料與 G 生成串成需經 H/I 驗證的內部流程。可選 A→B handler 尚未自動接 C/M，因此 B 識別成功後仍回 `501 orchestrator_not_implemented`；原始 A 入口預設仍回 `501 pipeline_not_implemented`。F 以 `domain: ecommerce` 選電商，C/G 沿用同一領域與資料快照；正式 HTTP 回送、外部判定接收器、圖形選擇介面及交易狀態更新尚未完成。現有 E 仍是可查詢的固定資料快照。本文所有「規劃」格式只定義預期介面，不能當作現有 API 使用。
 
 ## 系統架構與整合邊界
 
-下圖保留 A–O 的生成與驗證主流程，補上環境流量整合、外部攻擊判定及集中設定管理。新增的整合能力均為規劃；虛線表示設定供給。
+下圖保留 A–O 的生成與驗證主流程，補上環境流量整合、外部攻擊判定及集中設定管理。C/G/J 已提供內部生成流程；環境流量整合、判定接收器、集中設定及 M 對外輸出仍為規劃。虛線表示設定供給。
 
 ```mermaid
 flowchart TB
@@ -87,20 +89,20 @@ flowchart TB
 
 | 節點 | 輸入 → 職責 → 輸出 | 狀態 |
 | --- | --- | --- |
-| A HTTP API 請求 | method、URL、headers、body → 保留原始 URL、query、追蹤 ID 的標準化請求；未來由環境轉接層提供部署上下文 | **已實作**：`deception.api.app:app`；保留重複 query／headers 與 body bytes，尚未接上 B/C，預設回 501 |
+| A HTTP API 請求 | method、URL、headers、body → 保留原始 URL、query、追蹤 ID 的標準化請求；未來由環境轉接層提供部署上下文 | **已實作**：`deception.api.app:app` 預設回 501，另有可選 A→B handler；完整 C/M HTTP 串接待完成 |
 | B 平台識別器 | 環境／部署／服務綁定、origin、API 前綴、method、path、版本 → 唯一平台與 operation；不明時拒絕猜測 | **已實作**：`src/deception/discovery/`；與 I 共用匹配器，可接 A／D；代理整合與集中設定管理尚未實作 |
-| C 任務協調器與 P Ollama | 識別結果、外部攻擊判定、生成策略 → 向 D–G 取材、限制 LLM 工具與輪次、指示 H；Ollama 提供本地推論 | 未實作；未選定模型 |
-| D 平台 Profile 工具 | 固定來源與 OpenAPI → 可追溯的操作、參數、狀態碼、媒體類型、schema 上下文 | **已實作**：`src/deception/profile_builder/`；提供 CLI 建立及 Python 查詢，尚未接上 C；不推測平台慣例 |
+| C 任務協調器與 P Ollama | 可信請求、外部判定、生成政策 → 強制 B/D/E/F 檢查、受限工具規劃、G 生成、H/I 驗證 | **已實作**：`src/deception/core/orchestrator.py` 與 `src/deception/llm/`；Pydantic AI＋固定本機 Ollama 身份，共用預算與期限；尚未接正式 HTTP 輸出，見 [C/G 說明](docs/orchestration.md) |
+| D 平台 Profile 工具 | 固定來源與 OpenAPI → 可追溯的操作、參數、狀態碼、媒體類型、schema 上下文 | **已實作**：`src/deception/profile_builder/`；提供 CLI 建立及 Python 查詢，C 依精確身份調用；不推測平台慣例 |
 | E 合成資料工具 | 種子、隔離身份、資料規則 → 跨操作可引用的虛構實體；未來維護互動造成的狀態變更 | **已實作**：`src/deception/synthetic/` 的商品／變體生成、保存、驗證與只讀查詢；顧客、訂單及互動狀態更新尚未實作 |
 | F 安全情境工具 | 領域政策、可信整合層的判定、白名單與 B/D → 固定 family；領域處理器再依資料選分支與 H 計畫 | **已實作**：`src/deception/scenarios/`；可選 `ecommerce`，提供 GET 商品 200／404、可追溯決策及交接完整性；領域可註冊擴充，尚無其他真實領域資料，不偵測攻擊或更新交易狀態，詳見 [F 功能、驗證與授權](docs/scenarios.md) |
-| G 內容生成工具 | Profile、合成資料、情境、模型提示 → 動態文字與欄位候選 | 未實作 |
-| J Generation Context | D–G 的資料及來源 → 交回 C，記錄環境／部署／服務身份、判定關聯、契約版本、種子、情境及狀態版本 | 未實作 |
-| H 回應組合工具 | 明確指令、D 契約、可選 E 映射 → status、headers、已序列化 body | **已實作**：`src/deception/core/`；UTF-8 JSON、嚴格 metadata 與契約 preflight，產物仍需 I 驗證；C/J 尚未串接 |
+| G 內容生成工具 | 固定欄位 schema、唯讀事實與情境 → 允許欄位的動態 JSON 片段 | **已實作**：`src/deception/generation/`；保護 E 映射與政策欄位，內容經 H/I 後發布至獨立快取 |
+| J Generation Context | 工具結果 → 固定領域、請求指紋、部署／契約／資料摘要、情境及政策／模型版本 | **已實作**：`deception.generation.GenerationContext`，由 C 建立與綁定，不包含原始憑證 |
+| H 回應組合工具 | 明確指令、D 契約、可選 E 映射 → status、headers、已序列化 body | **已實作**：`src/deception/core/`；已接 C/J 內部流程，UTF-8 JSON、嚴格 metadata 與契約 preflight，產物仍需 I 驗證 |
 | I 格式驗證工具 | 候選 status、headers、body 及原請求 URL／method → `pass`、`reject` 或 `unverifiable` 與錯誤 | **已實作** |
-| N 修正或備援 | 驗證錯誤 → 有上限的重新組合；耗盡後用同一契約已驗證的備援 | 未實作；現有驗證器不修正、不重試、不提供備援 |
+| N 修正或備援 | 驗證錯誤 → 有上限的重新組合；耗盡後用同一契約已驗證的備援 | C/G 已有受限欄位的有限重新生成；通用 N 規則修正及備援模板尚未實作，I 本身仍不修正或重試 |
 | M HTTP Response Renderer | 僅接收 `pass` 且 `valid=true` 的同一份回應 → HTTP status、headers、body | 未實作 |
 
-A → B → C；C 關聯外部攻擊判定，分別調用 D/E/F/G，匯成 J，再指示 H 建立 K；I 驗證 K。`reject` 可按錯誤碼做**固定上限**的修正，每次重新驗證。`unverifiable` 表示缺少可信契約或情境，不應由 LLM 補出規格。備援也必須通過 I，否則失敗關閉。重試上限、超時和對外失敗狀態碼仍待設計。通過後 M 必須渲染**完全相同**的 body、status、headers，不得再改動。
+A → B → C；C 關聯外部攻擊判定，分別調用 D/E/F/G，匯成 J，再指示 H 建立 K；I 驗證 K。C/G 對欄位或組合失敗使用**固定上限**的重新生成及共用總期限，每次重新驗證；I 未通過時保持失敗。`unverifiable` 表示缺少可信契約或情境，不應由 LLM 補出規格。通用備援及正式對外失敗狀態仍待設計；備援也必須通過 I。通過後 M 必須渲染**完全相同**的 body、status、headers，不得再改動。
 
 規劃中的跨 API 互動應共用明確的虛構實體與狀態版本。例如建立一筆虛構資源後，列表與明細 API 應能讀到相同 ID 與欄位，後續更新及刪除也應反映在同一互動中。狀態寫入需配合契約驗證、並行控制與重試去重，避免修正一次回應就重複建立資源；目前尚無這類狀態寫入流程。
 
@@ -115,7 +117,7 @@ A → B → C；C 關聯外部攻擊判定，分別調用 D/E/F/G，匯成 J，�
 | Platform Profile | 服務版本、契約來源、operation 摘要及生成上下文 | D 已建立 `generated/profiles/`；完整服務慣例與回應對映仍待擴充 |
 | Scenario Configuration | 領域、情境白名單、適用操作及外部判定的情境選擇規則 | F 讀取 `inputs/policies/deception.yaml` 格式，必填 `domain: ecommerce`；現有 `inputs/scenarios/` 草稿不自動載入 |
 | Synthetic State | 跨 API 共用的虛構實體、關聯與互動狀態 | E 已有商品／變體快照；狀態更新尚未實作 |
-| Generation Policy | 模型、工具權限、生成限制、修正上限與備援策略 | 策略草稿未串接；`configs/generation.yaml` 目前只管理 E 的資料生成規則 |
+| Generation Policy | 模型、工具權限、可生成欄位、保護位置及共用預算 | C/G 讀取 `inputs/policies/generation.yaml` 格式與 `configs/llm.yaml`；`configs/generation.yaml` 只管理 E 資料規則，通用備援待實作 |
 | 外部攻擊判定 | 與請求關聯的攻擊標籤、來源與判定依據 | F 已有嚴格模型與關聯檢查；接收及來源認證介面待實作 |
 | 部署與環境設定 | 環境／部署／服務綁定及本次使用的設定版本 | 本地設定可供個別工具使用；集中管理待實作 |
 
@@ -130,13 +132,17 @@ Mirage_API/
 ├─ src/deception/synthetic/         # E：合成商品、變體、資料關聯與有效性驗證
 ├─ src/deception/scenarios/         # F：共用引擎、領域註冊、情境與 H 計畫
 │  └─ domains/ecommerce.py          # 電商政策、商品規則及 prepare／resolve 處理器
-├─ src/deception/core/              # H：明確模板、E 映射與候選回應組合
+├─ src/deception/core/              # C：強制協調流程；H：候選回應組合與交接
+├─ src/deception/generation/        # G/J：生成白名單、固定上下文與已驗證內容快取
+├─ src/deception/llm/               # Pydantic AI、本機 Ollama 設定及共用預算
+├─ configs/llm.yaml                 # C/G：本機模型名稱、完整 digest 與輸出限制
 ├─ configs/generation.yaml          # E：隔離身份、種子、數量與生成規則
 ├─ configs/composition.yaml         # H：明確狀態、headers、body 與映射指令
 ├─ configs/bindings.yaml            # B：環境／部署／站點與固定契約綁定
 ├─ inputs/sources/                  # D：source.yaml 與固定 OpenAPI 輸入
 ├─ inputs/policies/deception.yaml    # F：停用的部署／情境政策範本
-├─ generated/                       # D/E/F/H：profiles、schemas、synthetic_data、scenarios、responses
+├─ inputs/policies/generation.yaml   # C/G：停用的生成白名單及共用預算範本
+├─ generated/                       # profiles、schemas、synthetic_data、scenarios、generation、responses
 ├─ mirage_validator/                 # 已實作的驗證 API、網站契約 gate、PoC 驗證
 │  └─ contracts/*.json               # 與正式契約隔離的 PoC 示意契約
 ├─ inputs/platforms/
@@ -157,9 +163,11 @@ Mirage_API/
 
 **D 的人工輸入與系統產物**：提供 `inputs/sources/<platform>/source.yaml` 與同目錄固定規格後，D 產生 `generated/profiles/<platform>.yaml` 和 `generated/schemas/<platform>/<sha256>.yaml`。未審來源可離線預覽，但查詢預設拒絕使用；D 不改寫驗證器的 manifest。下方早期 `inputs/profiles/` 範例仍是生成規則的規劃格式，不是 D 的 parser。情境與種子草稿也尚未接上執行流程。Profile 不能放寬 OpenAPI 回應契約。
 
-**E 的輸入與產物**：`configs/generation.yaml` 定義種子、站點／版本／規格／情境／run 隔離與數量、價格、庫存規則。E 產生 `generated/synthetic_data/<platform>/<namespace>.json`，保留完整設定及生成器／Faker 版本，並驗證資料關聯與可重現性。J 的 context 與 `samples/` 實測對照尚未實作。現有 `input-audit.json` 是檢查產物，`api-scope.json` 是範圍紀錄，兩者均不參與驗證執行。
+**E 的輸入與產物**：`configs/generation.yaml` 定義種子、站點／版本／規格／情境／run 隔離與數量、價格、庫存規則。E 產生 `generated/synthetic_data/<platform>/<namespace>.json`，保留完整設定及生成器／Faker 版本，並驗證資料關聯與可重現性。C/J 已保存資料 namespace 與快照摘要，`samples/` 的真實服務對照尚未實作。現有 `input-audit.json` 是檢查產物，`api-scope.json` 是範圍紀錄，兩者均不參與驗證執行。
 
 **F 的輸入與產物**：`inputs/policies/deception.yaml` 提供明寫 `domain: ecommerce` 的停用政策範本。`ScenarioEngine(policy, domain="ecommerce")` 可核對選擇的領域；省略呼叫參數時依政策領域，未知或不符領域會拒絕。`prepare` 核對可信整合層的判定與 B/D，選出固定 family scope；電商處理器再依同一 E 快照選 200／404，回傳 H 計畫與領域／政策／模板／資料摘要。`python -m deception.scenarios --list-domains` 列出已註冊領域，`python -m deception.scenarios --demo --domain ecommerce` 執行電商合成契約的離線整合展示並保存 `generated/scenarios/` 報告。`domain` 是業務領域，`platform_id` 是 Medusa／WooCommerce 等服務，`scenario_id` 是 `product-lookup` 等情境，`outcome_id` 則是 `found`／`missing` 等結果；用法、擴充介面、有效性測試及套件授權見 [F 說明](docs/scenarios.md)。其他領域的實際政策／資料、購買扣款、庫存更新及真實 HTTP 串接仍待擴充。
+
+**C/G 的輸入與產物**：`configs/llm.yaml` 固定本機模型身份，`inputs/policies/generation.yaml` 提供停用的可生成欄位／保護位置及總預算範本。C/J 將 B/D/F 與同一 E 快照綁定，再透過 Pydantic AI 執行工具規劃及 G 的局部 JSON 生成，H/I 完成驗證後才發布衍生內容快取。真本機展示明確使用 `python -m deception.generation --demo --domain ecommerce --llm-config configs/llm.yaml`，報告及 SQLite 保存至 `generated/generation/`；FunctionModel 測試與實際 Ollama 生成的證據分開。詳見 [C/G 功能、API、CLI 與授權](docs/orchestration.md)。
 
 ### 現有 manifest 格式示例（未啟用）
 
@@ -239,6 +247,30 @@ $env:PYTHONPATH = "$PWD/src"
 
 目前 repo 的 Medusa binding 是未啟用的占位設定，預期回 `unverifiable`／`binding_disabled`。B 不猜平台、不自動核准 manifest，也不因 runtime context 而繞過 I 的版本歧義。可選用 `deception.api.identified:create_app --factory` 接上 A；識別成功仍待 C 執行，不代表已生成或放行回應。
 
+## 已實作的 C/G：本地 LLM 協調與內容生成
+
+採用自家必經控制流程、`pydantic-ai-slim[openai]==2.66.0` 與本機 Ollama。C 先核對 B/D/F 與同一份 E 資料，再讓模型透過受限唯讀工具規劃生成欄位；G 依白名單及局部 schema 生成片段，保護 ID、名稱及其他已映射事實，最後由 H/I 驗證。J 保存固定上下文，成功內容保存於獨立 SQLite 快取。Galah 只作公開設計參考，未引入其 Go runtime 或程式碼。完整功能、API、模型設定與授權見 [C/G 說明](docs/orchestration.md)。
+
+```powershell
+$env:PYTHONPATH = "$PWD/src"
+.\.venv\Scripts\python.exe -m deception.generation --demo --domain ecommerce --llm-config configs/llm.yaml --output generated
+```
+
+這個命令只接受真本機模型，使用臨時合成契約檢查 `200 → 404 → 200`、E 不變及重複商品內容一致性；每次展示建立新快取，前兩次生成、第三次重用內容。報告位於 `generated/generation/`，成功與否依報告判讀，不能由檔案存在推定成功。預設為已安裝的 **Foundation-Sec-8B-Reasoning Q4_K_M GGUF** 變體，完整名稱與 digest 固定於 `configs/llm.yaml`，使用 `structured_actions` 工具規劃；它不是基礎 Foundation-Sec-8B 的全部型態。
+
+可選擇本機其他已安裝模型，不下載權重：
+
+```powershell
+.\.venv\Scripts\python.exe -m deception.generation --list-models
+.\.venv\Scripts\python.exe -m deception.generation --demo --domain ecommerce --model "qwen2.5-coder:7b" --output generated
+```
+
+`--model` 從本機 metadata 唯一選取名稱並固定完整 digest，另可用 `--model-digest` 要求指定摘要。未指定模型時仍使用設定中固定的預設 digest；選模沿用 `planner_mode`，原生工具模式可由另一份 `--llm-config` 明確選擇。模型及權重條款分開管理，Foundation Reasoning 的底層 Llama 3.1 與 Cisco 修改部分授權見 [C/G 模型授權說明](docs/orchestration.md#套件模型與資料授權)。
+
+本次已用預設 Foundation Reasoning 量化變體與 CLI 選取的 Qwen 各完成一組真本機 `200 → 404 → 200` 展示；每次 I 通過、E 不變、同商品 body 一致，第三次命中已驗證內容快取。固定模型身份、報告及用量見 [本次實測證據](docs/orchestration.md#本次真本機模型展示證據2026-11-08)；這是合成案例展示，不宣稱普遍模型品質或官方平台相容。
+
+可用 `python -m pytest tests/test_generation.py tests/test_orchestrator.py -q` 驗證可控 `FunctionModel` 的流程與邊界。它與上述實際 Ollama 生成分開記錄，不把假模型通過或跳過實測當成真模型有效。C/G 目前回傳內部候選，A/B handler 的 501、外部判定接收器、M 正式 HTTP 回送與 E 交易狀態仍待後續串接。
+
 ## 已實作的 H：回應組合工具
 
 先比較 openapi-sampler、json-schema-faker 與 Prism，選擇沿用現有 Pydantic、標準庫 JSON、openapi-core 及 Werkzeug。H 依明確模板與 E 的 JSON Pointer 映射組合候選，拒絕缺欄位、錯誤型別及不符契約的狀態或媒體，不自動填值。實作含功能註解，功能、評估、有效性驗證與套件授權見 [H 說明](docs/composer.md)。
@@ -248,7 +280,7 @@ $env:PYTHONPATH = "$PWD/src"
 .\.venv\Scripts\python.exe -m deception.core --plan configs/composition.yaml --profiles generated --output generated --allow-unreviewed
 ```
 
-範例以目前未審 Medusa 來源產生明確 404 候選，因此需顯式開啟離線預覽。preflight 通過不代表 I 已放行；I 還須驗證網站、query 與部署契約。候選的 status、headers、body 在送往 I 時保持完全相同，`verify_candidate` 另核對 I 回報的 platform／version／hash／operation，避免套用其他契約的結果。H 尚未接上 A、C、J 或 M。
+範例以目前未審 Medusa 來源產生明確 404 候選，因此需顯式開啟離線預覽。preflight 通過不代表 I 已放行；I 還須驗證網站、query 與部署契約。候選的 status、headers、body 在送往 I 時保持完全相同，`verify_candidate` 另核對 I 回報的 platform／version／hash／operation，避免套用其他契約的結果。H 已接 C/J 內部流程，尚未接上完整 A/M 對外回送。
 
 ## 已實作的 E：合成資料工具
 
@@ -283,7 +315,7 @@ $env:PYTHONPATH = "$PWD/src"
 curl.exe -i "http://127.0.0.1:8001/store/products/prod_synthetic_001?fields=id&fields=title" -H "X-Request-ID: demo-001"
 ```
 
-A 會保留 method、原始 URL／path／query、重複 headers、body bytes 與追蹤 ID，供後續 handler 使用。B/C 尚未接上，預設回 `501 pipeline_not_implemented` 與 `X-Request-ID`；不代表已生成商品回應。body 超過 1 MiB 回 413，無效或重複追蹤 ID 回 400。此入口沒有 `/docs`；驗證 API 的 `/docs` 維持原樣。詳見 [入口介面與部署方式](docs/ingress.md)。
+A 會保留 method、原始 URL／path／query、重複 headers、body bytes 與追蹤 ID，供後續 handler 使用。此預設入口未自動接上 B/C/M，仍回 `501 pipeline_not_implemented` 與 `X-Request-ID`；不代表已生成商品回應。body 超過 1 MiB 回 413，無效或重複追蹤 ID 回 400。此入口沒有 `/docs`；驗證 API 的 `/docs` 維持原樣。詳見 [入口介面與部署方式](docs/ingress.md)。
 
 ## 已實作的 I：格式驗證 API
 
@@ -366,8 +398,9 @@ curl.exe -X POST http://127.0.0.1:8000/v1/poc/validate -H "Content-Type: applica
 | 採用 | [Werkzeug](https://github.com/pallets/werkzeug/blob/3.1.1/LICENSE.txt) | BSD-3-Clause | H／I 的 HTTP headers adapter |
 | 採用 | [PyYAML](https://github.com/yaml/pyyaml/blob/6.0.3/LICENSE) | MIT | 來源、Profile、F 政策與組合指令讀取 |
 | 採用 | [jsonschema](https://github.com/python-jsonschema/jsonschema/blob/main/COPYING) | MIT | PoC 自訂契約及既有 OpenAPI 驗證依賴鏈；不代替網站部署 gate |
-| 規劃 | [Ollama](https://github.com/ollama/ollama/blob/main/LICENSE) | MIT，限此**程式碼** | 圖中的本地推論服務；模型權重有各自條款，不能從 Ollama 授權推定模型可商用或再散布 |
-| 可選 | [Pydantic AI](https://github.com/pydantic/pydantic-ai/blob/main/LICENSE) | MIT | 可協助 C 的工具調用；目前未依賴 |
+| 使用的外部程式 | [Ollama](https://github.com/ollama/ollama/blob/main/LICENSE) | MIT，限此**程式碼** | C/G 連接的本機推論服務；模型權重有各自條款，不能從 Ollama 授權推定模型可商用或再散布 |
+| 採用 | [Pydantic AI](https://github.com/pydantic/pydantic-ai/blob/v2.66.0/LICENSE) | MIT | `pydantic-ai-slim[openai]==2.66.0`，C 的工具規劃與 G 的結構輸出；相容 client 連接本機 Ollama，主要間接依賴授權見 [C/G 說明](docs/orchestration.md#套件模型與資料授權) |
+| 僅參考 | [Galah](https://github.com/0x4D31/galah/blob/main/LICENSE) | Apache-2.0 | 參考公開提示、生成與快取設計；未引入 Go runtime 或複製程式碼 |
 | 採用 | [Faker](https://faker.readthedocs.io/en/stable/#license) | MIT | E 的商品文字生成；鎖定 40.44.0，使用獨立 instance seed |
 | 可選 | [Prism](https://github.com/stoplightio/prism/blob/main/LICENSE) | Apache-2.0 | 外部 mock 比對，不是現有 H／I |
 | 可選 | [Schemathesis](https://github.com/schemathesis/schemathesis/blob/master/LICENSE) | MIT | 契約測試；通過仍不等於官方行為一致 |

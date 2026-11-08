@@ -52,6 +52,7 @@ def stack(tmp_path):
 
 
 def test_a_b_entry_uses_runtime_binding_and_keeps_c_pending(stack):
+    """A/B 入口採伺服器環境綁定並保留請求 ID，尚未串接 C 時明確回 501。"""
     identifier, _, _, _, _ = stack
     runtime = RuntimeContext(environment_id="test-env", deployment_id="test-deploy", service_id="store")
     client = TestClient(create_app(make_identification_handler(identifier, context=runtime)), base_url="https://shop.test")
@@ -68,6 +69,7 @@ def test_a_b_entry_uses_runtime_binding_and_keeps_c_pending(stack):
 
 
 def test_a_b_failures_do_not_echo_private_request_data(stack):
+    """識別失敗回應僅含診斷，不回顯商品參數、query token 或 Authorization。"""
     identifier, _, _, _, _ = stack
     client = TestClient(create_app(make_identification_handler(identifier)), base_url="https://shop.test")
     response = client.get("/api/products/prod-private?token=private-token", headers={"Authorization": "Bearer private-auth"})
@@ -79,6 +81,7 @@ def test_a_b_failures_do_not_echo_private_request_data(stack):
 
 
 def test_b_d_e_h_i_same_request_and_contract_identity(stack):
+    """同一請求經 B/D/E/H/I 時持續使用相同契約、商品實體與來源摘要。"""
     identifier, registry, source, directory, output = stack
     build_profile(directory / "source.yaml", output)
     initial_scope = DatasetScope(site_id="shop-test", platform_id="synthetic", platform_version="1.0",

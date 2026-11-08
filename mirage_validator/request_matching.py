@@ -10,6 +10,7 @@ class SelectionError(ValueError):
     """可對外回報的匹配失敗；呼叫者維持未能確認的狀態。"""
 
     def __init__(self, code: str, reason: str):
+        """保存穩定錯誤代碼與可回報原因，並以原因初始化 ValueError 訊息。"""
         self.code = code
         self.reason = reason
         super().__init__(reason)

@@ -39,7 +39,7 @@ platform_id: medusa
 platform_version: '2.22.4'
 source_url: https://github.com/medusajs/medusa/blob/81edb06c323812773c9c0dcc4da2d9784f3b3319/www/apps/api-reference/specs/store/openapi.full.yaml
 source_revision: 81edb06c323812773c9c0dcc4da2d9784f3b3319
-spec_sha256: 15c794cf596866f13bf96b715db66470011406f659e2eadbf4761dfdbb2ccc96
+spec_sha256: ced300a2de92b9829e6e600964588e894b760f07f8d79c1df657e1abe0529058
 approved: false
 openapi_file: openapi.yaml
 ```
@@ -86,4 +86,14 @@ print(context.operation.responses.keys())
 
 `allow_unreviewed` 預設為 `False`。查詢時會檢查版本／雜湊、原始規格快照與重新擷取的 Profile 是否一致，再回傳 `source`、`operation`、`specification`。path 必須是精確 template；將實際 URL 對應 template 屬於 B，D 不自行猜測。未知操作、不符身份、遭改動的快照或摘要都拋出 `ProfileError`。
 
-這個工具目前以 Python 與 CLI 提供，尚未接上 A 的 HTTP handler 或未實作的 C。取得 Profile 也不等於正式回應 gate 放行；I 仍依另一份已審查的部署 manifest、網站與 query 上下文驗證。
+這個工具以 Python 與 CLI 提供，C 已依精確身份讀取 Profile；A 的完整 C/M HTTP handler 串接仍待完成。取得 Profile 不等於正式回應 gate 放行；I 仍依另一份已審查的部署 manifest、網站與 query 上下文驗證。
+
+## 驗證與套件授權
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_profiles.py tests/test_medusa_pinned_contract.py -q
+```
+
+驗證來源 bytes／SHA-256、Profile 重建、操作查詢、內部引用與未審來源預覽；固定 Medusa 子集的回歸不表示實際部署已核准。
+
+D 重用 [Pydantic（MIT）](https://github.com/pydantic/pydantic/blob/main/LICENSE)、[PyYAML（MIT）](https://github.com/yaml/pyyaml/blob/6.0.3/LICENSE) 及 [openapi-core 0.19.5（BSD-3-Clause）](https://github.com/python-openapi/openapi-core/blob/0.19.5/LICENSE)。標準庫 `hashlib`、`json`、`pathlib`、`tempfile` 等隨 Python 的 PSF 授權及聲明管理；測試使用 pytest（MIT）。主要共用驗證依賴與分發要求見 [H 套件表](composer.md#使用的套件與授權)，來源 OpenAPI／文件權利與程式套件授權分開管理。

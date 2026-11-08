@@ -13,6 +13,7 @@ from .app import create_app as create_ingress_app
 def make_identification_handler(identifier: PlatformIdentifier, *, context: RuntimeContext | None = None):
     """把伺服器提供的 runtime context 綁到 A handler，不讀 HTTP 自稱的環境 header。"""
     async def identify(request):
+        """將標準化請求交給 B，回傳識別失敗或尚未串接協調器的診斷回應。"""
         result = identifier.identify_request(request, context=context)
         if result.decision != "identified":
             return JSONResponse(status_code=409, content={"code": "identification_unverifiable",

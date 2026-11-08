@@ -11,6 +11,7 @@ class ProfileTool:
     """以明確平台、版本、雜湊與 operation 定位，避免跨來源自動回退。"""
 
     def __init__(self, output_root: Path):
+        """保存 Profile 與規格快照所在根目錄，查詢時再核對完整產物。"""
         self.output_root = output_root
 
     def get_operation(self, *, platform_id: str, platform_version: str, spec_sha256: str,

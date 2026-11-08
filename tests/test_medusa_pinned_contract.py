@@ -22,10 +22,12 @@ HTTP_METHODS = {"get", "post", "put", "patch", "delete", "head", "options"}
 
 @pytest.fixture(scope="module")
 def medusa_spec():
+    """讀取 repo 固定的 Medusa gate 規格，供覆蓋度與引用完整性檢查共用。"""
     return yaml.safe_load(GATE_SPEC.read_bytes())
 
 
 def test_profile_and_validator_use_exactly_same_pinned_bytes():
+    """確認 D/I 使用相同固定 bytes、commit 與 hash，且來源及 manifest 範本仍未審查。"""
     gate = GATE_SPEC.read_bytes()
     source = PROFILE_SPEC.read_bytes()
     assert gate == source, "D and I must not use different contract bytes"
@@ -40,6 +42,7 @@ def test_profile_and_validator_use_exactly_same_pinned_bytes():
 
 
 def test_pinned_subset_coverage_and_official_document_version(medusa_spec):
+    """確認固定子集的操作／schema 數量，並保留服務 tag 與官方文件版本的差異。"""
     assert medusa_spec["openapi"] == "3.0.0"
     # The official v2.22.4 tag's Store API Reference still declares 2.22.3.
     assert str(medusa_spec["info"]["version"]) == "2.22.3"
@@ -50,6 +53,7 @@ def test_pinned_subset_coverage_and_official_document_version(medusa_spec):
 
 
 def test_store_operation_field_whitelists_and_refund_schema(medusa_spec):
+    """確認官方操作欄位白名單仍存在，且退款 schema 保留 idempotency_key 型別。"""
     operations = [
         operation
         for path in medusa_spec["paths"].values()
@@ -69,7 +73,9 @@ def test_store_operation_field_whitelists_and_refund_schema(medusa_spec):
 
 
 def test_all_internal_refs_resolve_without_network(medusa_spec):
+    """確認所有固定規格引用均能在同一份文件內解析，不依賴網路取得內容。"""
     def walk(value):
+        """遞迴檢查每個 $ref 的內部路徑及 escape，透過實際取值確認目標存在。"""
         if isinstance(value, dict):
             for key, item in value.items():
                 if key == "$ref":

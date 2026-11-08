@@ -2,20 +2,51 @@
 
 ## 功能與模組邊界
 
-F 位於 `src/deception/scenarios/`，依管理者政策、B 的操作身份、D 的固定契約及外部判定選擇情境，再根據同一份 E 合成資料決定結果。本版採明確欄位與白名單規則，不執行文字表達式、`eval`、LLM 或網路請求。主要函式與資料模型附有功能註解。
+F 位於 `src/deception/scenarios/`，先依政策選定情境領域，再依管理者規則、B 的操作身份、D 的固定契約及外部判定選擇情境。共用引擎負責身份、判定、規則優先序及封存交接；領域處理器負責該領域的規則驗證與結果選擇。目前內建領域為 `ecommerce`（電商），商品規則與處理器位於 `domains/ecommerce.py`。本版採明確欄位與白名單規則，不執行文字表達式、`eval`、LLM 或網路請求。主要函式與資料模型附有功能註解。
 
 | 功能 | 本版行為 |
 | --- | --- |
+| 領域選擇 | 政策必須明寫 `domain: ecommerce`；呼叫端可再指定領域核對，不接受未知領域或不符的政策 |
 | 情境準備 | 核對請求、B／D 身份、判定關聯與政策，選定唯一情境 family |
-| 結果選擇 | GET 商品明細：E 有相同商品 ID 選 `found`／200，沒有則選 `missing`／404 |
+| 電商結果選擇 | GET 商品明細：E 有相同商品 ID 選 `found`／200，沒有則選 `missing`／404 |
 | 固定隔離範圍 | `scenario_id` 表示 family，例如 `product-lookup`；結果分支使用獨立 `outcome_id`，不重新標記 E 資料集 |
 | 政策限制 | 明列部署、平台版本、規格 SHA-256、操作、query 組合、商品 ID 取得方式及允許模板；優先序最高者須唯一 |
 | H 交接 | 輸出明確 `CompositionPlan` 與 E 欄位映射，由 H 組合、序列化並作契約 preflight |
-| 可追溯性 | 保留政策、規則、判定、請求與資料身份，區分情境選定與 I 的最終放行 |
+| 可追溯性 | 保留領域、政策、規則、判定、請求與資料身份，區分情境選定與 I 的最終放行 |
 
 F 的兩個階段解決 E 隔離範圍的先後關係：先準備固定 family，呼叫端才能以該 scope 建立或取得 E；然後 F 讀取同一 scope 的資料，選出存在或不存在的結果。`found` 與 `missing` 不會變成兩個不同 E namespace，也不會為了配合分支修改 `scope.scenario_id`。
 
 F 只選擇管理者允許的結果，不偵測攻擊、不核准 D 來源或 I 部署、不替 H 猜測缺少的欄位，也不產生正式對外回應。H 的候選仍須把完全相同的 status、headers、body 交給 I；只有 I 的 `decision == "pass"` 且 `valid is True` 才能供後續 renderer 使用。目前沒有公開接收 verdict 的 HTTP API，也沒有自動轉送真實服務的流程。
+
+## 選擇電商領域與擴充其他領域
+
+領域、平台、情境與結果分別表示不同層次：
+
+| 欄位 | 意義 | 電商例子 |
+| --- | --- | --- |
+| `domain` | 一組業務領域的政策模型與處理器 | `ecommerce` |
+| `platform_id` | 目標服務及其固定契約 | `medusa`、`woocommerce` |
+| `scenario_id` | 同一份資料所屬的情境 family | `product-lookup` |
+| `outcome_id` | 依該次事實選出的結果分支 | `found`、`missing` |
+
+選電商不等於選 Medusa，也不表示已核准任何平台。政策仍須精確綁定平台、版本、契約 SHA-256、部署及操作。現在可在政策中明確選擇：
+
+```yaml
+schema_version: 1
+domain: ecommerce
+policy_id: product-lookup-policy
+policy_version: '1'
+enabled: false
+# 其他部署、規則與模板欄位見 inputs/policies/deception.yaml。
+```
+
+`load_policy(path, domain="ecommerce")` 與 `ScenarioEngine(policy, domain="ecommerce")` 會同時核對呼叫端選擇及政策領域。省略呼叫參數時使用政策明寫的 `domain`；政策本身不能省略。未知、未註冊或與政策不符的領域會拒絕，不從 URL、平台名稱或訪客 header 猜測，也不自動回退電商。
+
+`DomainRegistry` 是新增領域的註冊介面。共用的 `DomainPolicy`、`ScenarioRuleBase`、`ResponseTemplateBase` 與 `DomainOutcome` 提供政策及結果基礎；每個新領域須定義自己的嚴格政策模型與 `prepare`／`resolve` 處理器，再註冊該領域。商品 ID 解碼、200／404 選擇、商品欄位限制與 E 商品查詢都由電商處理器負責，共用引擎不依 `products` 決定結果。
+
+既有公開名稱 `ScenarioPolicy`、`ScenarioRule`、`ResponseTemplate` 與 `TemplateBinding` 保留為電商模型介面；新領域應使用各自的型別模型。`PreparedScenario.domain_context` 保存處理器產生的領域資料，取代共用封套的 `product_id` 欄位；準備封套及 trace 都包含 `domain`，不能把某個領域的封套交給另一個領域解析。舊政策需補上 `domain: ecommerce` 後重新載入；舊 prepared 封套應重新準備。
+
+目前可用的正式領域只有電商。測試用非商品處理器只用來驗證分派與擴充介面，不代表已提供其他領域的業務規則、資料生成或 H 欄位映射。E/H 現有資料與映射仍以商品／變體為主；新增完整領域時，也須提供相應的資料供應及回應映射。這次不改寫既有 E scope 或 namespace；跨領域資料隔離須由新領域的資料介面一併設計。
 
 ## 外部判定的信任與失敗結果
 
@@ -45,7 +76,8 @@ from deception.scenarios import ScenarioEngine, fingerprint_request, load_policy
 from deception.synthetic import generate_dataset
 from deception.synthetic.models import SyntheticConfig
 
-engine = ScenarioEngine(load_policy(Path("reviewed-deception.yaml")))
+policy = load_policy(Path("reviewed-deception.yaml"), domain="ecommerce")
+engine = ScenarioEngine(policy, domain="ecommerce")
 preparation = engine.prepare(
     request, identification, profile, verified_assessment,
     run_id="run-a", now=datetime.now(timezone.utc),
@@ -67,11 +99,11 @@ if preparation.decision == "prepared":
 
 `fingerprint_request(request)` 提供與 F 相同的請求關聯計算；判定服務或受信任整合層應使用一致的正規化規則。呼叫端應保存或取回相同 run 的 E 快照；範例中的生成呼叫只是展示 E 必須使用 `prepared.scope`。路徑的商品 ID 指向生成資料中的商品時選 200，其他 ID 選 404；F 不會因查詢陌生 ID 而新增商品。
 
-`inputs/policies/deception.yaml` 是可由 `load_policy` 讀取的停用範本。部署、版本、SHA-256、operation、path 及完整回應 body 都須依 B/D 審查後替換；精簡的 `product.id/title` body 僅適用對應的測試契約，無法直接滿足 Medusa 的全部必填欄位。F 檢查分支 schema 存在，實際模板值及 headers 仍由 H preflight 與 I 驗證。
+`inputs/policies/deception.yaml` 是明寫 `domain: ecommerce`、可由 `load_policy` 讀取的停用範本。部署、版本、SHA-256、operation、path 及完整回應 body 都須依 B/D 審查後替換；精簡的 `product.id/title` body 僅適用對應的測試契約，無法直接滿足 Medusa 的全部必填欄位。電商處理器檢查分支 schema 存在，實際模板值及 headers 仍由 H preflight 與 I 驗證。
 
-`PreparedScenario` 的 seal 用於同一個 `ScenarioEngine` 實例的兩階段交接，防止準備結果被改動；它不是外部判定的數位簽章，也不是跨程序可攜的認證 token。換引擎實例後應重新準備。政策版本／內容、規則、模板、資料 namespace 與資料摘要可由結果追溯，不以敏感請求 body 或認證 header 作診斷輸出。
+`PreparedScenario` 的 seal 用於同一個 `ScenarioEngine` 實例的兩階段交接，防止領域及準備結果被改動；它不是外部判定的數位簽章，也不是跨程序可攜的認證 token。換引擎實例後應重新準備。領域、政策版本／內容、規則、模板、資料 namespace 與資料摘要可由結果追溯，不以敏感請求 body 或認證 header 作診斷輸出。
 
-尚未實作的 C 須持有同一份 A 請求、F 決策與 H 候選。H/I 目前核對 operation 與 path template，不能單靠 schema 發現「A 商品 body 被拿去回 B 商品 URL」；整合層必須用 F 的請求指紋確認關聯，並把原始 URL 交給 I。也須從已核對的 E 設定載入快照；F 重建檢查資料內容與 scope，追溯 namespace 及完整快照摘要，不替整合層選擇 run 的種子設定。
+C 持有同一份 A 請求、F 決策與 H 候選，並在生成與發布前後核對指紋、期限及資料事實。H/I 目前核對 operation 與 path template，不能單靠 schema 發現「A 商品 body 被拿去回 B 商品 URL」；其他整合層也必須維持這個請求關聯，並把原始 URL 交給 I。E 快照仍須依已核對的完整設定載入；F 重建檢查內容與 scope，追溯 namespace 及快照摘要，不替整合層選擇 run 的種子設定。完整 C 流程見 [協調器說明](orchestration.md)。
 
 ## 邏輯一致性與後續交易擴充
 
@@ -89,7 +121,7 @@ if preparation.decision == "prepared":
 | [python-jsonlogic](https://github.com/Viicos/jsonlogic) | JSON 規則、型別檢查與運算子 | [MIT](https://github.com/Viicos/jsonlogic/blob/main/LICENSE) | 可用於政策工具化；本版沒有通用運算式需求，未引入 |
 | [Open Policy Agent](https://github.com/open-policy-agent/opa) | 以 Rego 管理政策及集中決策 | [Apache-2.0](https://github.com/open-policy-agent/opa/blob/main/LICENSE) | 可供未來多服務共用政策；本版不增加獨立服務與 Rego 執行環境，未引入 |
 
-本版重用既有 Pydantic 與 PyYAML，沒有新增依賴或複製上述專案的程式碼。規則的可表達範圍由嚴格資料模型限制，無法透過政策執行任意 Python。若未來採用外部規則引擎，仍須維持 B／D／E 身份核對、同優先序歧義拒絕及 H／I 驗證邊界。
+本版及領域選擇擴充重用既有 Pydantic 與 PyYAML，沒有新增依賴或複製上述專案的程式碼。規則的可表達範圍由嚴格資料模型限制，無法透過政策執行任意 Python。領域處理器由受控程式碼註冊，政策不能指定任意模組動態載入。若未來採用外部規則引擎，仍須維持 B／D／E 身份核對、同優先序歧義拒絕及 H／I 驗證邊界。
 
 ## 使用套件與授權
 
@@ -115,16 +147,17 @@ Python 標準庫的 `hashlib`、`hmac`、`json`、`datetime`、`secrets` 等隨 
 
 ## 有效性驗證
 
-可先執行明確的離線展示，不必啟動伺服器或提供外部判定：
+可先列出已註冊的領域，再明確選擇電商執行離線展示，不必啟動伺服器或提供外部判定：
 
 ```powershell
 $env:PYTHONPATH = "$PWD/src"
-.\.venv\Scripts\python.exe -m deception.scenarios --demo --output generated
+.\.venv\Scripts\python.exe -m deception.scenarios --list-domains
+.\.venv\Scripts\python.exe -m deception.scenarios --demo --domain ecommerce --output generated
 ```
 
-展示會在臨時目錄建立專用合成契約，串接真正的 B／D／E／F／H／I，驗證 `200 → 404 → 200`、E 未被改動以及兩次相同商品的 body 完全一致。完成後原子保存 `generated/scenarios/<報告SHA256>.json`，內含 `test_only: true`、契約、政策、資料身份、三次決策、候選與 gate 結果。臨時來源的核准只供這個合成展示使用，不讀寫 repo 的 Medusa／WooCommerce 來源或審查狀態。展示不包含網路請求或正式 HTTP 主流程。
+目前 `--list-domains` 只列出 `ecommerce`。展示必須明確提供 `--demo --domain ecommerce`；省略領域或指定未知領域都不會默認電商。展示會在臨時目錄建立專用合成契約，串接真正的 B／D／E／F／H／I，驗證 `200 → 404 → 200`、E 未被改動以及兩次相同商品的 body 完全一致。完成後原子保存 `generated/scenarios/<報告SHA256>.json`，內含 `test_only: true`、領域、契約、政策、資料身份、三次決策、候選與 gate 結果。臨時來源的核准只供這個合成展示使用，不讀寫 repo 的 Medusa／WooCommerce 來源或審查狀態。展示不包含網路請求或正式 HTTP 主流程。
 
-模組測試以臨時固定契約建立 B／D／E，檢查判定來源、時效、請求關聯、身份、規則優先序與歧義，並檢查商品存在性、scope、資料完整性及準備結果被改動時的拒絕行為。整合測試會把 F 的同一份 `CompositionPlan` 交給 H，再以完全相同的候選 triple 交給 I，覆蓋 200／404 分支。
+模組測試以臨時固定契約建立 B／D／E，檢查領域選擇、未知或不符領域拒絕、跨領域封套、判定來源、時效、請求關聯、身份、規則優先序與歧義，並檢查商品存在性、scope、資料完整性及準備結果被改動時的拒絕行為。測試用非商品處理器驗證共用引擎會依註冊領域分派；電商整合測試把 F 的同一份 `CompositionPlan` 交給 H，再以完全相同的候選 triple 交給 I，覆蓋 200／404 分支。
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests/test_scenarios.py -q

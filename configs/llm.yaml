@@ -1,0 +1,12 @@
+# C/G 的本機模型設定。模型內容摘要必須與 ollama list / api/tags 完整值一致。
+# execution_mode: local 不會在服務不存在、模型能力不足或 digest 不符時降級成假模型。
+schema_version: 1
+execution_mode: local
+base_url: http://127.0.0.1:11434/v1
+model_name: hf.co/fdtn-ai/Foundation-Sec-8B-Reasoning-Q4_K_M-GGUF:Q4_K_M
+# 本次已核對的本機權重版本快照；換模型或更新權重時重新核對，不能填短 ID。
+model_digest: '77a78066847b2002fd602955667bd26857eb2cb751c6ed2e975c21b4a826b0a5'
+# 此已安裝 Reasoning Q4_K_M 變體沒有原生 tools 能力，以受控 JSON action 規劃。
+planner_mode: structured_actions
+temperature: 0.0
+max_output_tokens: 1024

@@ -44,6 +44,7 @@ def candidate_and_gate(tmp_path):
 
 
 def test_verify_candidate_passes_same_identity_and_preserves_triple(candidate_and_gate):
+    """確認同一契約操作的候選可通過 I，交接不改動原 status、headers、body 或身份。"""
     candidate, gate = candidate_and_gate
     before = candidate.to_dict()
     result = verify_candidate(candidate, gate, "https://shop.test/products/synthetic-product")
@@ -53,6 +54,7 @@ def test_verify_candidate_passes_same_identity_and_preserves_triple(candidate_an
 
 
 def test_another_operation_cannot_validate_this_candidate(candidate_and_gate):
+    """確認即使另一操作共用 schema，該 URL 的 gate pass 仍不能代替原候選通過。"""
     candidate, gate = candidate_and_gate
     url = "https://shop.test/other/synthetic-product"
     # 普通 I 判定只針對收到的 URL，兩個 operation 的 response schema 相同。
@@ -66,6 +68,7 @@ def test_another_operation_cannot_validate_this_candidate(candidate_and_gate):
 @pytest.mark.parametrize("changes", [{"platform_id": "other"}, {"platform_version": "2"},
                                      {"spec_sha256": "0" * 64}])
 def test_mismatched_contract_metadata_cannot_pass(candidate_and_gate, changes):
+    """確認候選的平台、版本或 hash 被改寫時，不會接受另一身份的驗證結果。"""
     candidate, gate = candidate_and_gate
     changed = replace(candidate, identity=replace(candidate.identity, **changes))
     result = verify_candidate(changed, gate, "https://shop.test/products/synthetic-product")
@@ -74,6 +77,7 @@ def test_mismatched_contract_metadata_cannot_pass(candidate_and_gate, changes):
 
 
 def test_gate_rejection_remains_rejection(candidate_and_gate):
+    """確認 I 對 body 型別的原始拒絕會保留，不被身份交接層改成成功。"""
     candidate, gate = candidate_and_gate
     changed = replace(candidate, body='{"id":3}')
     result = verify_candidate(changed, gate, "https://shop.test/products/synthetic-product")
@@ -82,6 +86,7 @@ def test_gate_rejection_remains_rejection(candidate_and_gate):
 
 
 def test_unknown_site_remains_unverifiable(candidate_and_gate):
+    """確認未知站點維持無法驗證，不能因候選本身合法而自動取得網站綁定。"""
     candidate, gate = candidate_and_gate
     result = verify_candidate(candidate, gate, "https://unknown.test/products/synthetic-product")
     assert result.decision == "unverifiable" and result.valid is False
