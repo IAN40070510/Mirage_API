@@ -1,0 +1,54 @@
+name: Python tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    name: pytest (Python 3.12)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install package and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[test]'
+
+      - name: Run complete pytest suite
+        run: python -m pytest -q
+
+      - name: Build Medusa Store/Auth profile from pinned contract
+        run: |
+          python -m deception.profile_builder --source inputs/sources/medusa/source.yaml --output generated
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          import yaml
+
+          spec = Path("inputs/sources/medusa/openapi.yaml").read_bytes()
+          metadata = yaml.safe_load(Path("generated/profiles/medusa.yaml").read_text(encoding="utf-8"))
+          assert metadata["source"]["spec_sha256"] == hashlib.sha256(spec).hexdigest()
+          assert metadata["source"]["approved"] is False
+          assert metadata["source"]["platform_version"] == "2.22.4"
+          assert str(metadata["spec_info_version"]) == "2.22.3"
+          assert len(metadata["operations"]) == 77
+          print("Medusa offline profile smoke test: PASS (77 operations)")
+          PY

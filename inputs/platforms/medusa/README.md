@@ -1,32 +1,58 @@
-# Medusa 輸入檔案檢查
+# Medusa v2.22.4 Store/Auth 子集契約
 
-本資料夾的 `openapi.yaml` 由使用者提供的 `medusa-store-auth.openapi.yaml` 移入並改名，內容未修改；`api-scope.json` 原樣移入。
+> 狀態：**靜態契約已按官方固定 tag 修正；正式部署尚未核實。** `approved: false`，不得作為已完成官方相容性驗證的證據。
 
-| 檔案 | 可用用途 | 檢查結果 |
-| --- | --- | --- |
-| openapi.yaml | OpenAPI 回應契約 | OpenAPI 3.0.0，可被 openapi-core 及本專案 PlatformRegistry 載入 |
-| api-scope.json | 平台操作範圍與來源資訊 | 77 個 method／path／operation ID 與契約相符；目前執行程式不讀取此檔案 |
-| manifest.yaml.example | 待完成的部署綁定範本 | 已填入實際規格雜湊，approved=false；不會自動載入 |
-| input-audit.json | 本次檢查結果 | 記錄雜湊、覆蓋範圍及未確認事項 |
+## 上游來源與身份
 
-規格含 67 個路徑、77 個操作、133 個 components schemas；所有內部 `$ref` 均能解析，沒有外部 `$ref`。解析引用後有 529 個 response media schema 項目。規格檢查通過不代表已證明與官方服務完全一致。
+- 上游 Repository：[medusajs/medusa](https://github.com/medusajs/medusa)
+- 目標發行 tag：`v2.22.4`，固定 Commit：`81edb06c323812773c9c0dcc4da2d9784f3b3319`
+- 官方完整 Store API 規格：[`www/apps/api-reference/specs/store/openapi.full.yaml`](https://github.com/medusajs/medusa/blob/81edb06c323812773c9c0dcc4da2d9784f3b3319/www/apps/api-reference/specs/store/openapi.full.yaml)
+- 上游完整規格 SHA-256：`ac76bf98207021e17455819ec9db5eee3742efa6172a76b4d83d67b06d97af4d`
+- 上游 Git blob SHA-1：`000dcd0fb6d124a9675e5168b49ef7b354ac8a19`
+- **官方發行套件版本為 `2.22.4`，該 tag 的 Store API 文件 `info.version` 仍為 `2.22.3`。** 本子集保留官方文件值，不將兩個版本混為一談。
 
-## v2.22.4 測試版本與目前輸入的差異
+## 本地檔案
 
-本專案測試版本是 Medusa `v2.22.4`。輸入設定以 `source_revision: v2.22.4` 和 `test_target_version: 2.22.4` 表示本次測試版本。
+| 檔案 | 目的 |
+| --- | --- |
+| `openapi.yaml` | 已修正的 Store/Auth 子集，供 I 的正式格式 Gate 使用（尚未啟用） |
+| `inputs/sources/medusa/openapi.yaml` | D 使用的同一份 bytes；與 Gate 契約完全相同 |
+| `manifest.yaml.example` | 已更新固定來源 commit、子集 SHA-256；`approved: false`，不會載入 |
+| `api-scope.json` | 歷史 XGBoost 推論操作範圍記錄，**不作為驗證器輸入**；其中原始來源 SHA 與這次取得的官方完整 OpenAPI SHA 不相同 |
+| `input-audit.json` | 已更新子集 SHA、官方來源資訊及靜態修補狀態；靜態修補後的執行期測試仍待跑 |
 
-## 尚不能啟用為官方完整一致性守門員的原因
+本地子集（D/I 使用相同 LF 格式）的 SHA-256：
 
-- 現有 `openapi.yaml`、`api-scope.json` 與 `input-audit.json` 均已統一標示為 `v2.22.4`；完整官方規格與部署仍須完成核對。
-- scope 的 `source_file` 指向 `openapi.full.yaml`，其中的 `source_sha256` 不等於目前子集規格的雜湊。它可能記錄上游完整檔案，不能拿來驗證目前子集；需提供原始完整檔案或官方不可變版本來源才能追溯。未改寫原始 scope metadata。
-- `scope_meaning` 明確表示這是 XGBoost inference 選取的請求範圍，不是偵測準確率、訓練覆蓋或完整 API 相容性的證據。
-- 10 個成功狀態回應沒有 `content`，詳見 audit 的 `responses_without_content`。這可能是空回應，也可能是規格未完整描述；本次未自行補寫。現有守門員對這些情況回 `unverifiable`。
-- 尚未提供目標網站綁定與已核實的部署版本，也沒有官方參考服務的回應對照證據。此為 Medusa Store／Auth 子集，不涵蓋 Admin 或 WooCommerce。
+```text
+ced300a2de92b9829e6e600964588e894b760f07f8d79c1df657e1abe0529058
+```
 
-## 下一步設定
+## 已完成的靜態對照及修補
 
-核實官方來源與部署版本後，更新 manifest 範本的 `source_revision`、規格雜湊與 `base_urls`。`platform_version` 已設定為測試目標 `2.22.4`；`base_urls` 的 `https://shop.example` 是占位值，不是已知網站。
+- 67 個 paths、77 個 method/path operations；官方固定 tag 有 69 paths、79 operations。未收錄的 `/store/search` 與 `/store/payment-collections/{id}/payment-sessions/{session_id}` 保持未支援。
+- 77/77 operations 在排除說明性和 `x-*` 擴充欄位後，核心請求與回應契約一致。
+- 本地 `components/schemas` 保留 133 個；補回原缺失的 `BaseRefund.properties.idempotency_key: string`。
+- 將官方 51 個 Store operation 的 `x-allowed` 欄位白名單保留在規格中；**格式驗證器並不自動執行白名單語意，也不能由其通過推論任意 `fields` 組合可用**。
+- 本地原有的 10 個「成功回應沒有 `content`」仍需要針對實際服務釐清；沒有猜測補齊 Response Schema。
+- 舊版 CRLF／LF 差異已消除，D/I 來源 byte-for-byte 相同。
 
-規格 paths 已包含 `/store` 與 `/auth`，部署 binding 應為網站 origin（或這兩者共同的實際部署前綴），不要再附加 `/store`。完成來源與適用範圍審查後才決定 approved 狀態並將檔名改成 `manifest.yaml`。查詢參數組合仍須獨立確認，不得靠 sample 推導完整契約。
+## 回歸測試
 
-本次檢查也確認：以未審查狀態暫存載入時，守門員會回 `contract_not_approved`，不放行。
+在專案根目錄（Python 3.11+、已安裝 `.[test]`）執行：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_medusa_pinned_contract.py -q
+$env:PYTHONPATH = "$PWD/src"
+.\.venv\Scripts\python.exe -m deception.profile_builder --source inputs/sources/medusa/source.yaml --output generated
+```
+
+此回歸測試核對 D/I 相同 bytes、固定 SHA、版本區分、77 operations、133 schemas、51 份 `x-allowed`、`BaseRefund` 新欄位與內部 `$ref`；**不能替代固定 Medusa 部署的實際 HTTP 對照測試**。
+
+## 未完成的正式啟用條件
+
+1. 在實際 Medusa `2.22.4` 測試部署核實 origin、部署版本與 `query_contexts`，並取正常、404、授權錯誤、`fields` 等參考回應。
+2. 實作／確認 `x-allowed` 與查詢選欄的策略，避免錯誤宣稱單靠 JSON Schema 即符合服務行為。
+3. 對新規格重新執行 Profile 建立、OpenAPI Gate／pytest 與對照測試，確認更新無回歸。
+4. 維護者完成來源、部署與覆蓋審查後，再決定是否建立 `manifest.yaml` 與核准。原始 `manifest.yaml.example` 的網站 `https://shop.example` 只是占位值。
+
+詳細發現與修補歷程：[審查紀錄](../../docs/audits/medusa-v2.22.4-contract-2026-11-08.md)。

@@ -1,13 +1,13 @@
 {
   "test_target_version": "2.22.4",
   "target_source_revision": "v2.22.4",
-  "target_status": "pending_full_spec_import_and_verification",
-  "spec_sha256": "65b6917fb04c52d3a2394cabe8c391db8ebfa74e5aec336eb88069ed5e14ba0b",
+  "target_status": "static_subset_patched_pending_runtime_validation",
+  "spec_sha256": "ced300a2de92b9829e6e600964588e894b760f07f8d79c1df657e1abe0529058",
   "scope_sha256": "cce318b62a355184cd7cac51e67ea30d131c15e3ff0d6b662aac116b79a5007f",
   "source_sha256_in_scope": "438ac1daa9b3d6e27944e05a553986dcc4a3f3dbde72dd4d3b978575d6eaf328",
   "openapi": "3.0.0",
   "info": {
-    "version": "2.22.4",
+    "version": "2.22.3",
     "title": "Medusa Storefront API",
     "license": {
       "name": "MIT",
@@ -26,13 +26,13 @@
   "broken_internal_refs": [],
   "response_status_counts": {
     "200": 75,
+    "201": 2,
     "400": 77,
     "401": 77,
     "404": 77,
     "409": 77,
     "422": 77,
-    "500": 77,
-    "201": 2
+    "500": 77
   },
   "response_media_schemas": 529,
   "responses_without_content": [
@@ -87,11 +87,38 @@
       "200"
     ]
   ],
-  "openapi_validation": "passed",
+  "openapi_validation": "awaiting_ci_rerun",
   "schemas": 133,
   "scope_meaning": "Requests selected for XGBoost inference; not evidence of detection accuracy or training coverage.",
-  "registry_load": "passed",
+  "registry_load": "awaiting_ci_rerun",
   "unapproved_contract_blocked": true,
   "official_provenance_verified": false,
-  "deployment_version_verified": false
+  "deployment_version_verified": false,
+  "official_upstream": {
+    "repository": "medusajs/medusa",
+    "tag": "v2.22.4",
+    "commit": "81edb06c323812773c9c0dcc4da2d9784f3b3319",
+    "path": "www/apps/api-reference/specs/store/openapi.full.yaml",
+    "git_blob_sha1": "000dcd0fb6d124a9675e5168b49ef7b354ac8a19",
+    "sha256": "ac76bf98207021e17455819ec9db5eee3742efa6172a76b4d83d67b06d97af4d",
+    "info_version": "2.22.3"
+  },
+  "conformance_patch": {
+    "patched_schema": [
+      "BaseRefund.properties.idempotency_key"
+    ],
+    "x_allowed_operations_restored": 51,
+    "subset_sources_byte_identical": true,
+    "structural_comparison_excluded": [
+      "description",
+      "summary",
+      "title",
+      "example",
+      "examples",
+      "externalDocs",
+      "x-*"
+    ],
+    "query_behavior_and_deployment_untested": true,
+    "idempotency_key_fix": "corrected placement within BaseRefund.properties after initial CI failure"
+  }
 }
