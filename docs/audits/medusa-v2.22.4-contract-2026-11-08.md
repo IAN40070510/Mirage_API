@@ -1,5 +1,28 @@
 # Medusa v2.22.4 契約核實紀錄（2026-11-08）
 
+## 第三輪：已完成靜態契約修補（最新狀態，2026-11-08）
+
+> 本節覆蓋本文前述「尚未修補」的歷史記錄；**靜態規格已修補、執行期與部署驗證尚未完成**。
+
+- 將 `inputs/platforms/medusa/openapi.yaml` 及 `inputs/sources/medusa/openapi.yaml` 更新為相同的 UTF-8 LF bytes；`info.version` 改回官方 `v2.22.4` tag 所含文件的原始值 **`2.22.3`**，`platform_version`（目標套件）保持 **`2.22.4`**。
+- 依上游 `openapi.full.yaml` 逐操作補回 **51 個 `x-allowed` 區塊**；修補後比對：**51/51 與上游相同操作的區塊文字完全一致**。
+- 依官方 `BaseRefund` 定義補回可選的 `idempotency_key: string`。
+- 更新 D 來源與 I 未啟用 manifest 範本的 `source_revision` 為固定 commit `81edb06c323812773c9c0dcc4da2d9784f3b3319`，`source_url` 指向固定 commit 的官方 `openapi.full.yaml`。
+- 本地修補後契約 SHA-256：`15c794cf596866f13bf96b715db66470011406f659e2eadbf4761dfdbb2ccc96`。D/I 規格 bytes 完全相同，`source.yaml` 與 `manifest.yaml.example` 記錄相同雜湊。
+- 更新 `.gitattributes`，防止 Git 在 Windows 對 D 或 I 的 `openapi.yaml` 重新改寫換行。
+- 新增 `tests/test_medusa_pinned_contract.py`（離線回歸測試）。該測試**已提交但尚未在 Python pytest 執行**；不可標示為已通過 CI。
+- 本次對修補後內容執行額外靜態檢查：67 paths、77 operations、51/51 `x-allowed` 官方文字一致、710 個 `#/components/...` 引用均有本地定義，兩份規格內容完全一致。這是直接比對及引用存在性檢查，不等同完整 OpenAPI runtime validator 測試。
+- `api-scope.json` 原始 `source_sha256` 是歷史 metadata，仍與官方完整 `openapi.full.yaml` 不同；沒有覆寫，以避免偽造其原始來源。
+
+### 維持阻擋的事項
+
+1. 重新執行 `pytest`、Profile Builder，以及正式 Validator 對目前契約的離線載入測試。
+2. `x-allowed` 已保留於 OAS，但 Mirage_API 的執行時欄位／`fields` 策略仍需驗證；這不是單靠 OAS schema 就能保證的能力。
+3. 實際 Medusa v2.22.4 測試部署、可信 origin、query 上下文與真實 HTTP 對照回應尚未核實。
+4. 沒有正式核准的 `manifest.yaml`；D 的 `approved` 和 I 的 `approved` 均保持 `false`。不可將這份修補直接當成站點放行依據。
+5. 為長期可重現維護，仍建議加入固定官方來源 → 篩選 operation → 依賴 schema closure → 規格檢查的自動化子集生成腳本；本輪已完成一次性修補，**沒有宣稱生成腳本已建立**。
+
+
 > 審查結論：**尚不可啟用正式契約（BLOCKED）**。本文件只記錄已取得的證據與差異，不代表官方相容性認證。請勿將 `approved` 改為 `true` 或建立正式 `manifest.yaml`，直到下列條件均完成。
 
 ## 固定來源
