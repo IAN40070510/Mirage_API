@@ -24,6 +24,7 @@ B 以明確部署設定識別 A 收到的請求，輸出唯一的站點、平台
 | --- | --- | --- | --- |
 | 本 repo `PlatformRegistry` 與 I 的匹配程式 | 固定契約載入、origin／prefix、query 與操作選擇 | 本專案未另選授權；上游依賴如下 | **直接重用**，抽出 `mirage_validator/request_matching.py` 供 B/I 共用 |
 | [openapi-core 0.19.5](https://openapi-core.readthedocs.io/en/0.19.5/reference/protocols/) | OpenAPI 規格與請求／回應協定、路徑與驗證能力 | BSD-3-Clause | 沿用既有依賴驗證規格；B 不依賴其私有路由 API |
+| [Connexion](https://connexion.readthedocs.io/en/stable/routing.html) | 由 OpenAPI operationId 對應 Python handler | Apache-2.0 | 已有可用的規格導向框架，但本次只需識別元件，沿用 FastAPI 與既有 I；未引入 Connexion |
 | [Werkzeug Routing](https://werkzeug.palletsprojects.com/en/stable/routing/) | host、path converter、method routing | BSD-3-Clause | 已為 I 的 headers 依賴，但未用它重新實作 B 路由；其自動排序、HEAD／slash 行為需要另外對齊 I |
 | [Starlette Routing](https://www.starlette.dev/routing/) | ASGI route、host routing、path parameters | BSD-3-Clause | 沿用 A 的 FastAPI／Starlette 入口，不用 framework route 順序代替契約歧義檢查 |
 
