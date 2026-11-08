@@ -32,6 +32,9 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e '.[test]'
 
+      - name: Exercise pinned Medusa A/B/D/E/H/I module handoff
+        run: python -m pytest tests/test_medusa_module_linkage.py -q
+
       - name: Run complete pytest suite
         run: python -m pytest -q
 
