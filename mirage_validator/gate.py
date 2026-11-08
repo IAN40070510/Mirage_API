@@ -2,11 +2,9 @@
 import copy
 import hashlib
 import json
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
-from urllib.parse import parse_qs, urlsplit
 
 import yaml
 from openapi_core import Config, OpenAPI
@@ -17,6 +15,9 @@ from werkzeug.datastructures import Headers
 
 from .models import StrictModel, ValidationIssue
 from .json_utils import pointer, reject_constant, unique_object
+from .openapi_utils import create_openapi
+from .request_matching import (SelectionError, base_identity, deref, parse_query,
+                               parse_request_url, select_operation, select_site)
 
 
 class StrictJSONBodyMixin:
@@ -87,20 +88,6 @@ def walk_refs(value):
             walk_refs(item)
 
 
-def deref(spec, node):
-    """解析內部 JSON Pointer 參照，遇到循環參照時拋出 ValueError。"""
-    seen = set()
-    while isinstance(node, dict) and "$ref" in node:
-        ref = node["$ref"]
-        if ref in seen:
-            raise ValueError("Cyclic reference at contract selection")
-        seen.add(ref)
-        node = spec
-        for key in ref[2:].split("/"):
-            node = node[key.replace("~1", "/").replace("~0", "~")]
-    return node
-
-
 @dataclass
 class Bundle:
     manifest: Manifest
@@ -145,16 +132,17 @@ class PlatformRegistry:
             # Server URLs are deployment bindings, not response schema changes.
             bound = copy.deepcopy(spec)
             bound["servers"] = [{"url": url.rstrip("/")} for url in manifest.base_urls]
-            for item in bound.get("paths", {}).values():
+            for template, item in bound.get("paths", {}).items():
+                if template.startswith("x-"):
+                    continue
+                item = deref(bound, item)
                 if "servers" in item or any(isinstance(v, dict) and "servers" in v for v in item.values()):
                     raise ValueError("Operation/path server overrides require an explicit adapter")
             for base in manifest.base_urls:
-                parts = urlsplit(base)
-                if parts.scheme not in ("http", "https") or not parts.hostname or parts.query or parts.fragment or parts.username:
-                    raise ValueError("Invalid base URL binding")
+                base_identity(base)
             validator_cls = StrictV30ResponseValidator if spec["openapi"].startswith("3.0.") else StrictV31ResponseValidator
             config = Config(response_validator_cls=validator_cls)
-            self.bundles.append(Bundle(manifest, bound, OpenAPI.from_dict(bound, config=config)))
+            self.bundles.append(Bundle(manifest, bound, create_openapi(bound, config=config)))
 
 
 class OfficialResponseGate:
@@ -174,46 +162,37 @@ class OfficialResponseGate:
             return GateResult(valid=decision == "pass", decision=decision, errors=errors, **identity)
 
         try:
-            url = urlsplit(request.request_url)
-        except ValueError:
-            return result("unverifiable", "invalid_url", "URL 格式無法解析")
-        if url.scheme not in ("http", "https") or not url.hostname or url.username or url.fragment:
-            return result("unverifiable", "invalid_url", "需要不含帳密與 fragment 的完整 HTTP URL")
-        matches = []
-        for bundle in self.registry.bundles:
-            for base in bundle.manifest.base_urls:
-                parsed = urlsplit(base)
-                prefix = parsed.path.rstrip("/")
-                if (url.scheme, url.netloc.lower()) == (parsed.scheme, parsed.netloc.lower()) and (url.path == prefix or url.path.startswith(prefix + "/")):
-                    matches.append((bundle, prefix))
-        if len(matches) != 1:
-            return result("unverifiable", "site_not_unique", "網站沒有契約綁定，或同時匹配多份契約")
-        bundle, prefix = matches[0]
+            url = parse_request_url(request.request_url)
+            selected = select_site(self.registry.bundles, url)
+        except SelectionError as exc:
+            return result("unverifiable", exc.code, exc.reason)
+        bundle, prefix = selected.bundle, selected.prefix
         manifest = bundle.manifest
         identity.update(platform_id=manifest.platform_id, platform_version=manifest.platform_version,
                         spec_sha256=manifest.spec_sha256)
         if not manifest.approved:
             return result("unverifiable", "contract_not_approved", "此規格尚未完成來源與適用範圍審查")
-        query = parse_qs(url.query, keep_blank_values=True)
+        try:
+            query = parse_query(url.query)
+        except SelectionError as exc:
+            return result("unverifiable", exc.code, exc.reason)
         if query not in manifest.query_contexts:
             return result("unverifiable", "unsupported_context", "此查詢參數組合未經契約審查")
         path = url.path[len(prefix):] or "/"
-        routes = []
-        for template, item in bundle.spec.get("paths", {}).items():
-            pattern = re.sub(r"\\\{[^{}]+\\\}", "[^/]+", re.escape(template))
-            if re.fullmatch(pattern, path):
-                routes.append((template, deref(bundle.spec, item)))
-        exact = [r for r in routes if r[0] == path]
-        routes = exact or routes
-        if len(routes) != 1 or request.request_method.lower() not in routes[0][1]:
-            return result("unverifiable", "operation_not_unique", "找不到唯一的 HTTP 方法與端點契約")
-        operation = routes[0][1][request.request_method.lower()]
-        identity["operation_id"] = operation.get("operationId", f"{request.request_method} {routes[0][0]}")
+        try:
+            selected_operation = select_operation(bundle.spec, request.request_method, path)
+        except SelectionError as exc:
+            return result("unverifiable", exc.code, exc.reason)
+        operation = selected_operation.operation
+        identity["operation_id"] = operation.get("operationId", f"{request.request_method} {selected_operation.template}")
         responses = operation["responses"]
         response_spec = responses.get(str(request.status_code), responses.get(f"{request.status_code // 100}XX", responses.get("default")))
         if response_spec is None:
             return result("reject", "unsupported_status", "狀態碼不在官方規格中", "status", "/status_code")
-        response_spec = deref(bundle.spec, response_spec)
+        try:
+            response_spec = deref(bundle.spec, response_spec)
+        except SelectionError as exc:
+            return result("unverifiable", exc.code, exc.reason)
         headers = {}
         for name, value in request.headers.items():
             key = name.lower()
@@ -237,7 +216,10 @@ class OfficialResponseGate:
         except (ValueError, RecursionError) as exc:
             return result("reject", "invalid_json", str(exc), "body")
         for name, definition in response_spec.get("headers", {}).items():
-            definition = deref(bundle.spec, definition)
+            try:
+                definition = deref(bundle.spec, definition)
+            except SelectionError as exc:
+                return result("unverifiable", exc.code, exc.reason)
             if definition.get("required") and name.lower() not in headers:
                 errors.append(ValidationIssue(location="headers", path=pointer([name.lower()]), code="required", reason="缺少規格要求的 header"))
         adapter = RequestAdapter(f"{url.scheme}://{url.netloc}", url.path, request.request_method.lower(), RequestParameters(query=query))

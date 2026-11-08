@@ -6,13 +6,14 @@ import re
 from pathlib import Path
 from urllib.parse import unquote
 
-from openapi_core import Config, OpenAPI
+from openapi_core import Config
 from werkzeug.datastructures import Headers
 
 from deception.profile_builder import ProfileTool
 from deception.synthetic.generator import checked_dataset
 from deception.synthetic.models import SyntheticDataset
 from mirage_validator.gate import StrictV30ResponseValidator, StrictV31ResponseValidator
+from mirage_validator.openapi_utils import create_openapi
 
 from .models import CandidateIdentity, CandidateResponse, CompositionPlan
 
@@ -153,7 +154,7 @@ def _preflight(context, status: int, media_type: str, headers, body: str):
     if media["schema"] is True:
         # 只補上鎖版驗證器對 literal true 的相容處理，不改寫 D 的原始規格。
         cls = _TrueSchemaResponseValidator
-    api = OpenAPI.from_dict(copy.deepcopy(context.specification), config=Config(response_validator_cls=cls))
+    api = create_openapi(context.specification, config=Config(response_validator_cls=cls))
     operation = api.spec
     # D 的 pointer 已定位到確切 operation，避免為了 preflight 虛構網站或挑到另一條路由。
     for token in unquote(context.operation.schema_pointer[2:]).split("/"):

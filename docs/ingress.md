@@ -38,10 +38,10 @@ B 平台識別器與 C 生成協調器尚未實作，預設回 **501**，不是�
 
 此 app 的所有 path 都是目標 API 路徑，包括 `/`、`/docs`、`/openapi.json`；不保留文件端點，也不自動補斜線。CONNECT 與 WebSocket 不在目前範圍。
 
-`raw_url` 代表到達本服務的 URL，不會自動變成原商店 URL。上述本機測試 origin 是 `http://127.0.0.1:8001`。未來 B 須以已核准 manifest 與部署的 host／origin 配置匹配；不能把任意 Host 或 forwarded header 當作平台審查依據。若 HTTP server／代理已重寫 scheme、host、path，A 無法還原重寫前的 URL。範例停用 proxy headers，使本機觀察結果直接來自連線與 Host。
+`raw_url` 代表到達本服務的 URL，不會自動變成原商店 URL。上述本機測試 origin 是 `http://127.0.0.1:8001`。B 以明確部署 binding、已核准 manifest 與 host／origin 配置匹配；不能把任意 Host 或 forwarded header 當作平台審查依據。若 HTTP server／代理已重寫 scheme、host、path，A 無法還原重寫前的 URL。範例停用 proxy headers，使本機觀察結果直接來自連線與 Host。
 
 ## 接上後續處理
 
-`create_app(handler=...)` 接受 `async (NormalizedRequest) -> Response`，入口先完成標準化，再呼叫 handler，並附上同一追蹤 ID。預設 handler 只回報 501。正式 handler 尚待 B/C/H/I/M 完成後串接，必須在候選回應通過 gate 後才渲染；此介面本身不構成驗證或放行。
+`create_app(handler=...)` 接受 `async (NormalizedRequest) -> Response`，入口先完成標準化，再呼叫 handler，並附上同一追蹤 ID。預設 handler 只回報 501。現在可透過 `deception.api.identified:create_app --factory` 接上 B，詳見 [B 使用方式](identifier.md)；識別成功後仍待 C。完整 handler 仍需 C／M 與 H／I 的串接，必須在候選回應通過 gate 後才渲染；此介面本身不構成驗證或放行。
 
 實作使用 [FastAPI Request 介面](https://fastapi.tiangolo.com/advanced/using-request-directly/) 讀取 HTTP 資料；這些原始輸入不會自動進行 Pydantic body 驗證。

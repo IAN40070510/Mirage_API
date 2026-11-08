@@ -20,15 +20,15 @@ Mirage_API 的製作目標是整合不同部署環境的 HTTP 流量入口，接
 
 | 核心能力 | 已有基礎 | 尚待完成 |
 | --- | --- | --- |
-| 多環境流量攔截整合 | A：FastAPI HTTP 入口及標準化請求 | 各環境流量攔截／轉送接入、部署識別與統一轉接介面 |
+| 多環境流量攔截整合 | A：FastAPI HTTP 入口；B：明確環境／部署綁定識別及可選 A→B 接入 | 各環境流量攔截／轉送接入、可信代理與統一轉接介面 |
 | 外部攻擊判定接收 | A 可保留 request ID 供後續關聯 | 判定資料格式、來源驗證、請求關聯與情境選擇 |
-| 依多服務契約生成 | D：固定 OpenAPI 的 Profile；H：明確模板與 E 映射的候選組合；I：契約驗證 | B 平台識別、C/G 生成、完整流程串接、更多服務對映 |
+| 依多服務契約生成 | B：唯一契約與操作識別；D：固定 OpenAPI 的 Profile；H：候選組合；I：契約驗證 | C/G 生成、完整流程串接、更多服務對映 |
 | 跨 API 虛構資料與互動狀態 | E：可重現、可查詢的商品／變體資料與關聯 | 跨請求狀態更新、寫入操作、互動／session 隔離與並行一致性 |
 | 本地 LLM 動態生成 | 圖中的 C、G、P 與其資料邊界已規劃 | Ollama 整合、模型選定、工具調用與生成流程 |
 | 契約一致的 HTTP 輸出 | H：候選組合及契約 preflight；I：獨立驗證 API | M、修正／備援，以及入口到輸出的完整串接 |
-| 多環境集中管理 | 本地來源設定、生成設定與隔離欄位 | 集中設定儲存、管理介面、版本發布與部署綁定 |
+| 多環境集中管理 | 本地來源／生成設定、B 部署 binding 與可信 runtime context | 集中設定儲存、管理介面、版本發布與代理整合 |
 
-目前 A、D、E、H、I 可各自使用；A 尚未接上後續流程，預設回 `501 pipeline_not_implemented`。H 接收明確指令及可選的 E 映射，輸出仍待 I 部署 gate 驗證的候選。現有 E 是可查詢的固定資料快照，尚不提供互動造成的狀態更新。本文所有「規劃」格式只定義預期介面，不能當作現有 API 使用。
+目前 A、B、D、E、H、I 可各自使用，也有可選的 A→B 入口；B 識別成功後仍回 `501 orchestrator_not_implemented`，因 C 尚未接上。原始 A 入口預設仍回 `501 pipeline_not_implemented`。H 接收明確指令及可選的 E 映射，輸出仍待 I 部署 gate 驗證的候選。現有 E 是可查詢的固定資料快照，尚不提供互動造成的狀態更新。本文所有「規劃」格式只定義預期介面，不能當作現有 API 使用。
 
 ## 系統架構與整合邊界
 
@@ -88,7 +88,7 @@ flowchart TB
 | 節點 | 輸入 → 職責 → 輸出 | 狀態 |
 | --- | --- | --- |
 | A HTTP API 請求 | method、URL、headers、body → 保留原始 URL、query、追蹤 ID 的標準化請求；未來由環境轉接層提供部署上下文 | **已實作**：`deception.api.app:app`；保留重複 query／headers 與 body bytes，尚未接上 B/C，預設回 501 |
-| B 平台識別器 | 環境／部署／服務綁定、origin、API 前綴、method、path、版本 → 唯一平台與 operation；不明時拒絕猜測 | 正式驗證器內已有網站契約匹配；獨立識別器與多環境接入未實作 |
+| B 平台識別器 | 環境／部署／服務綁定、origin、API 前綴、method、path、版本 → 唯一平台與 operation；不明時拒絕猜測 | **已實作**：`src/deception/discovery/`；與 I 共用匹配器，可接 A／D；代理整合與集中設定管理尚未實作 |
 | C 任務協調器與 P Ollama | 識別結果、外部攻擊判定、生成策略 → 向 D–G 取材、限制 LLM 工具與輪次、指示 H；Ollama 提供本地推論 | 未實作；未選定模型 |
 | D 平台 Profile 工具 | 固定來源與 OpenAPI → 可追溯的操作、參數、狀態碼、媒體類型、schema 上下文 | **已實作**：`src/deception/profile_builder/`；提供 CLI 建立及 Python 查詢，尚未接上 C；不推測平台慣例 |
 | E 合成資料工具 | 種子、隔離身份、資料規則 → 跨操作可引用的虛構實體；未來維護互動造成的狀態變更 | **已實作**：`src/deception/synthetic/` 的商品／變體生成、保存、驗證與只讀查詢；顧客、訂單及互動狀態更新尚未實作 |
@@ -125,11 +125,13 @@ Mirage_API/
 ├─ pyproject.toml                    # 現有驗證器依賴及測試設定
 ├─ .env.example                      # MIRAGE_PLATFORMS_DIR 設定提示
 ├─ src/deception/api/               # A：FastAPI 原生請求入口與標準化介面
+├─ src/deception/discovery/         # B：明確部署綁定、唯一契約與操作識別
 ├─ src/deception/profile_builder/   # D：來源檢查、Profile 建立與操作查詢
 ├─ src/deception/synthetic/         # E：合成商品、變體、資料關聯與有效性驗證
 ├─ src/deception/core/              # H：明確模板、E 映射與候選回應組合
 ├─ configs/generation.yaml          # E：隔離身份、種子、數量與生成規則
 ├─ configs/composition.yaml         # H：明確狀態、headers、body 與映射指令
+├─ configs/bindings.yaml            # B：環境／部署／站點與固定契約綁定
 ├─ inputs/sources/                  # D：source.yaml 與固定 OpenAPI 輸入
 ├─ generated/                       # D/E/H：profiles、schemas、synthetic_data、responses
 ├─ mirage_validator/                 # 已實作的驗證 API、網站契約 gate、PoC 驗證
@@ -220,6 +222,17 @@ synthetic_seed: 42
 | Medusa（測試目標 `v2.22.4`） | Store API 商品讀取的一個 operation 與 200／404 | 對應測試目標的 [Store API 規格](https://docs.medusajs.com/api/store)、部署 origin、`fields` 等 query 上下文與參考服務對照 | 有使用者提供的 Store／Auth 快照，可供 D/E 離線使用；完整官方來源與部署仍待核實；見[輸入檢查](inputs/platforms/medusa/README.md) |
 
 先讓一個站點、單一 operation 和少數狀態碼形成可驗證閉環，再擴充。`poc-v1` 是本專案示意契約版本，**不是平台版本**。若官方規格未描述動態欄位、外掛、授權或商業規則，維持未涵蓋，另做參考服務對照。
+
+## 已實作的 B：平台識別器
+
+先比較既有 PlatformRegistry／I 匹配器、openapi-core、Werkzeug Routing 與 Starlette Routing，選擇重用既有契約載入及抽出的 B/I 共用匹配規則，沒有新增套件。功能、現成方案、套件授權與有效性驗證見 [B 說明](docs/identifier.md)。
+
+```powershell
+$env:PYTHONPATH = "$PWD/src"
+.\.venv\Scripts\python.exe -m deception.discovery --url "https://shop.example/store/products/prod-test" --method GET
+```
+
+目前 repo 的 Medusa binding 是未啟用的占位設定，預期回 `unverifiable`／`binding_disabled`。B 不猜平台、不自動核准 manifest，也不因 runtime context 而繞過 I 的版本歧義。可選用 `deception.api.identified:create_app --factory` 接上 A；識別成功仍待 C 執行，不代表已生成或放行回應。
 
 ## 已實作的 H：回應組合工具
 
