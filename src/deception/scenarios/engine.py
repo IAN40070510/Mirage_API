@@ -11,7 +11,7 @@ from deception.api.ingress import NormalizedRequest
 from deception.discovery.models import IdentificationResult
 from deception.profile_builder.builder import read_yaml
 from deception.profile_builder.models import OperationContext
-from deception.synthetic.models import DatasetScope
+from deception.common.models import DatasetScope
 from mirage_validator.request_matching import (match_base_url, parse_query,
                                                parse_request_url, select_operation)
 

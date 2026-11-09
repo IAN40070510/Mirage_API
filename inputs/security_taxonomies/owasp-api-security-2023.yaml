@@ -1,0 +1,49 @@
+# 分類名稱取自 OWASP API Security Project，保留出處與 CC-BY-SA-4.0 授權。
+# 這是跨業務領域的風險分類，不是電商專屬榜單或本專案已實作能力清單。
+schema_version: 1
+taxonomy_id: owasp-api-security-2023
+title: OWASP API Security Top 10 2023
+edition: '2023'
+source_url: https://api-security.owasp.org/editions/2023/en/0x11-t10/
+license: CC-BY-SA-4.0
+categories:
+  - category_id: API1:2023
+    title_en: Broken Object Level Authorization
+    title_zh: 物件層級授權失效
+    url: https://api-security.owasp.org/editions/2023/en/0xa1-broken-object-level-authorization/
+  - category_id: API2:2023
+    title_en: Broken Authentication
+    title_zh: 身分驗證失效
+    url: https://api-security.owasp.org/editions/2023/en/0xa2-broken-authentication/
+  - category_id: API3:2023
+    title_en: Broken Object Property Level Authorization
+    title_zh: 物件屬性層級授權失效
+    url: https://api-security.owasp.org/editions/2023/en/0xa3-broken-object-property-level-authorization/
+  - category_id: API4:2023
+    title_en: Unrestricted Resource Consumption
+    title_zh: 資源消耗缺乏限制
+    url: https://api-security.owasp.org/editions/2023/en/0xa4-unrestricted-resource-consumption/
+  - category_id: API5:2023
+    title_en: Broken Function Level Authorization
+    title_zh: 功能層級授權失效
+    url: https://api-security.owasp.org/editions/2023/en/0xa5-broken-function-level-authorization/
+  - category_id: API6:2023
+    title_en: Unrestricted Access to Sensitive Business Flows
+    title_zh: 敏感業務流程存取缺乏限制
+    url: https://api-security.owasp.org/editions/2023/en/0xa6-unrestricted-access-to-sensitive-business-flows/
+  - category_id: API7:2023
+    title_en: Server Side Request Forgery
+    title_zh: 伺服器端請求偽造
+    url: https://api-security.owasp.org/editions/2023/en/0xa7-server-side-request-forgery/
+  - category_id: API8:2023
+    title_en: Security Misconfiguration
+    title_zh: 安全設定錯誤
+    url: https://api-security.owasp.org/editions/2023/en/0xa8-security-misconfiguration/
+  - category_id: API9:2023
+    title_en: Improper Inventory Management
+    title_zh: API 資產清冊管理不當
+    url: https://api-security.owasp.org/editions/2023/en/0xa9-improper-inventory-management/
+  - category_id: API10:2023
+    title_en: Unsafe Consumption of APIs
+    title_zh: 不安全地使用其他 API
+    url: https://api-security.owasp.org/editions/2023/en/0xaa-unsafe-consumption-of-apis/

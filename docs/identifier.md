@@ -6,7 +6,7 @@
 
 | 輸入／功能 | 本次行為 |
 | --- | --- |
-| 部署綁定 | `configs/bindings.yaml` 明確設定 environment、deployment、service、site、origin／prefix、平台、版本、hash 與 enabled |
+| 部署綁定 | `domains/ecommerce/configs/bindings.yaml` 明確設定 environment、deployment、service、site、origin／prefix、平台、版本、hash 與 enabled |
 | 可信執行環境 | 可由伺服器傳入 `RuntimeContext`，不由 HTTP 的 `X-Environment-ID`、Forwarded 或 X-Platform 自動填入 |
 | 契約載入 | 重用 `PlatformRegistry`，核對原始檔 hash、內部引用、OpenAPI 與 manifest；無效來源使載入失敗 |
 | 站點匹配 | scheme／authority 與 prefix segment 邊界匹配；不把 `/api` 當成 `/apix` |
@@ -62,7 +62,7 @@ bindings:
     enabled: false
 ```
 
-repo 的 `configs/bindings.yaml` 只有未啟用的占位範例，沒有宣稱任何真實站點已受審查。目前 Medusa 來源及部署仍待核對，不能為了得到成功結果就將 approved 改為 true。只有完成來源、部署、base URLs 與 query 上下文審查後，才啟用相應設定。
+repo 的 `domains/ecommerce/configs/bindings.yaml` 只有未啟用的占位範例，沒有宣稱任何真實站點已受審查。目前 Medusa 來源及部署仍待核對，不能為了得到成功結果就將 approved 改為 true。只有完成來源、部署、base URLs 與 query 上下文審查後，才啟用相應設定。
 
 CLI 只做本地識別，不發送 HTTP：
 
@@ -73,6 +73,8 @@ $env:PYTHONPATH = "$PWD/src"
 
 預設範例會回 `unverifiable`／`binding_disabled` 並以非零結束碼停止。可用 `--platforms <契約目錄>` 與 `--bindings <設定檔>` 指定已審查設定。多環境需要由可信執行環境一併指定 `--environment-id`、`--deployment-id`、`--service-id`，三者必須同時提供；它們只篩選部署 binding，不會隱藏契約驗證器 registry 的重疊版本。
 
+CLI 與僅識別 HTTP factory 未提供路徑時，都使用所選領域 manifest 的 `platform_dir` 與 `bindings_config`；共用選擇與覆寫方式見 [領域設定](domains.md)。兩個路徑都明確提供時可獨立使用，不必載入領域 manifest。
+
 同一 URL 若在不同環境使用不同契約，應為各執行 instance 配置對應的 registry／契約驗證器，而不是把所有衝突版本載入同一 registry 再讓平台識別器偏選一個版本。集中管理、代理轉接及環境來源認證尚未實作。
 
 ## 與 HTTP 請求入口／平台規格工具接合
@@ -82,7 +84,7 @@ from pathlib import Path
 from deception.discovery import PlatformIdentifier
 from deception.profile_builder import ProfileTool
 
-identifier = PlatformIdentifier.from_paths(Path("inputs/platforms"), Path("configs/bindings.yaml"))
+identifier = PlatformIdentifier.from_paths(Path("domains/ecommerce/inputs/platforms"), Path("domains/ecommerce/configs/bindings.yaml"))
 result = identifier.identify_request(normalized_request, context=trusted_runtime_context)
 if result.decision == "identified":
     context = ProfileTool(Path("generated")).get_operation(**result.identity.profile_arguments())
@@ -94,8 +96,7 @@ if result.decision == "identified":
 
 ```powershell
 $env:PYTHONPATH = "$PWD/src"
-$env:MIRAGE_PLATFORMS_DIR = "$PWD/inputs/platforms"
-$env:MIRAGE_BINDINGS_FILE = "$PWD/configs/bindings.yaml"
+$env:MIRAGE_DOMAIN = "ecommerce"
 .\.venv\Scripts\python.exe -m uvicorn deception.api.identified:create_app --factory --host 127.0.0.1 --port 8001 --no-proxy-headers
 ```
 

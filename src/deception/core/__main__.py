@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from deception.profile_builder.builder import _atomic_write, local_path, read_yaml
-from deception.synthetic import load_dataset, read_config
+from deception.domains.registry import default_implementations, get_data_provider
 
 from . import CompositionPlan, ResponseComposer
 
@@ -19,13 +19,16 @@ def main():
     parser.add_argument("--output", type=Path, default=Path("generated"))
     parser.add_argument("--dataset", type=Path)
     parser.add_argument("--generation-config", type=Path)
+    parser.add_argument("--domain", choices=default_implementations().domain_ids())
     parser.add_argument("--allow-unreviewed", action="store_true", help="Offline preview only")
     args = parser.parse_args()
     if bool(args.dataset) != bool(args.generation_config):
         parser.error("--dataset and --generation-config must be supplied together")
+    if args.dataset and args.domain is None:
+        parser.error("--domain must be explicit when loading domain-specific data files")
     try:
         plan = CompositionPlan.model_validate(read_yaml(args.plan.read_bytes()))
-        dataset = load_dataset(args.dataset, read_config(args.generation_config)) if args.dataset else None
+        dataset = get_data_provider(args.domain).from_files(args.generation_config, args.dataset) if args.dataset else None
         candidate = ResponseComposer(args.profiles).compose(plan, dataset=dataset,
                                                          allow_unreviewed=args.allow_unreviewed)
         data = (json.dumps(candidate.to_dict(), ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode("utf-8")

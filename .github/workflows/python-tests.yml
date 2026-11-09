@@ -37,13 +37,13 @@ jobs:
 
       - name: Build Medusa Store/Auth profile from pinned contract
         run: |
-          python -m deception.profile_builder --source inputs/sources/medusa/source.yaml --output generated
+          python -m deception.profile_builder --source domains/ecommerce/inputs/sources/medusa/source.yaml --output generated
           python - <<'PY'
           import hashlib
           from pathlib import Path
           import yaml
 
-          spec = Path("inputs/sources/medusa/openapi.yaml").read_bytes()
+          spec = Path("domains/ecommerce/inputs/sources/medusa/openapi.yaml").read_bytes()
           metadata = yaml.safe_load(Path("generated/profiles/medusa.yaml").read_text(encoding="utf-8"))
           assert metadata["source"]["spec_sha256"] == hashlib.sha256(spec).hexdigest()
           assert metadata["source"]["approved"] is False

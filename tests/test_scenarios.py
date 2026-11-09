@@ -571,6 +571,6 @@ def test_policy_digest_is_read_only_and_tracks_the_actual_snapshot(scenario_stac
 def test_repository_policy_example_is_valid_and_disabled_by_default():
     """隨附政策範本可由正式載入器解析，並保留明確停用的預設值。"""
     root = Path(__file__).resolve().parents[1]
-    policy = load_policy(root / "inputs" / "policies" / "deception.yaml")
+    policy = load_policy(root / "domains" / "ecommerce" / "inputs" / "policies" / "deception.yaml")
     assert isinstance(policy, ScenarioPolicy)
     assert policy.enabled is False

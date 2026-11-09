@@ -8,8 +8,8 @@
 | --- | --- |
 | 契約定位 | 依 platform／version／SHA-256／method／path template 從平台規格工具取得唯一操作 |
 | 明確組合 | 使用呼叫者提供的 body 模板，不自動依 schema 填入猜測值、刪除欄位或轉型 |
-| 合成資料映射 | 透過 JSON Pointer 從 `products`／`variants` 複製值到已存在的模板位置 |
-| 隔離 | 合成資料工具必須通過重建檢查，且 site、platform、version、hash、scenario、run 必須與指令相同 |
+| 合成資料映射 | 透過 JSON Pointer 從領域供應器的 `CompositionData.payload` 複製值到已存在的模板位置，不限定商品根節點 |
+| 隔離 | 供應器先驗證領域資料，組合器重驗 DTO，且 site、platform、version、hash、scenario、run 必須與指令相同 |
 | HTTP metadata | 狀態碼須有契約；拒絕重複 header、控制字元、傳輸 framing 與不符的 Content-Type |
 | JSON | 僅支援 UTF-8 `application/json` 或 `application/*+json` 的明確媒體名稱；固定排序，保留 JSON 原始型別 |
 | 契約 preflight | 對最終序列化 triple 檢查 schema 與 headers；失敗直接拒絕，不修正或重試 |
@@ -17,6 +17,8 @@
 | 契約驗證器身份交接 | `verify_candidate` 交給契約驗證器後，核對 platform／version／hash／operation；其他契約的結果不能代替原候選通過 |
 
 preflight 只表示符合載入的回應契約，不檢查原網站綁定、已審查 query 或真實平台行為。回應組合器的輸出仍是待契約驗證器驗證的候選，不包含 `valid=true` 或正式放行狀態。任務協調器已串接回應組合與契約驗證，[修正與備援工具](recovery.md) 的修正及備援也重新經過回應組合與契約驗證；可選 [HTTP 回送與完整 HTTP 接入](renderer.md) 會完成最終傳輸標頭，再依部署 manifest 對同一份 triple 重新執行契約驗證才回送。
+
+資料輸入可直接提供 `CompositionData`，或由可信領域物件的 `to_composition_data()` 回傳該型別。裸字典或回傳其他型別的 adapter 都會拒絕；DTO 並不代替領域事實驗證。電商 adapter 仍依生成設定重建檢查商品，工單等其他領域可使用不同 payload，詳見 [共用資料交換](common-data.md)。
 
 本版只處理有 JSON body 的回應。HEAD、204／205／304、非 JSON、缺少 media schema 或多值 headers 尚不支援。schema 是否允許額外欄位、nullable、組合 schema 等，沿用來源契約；不額外猜測或放寬。
 
@@ -45,7 +47,7 @@ preflight 只表示符合載入的回應契約，不檢查原網站綁定、已�
 | [openapi-core](https://github.com/python-openapi/openapi-core/blob/0.19.5/LICENSE) | 0.19.5 | BSD-3-Clause | 契約與最終回應 preflight |
 | [Werkzeug](https://github.com/pallets/werkzeug/blob/3.1.1/LICENSE.txt) | 3.1.1 | BSD-3-Clause | 單值 HTTP headers adapter |
 | [PyYAML](https://github.com/yaml/pyyaml/blob/6.0.3/LICENSE) | 6.0.3 | MIT | 讀取平台 Profile 與 CLI 指令 |
-| [Faker](https://faker.readthedocs.io/en/stable/#license) | 40.44.0 | MIT | 透過合成資料工具重建並檢查合成資料 |
+| [Faker](https://faker.readthedocs.io/en/stable/#license) | 40.44.0 | MIT | 電商 adapter 重建並檢查商品；共用組合器不直接呼叫 Faker |
 | [jsonschema](https://github.com/python-jsonschema/jsonschema/blob/main/COPYING) | 4.26.0 | MIT | 既有驗證鏈的 schema 驗證 |
 | [jsonschema-path](https://github.com/python-openapi/jsonschema-path) | 0.3.4 | Apache-2.0 | openapi-core 的 schema 路徑與引用解析依賴 |
 | [openapi-schema-validator](https://github.com/python-openapi/openapi-schema-validator) | 0.6.3 | BSD-3-Clause | OpenAPI schema 驗證依賴 |
@@ -55,18 +57,18 @@ Python 標準庫的 `json`、`dataclasses`、`pathlib` 等隨 Python 提供，�
 
 ## 指令格式與執行
 
-`configs/composition.yaml` 提供明確的 Medusa 404 範例。它是呼叫者選定的錯誤情境，不代表回應組合器已判斷商品不存在；存在與否的情境選擇屬於情境選擇工具。
+`domains/ecommerce/configs/composition.yaml` 提供明確的 Medusa 404 範例。它是呼叫者選定的錯誤情境，不代表回應組合器已判斷商品不存在；存在與否的情境選擇屬於情境選擇工具。
 
 ```powershell
 $env:PYTHONPATH = "$PWD/src"
-.\.venv\Scripts\python.exe -m deception.core --plan configs/composition.yaml --profiles generated --output generated --allow-unreviewed
+.\.venv\Scripts\python.exe -m deception.core --plan domains/ecommerce/configs/composition.yaml --profiles generated --output generated --allow-unreviewed
 ```
 
 若平台規格工具尚未產生 Profile，先執行 [平台規格工具建立指令](profiles.md)。目前 Medusa 來源尚未審查，因此上面明確開啟離線預覽；預設不加 `--allow-unreviewed` 就會拒絕該來源。回應組合器不修改平台規格工具 source 或契約驗證器 manifest 的 `approved`。
 
 成功會保存 `generated/responses/<platform>/<候選封套SHA256>.json`，並顯示契約預檢已通過、尚待部署契約驗證的訊息。檔案 body 欄位本身已是最終 JSON 字串；整份檔案是本地候選封套，不能直接把封套當成商品 HTTP body。
 
-需映射合成資料時，同時提供 `--dataset <合成資料產物>` 與 `--generation-config configs/generation.yaml`。plan 的 scope 必須與合成資料工具相同；404 範例的 scenario/run 與合成資料工具預設成功情境不同，不能直接混用。
+需映射電商資料時，同時提供 `--domain ecommerce`、`--dataset <合成資料產物>` 與 `--generation-config domains/ecommerce/configs/generation.yaml`。共用 CLI 由所選領域的 `provider.from_files` 載入及驗證資料，不自行解析商品。plan 的 scope 必須與資料相同；404 範例的 scenario/run 與預設成功情境不同，不能直接混用。
 
 ```yaml
 # 指令的局部示例；其他身份與 status 仍須明確提供。
@@ -81,7 +83,7 @@ bindings:
     target_pointer: /product/title
 ```
 
-這個精簡 body 只適用相應的合成測試契約，無法滿足目前 Medusa 的全部必填欄位。target 必須存在，重複或父子重疊的 target 拒絕；陣列 index 不接受負值、前導零或 `-` append。沒有文字插值、檔案讀取表達式或任意程式執行。合成資料工具的設定與 provenance 不能透過 source_pointer 自動映射出去。
+這個精簡 body 只適用相應的合成測試契約，無法滿足目前 Medusa 的全部必填欄位。target 必須存在，重複或父子重疊的 target 拒絕；陣列 index 不接受負值、前導零或 `-` append。沒有文字插值、檔案讀取表達式或任意程式執行。source 只能讀供應器明確投影的 payload；電商投影不包含生成設定與 provenance，其他領域也須自行選擇可暴露的資料。
 
 ## 交給契約驗證器的介面
 

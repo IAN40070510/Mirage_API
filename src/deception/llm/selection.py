@@ -8,7 +8,7 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx2
 from pydantic import Field
 
-from deception.synthetic.models import SyntheticModel
+from deception.common.models import SyntheticModel
 
 from .models import LLMConfig
 

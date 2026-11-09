@@ -1,0 +1,49 @@
+# 分類名稱取自 OWASP Top 10 Project，保留出處與 CC-BY-SA-4.0 授權。
+# 中文名稱為本專案翻譯；不宣稱是 OWASP 官方翻譯或官方領域專屬排名。
+schema_version: 1
+taxonomy_id: owasp-web-2025
+title: OWASP Top 10 2025
+edition: '2025'
+source_url: https://top10.owasp.org/2025/0x00_2025-Introduction/
+license: CC-BY-SA-4.0
+categories:
+  - category_id: A01:2025
+    title_en: Broken Access Control
+    title_zh: 存取控制失效
+    url: https://top10.owasp.org/2025/A01_2025-Broken_Access_Control/
+  - category_id: A02:2025
+    title_en: Security Misconfiguration
+    title_zh: 安全設定錯誤
+    url: https://top10.owasp.org/2025/A02_2025-Security_Misconfiguration/
+  - category_id: A03:2025
+    title_en: Software Supply Chain Failures
+    title_zh: 軟體供應鏈失效
+    url: https://top10.owasp.org/2025/A03_2025-Software_Supply_Chain_Failures/
+  - category_id: A04:2025
+    title_en: Cryptographic Failures
+    title_zh: 密碼學失效
+    url: https://top10.owasp.org/2025/A04_2025-Cryptographic_Failures/
+  - category_id: A05:2025
+    title_en: Injection
+    title_zh: 注入
+    url: https://top10.owasp.org/2025/A05_2025-Injection/
+  - category_id: A06:2025
+    title_en: Insecure Design
+    title_zh: 不安全設計
+    url: https://top10.owasp.org/2025/A06_2025-Insecure_Design/
+  - category_id: A07:2025
+    title_en: Authentication Failures
+    title_zh: 身分驗證失效
+    url: https://top10.owasp.org/2025/A07_2025-Authentication_Failures/
+  - category_id: A08:2025
+    title_en: Software or Data Integrity Failures
+    title_zh: 軟體或資料完整性失效
+    url: https://top10.owasp.org/2025/A08_2025-Software_or_Data_Integrity_Failures/
+  - category_id: A09:2025
+    title_en: Security Logging & Alerting Failures
+    title_zh: 安全紀錄與告警失效
+    url: https://top10.owasp.org/2025/A09_2025-Security_Logging_and_Alerting_Failures/
+  - category_id: A10:2025
+    title_en: Mishandling of Exceptional Conditions
+    title_zh: 異常狀況處理不當
+    url: https://top10.owasp.org/2025/A10_2025-Mishandling_of_Exceptional_Conditions/

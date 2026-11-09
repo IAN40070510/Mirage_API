@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass
 
 from pydantic import Field, JsonValue
 
-from deception.synthetic.models import DatasetScope, SyntheticModel
+from deception.common.models import DatasetScope, SyntheticModel
 from mirage_validator.gate import GateRequest
 
 

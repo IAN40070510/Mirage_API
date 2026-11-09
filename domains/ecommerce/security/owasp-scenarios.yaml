@@ -1,0 +1,87 @@
+# 這是本專案的電商情境映射，不是 OWASP 官方電商 Top 10，也不是實際主機弱點。
+schema_version: 1
+domain: ecommerce
+catalog_id: ecommerce-api-weaknesses
+catalog_version: '1'
+taxonomy_ids:
+  - owasp-api-security-2023
+  - owasp-web-2025
+scenarios:
+  - scenario_id: api1-cross-order-access
+    title: 跨虛構使用者訂單存取
+    description: 設計以虛構訂單與使用者模擬物件授權缺陷；尚無訂單或登入狀態實作。
+    categories:
+      - {taxonomy_id: owasp-api-security-2023, category_id: 'API1:2023'}
+    status: designed
+    verification: [只能取得同一隔離互動的虛構資料, 不能接觸真實使用者或訂單]
+  - scenario_id: api2-weak-synthetic-session
+    title: 虛構登入會話缺陷
+    description: 設計展示受控虛構會話的異常登入行為，不接受真實憑證或變更服務認證。
+    categories:
+      - {taxonomy_id: owasp-api-security-2023, category_id: 'API2:2023'}
+    status: designed
+    verification: [虛構會話不能取得主機或管理介面權限, 到期與重放規則仍生效]
+  - scenario_id: api3-internal-product-properties
+    title: 虛構內部商品屬性外露
+    description: 在隔離商品契約宣告並回傳固定內部註記，模擬不適合公開的屬性外露。
+    categories:
+      - {taxonomy_id: owasp-api-security-2023, category_id: 'API3:2023'}
+      - {taxonomy_id: owasp-web-2025, category_id: 'A01:2025'}
+    status: implemented
+    handler_id: product-property-exposure
+    parameters:
+      internal_note: 'Campaign reference: CAM-4827; visibility: internal.'
+    verification: [商品 ID 與名稱仍對應原虛構快照, 內部註記不由訪客或模型改寫, 最終回應仍通過所選合成契約]
+  - scenario_id: api4-resource-limit-illusion
+    title: 看似缺少資源限制
+    description: 設計以受控回應表現批次查詢風險，實際執行仍保留大小與總預算限制。
+    categories:
+      - {taxonomy_id: owasp-api-security-2023, category_id: 'API4:2023'}
+    status: designed
+    verification: [不建立無上限工作或資料, 達到共用預算必須停止]
+  - scenario_id: api5-synthetic-admin-function
+    title: 虛構管理功能存取
+    description: 設計只對虛構資源模擬管理操作，不開放真實設定或主機管理權限。
+    categories:
+      - {taxonomy_id: owasp-api-security-2023, category_id: 'API5:2023'}
+    status: designed
+    verification: [只使用已宣告的合成管理契約, 不能修改核心政策或部署設定]
+  - scenario_id: api6-coupon-reuse-flow
+    title: 虛構優惠碼重用流程
+    description: 設計以虛構優惠與訂單狀態表現業務流程缺陷，交易狀態介面尚未實作。
+    categories:
+      - {taxonomy_id: owasp-api-security-2023, category_id: 'API6:2023'}
+    status: designed
+    verification: [不產生真實付款或訂單, 重送請求不得重複改動虛構狀態]
+  - scenario_id: api7-static-metadata-illusion
+    title: 靜態內部服務資訊假象
+    description: 設計回傳明列的虛構 metadata fixture；不依訪客 URL 連網、讀檔或存取雲端 metadata。
+    categories:
+      - {taxonomy_id: owasp-api-security-2023, category_id: 'API7:2023'}
+    status: designed
+    verification: [任何 URL 都不能變成實際外連, 不能讀取主機或雲端服務憑證]
+  - scenario_id: api8-debug-header-disclosure
+    title: 虛構除錯版本標頭外露
+    description: 回傳領域包明列的虛構舊版識別，不讀取實際主機版本、堆疊或設定。
+    categories:
+      - {taxonomy_id: owasp-api-security-2023, category_id: 'API8:2023'}
+      - {taxonomy_id: owasp-web-2025, category_id: 'A02:2025'}
+    status: implemented
+    handler_id: debug-header-disclosure
+    parameters:
+      legacy_version: legacy-store-0.8
+    verification: [只有固定虛構識別可出現在標頭, 不洩漏原請求或真實環境資訊, 最終標頭在回送前重新驗證]
+  - scenario_id: api9-legacy-api-inventory
+    title: 虛構舊版 API 清單
+    description: 設計以固定契約的舊版路徑吸引探索，不註冊任意或未審查真實端點。
+    categories:
+      - {taxonomy_id: owasp-api-security-2023, category_id: 'API9:2023'}
+    status: designed
+    verification: [只能使用已綁定的虛構版本與操作, 未知路徑仍不能繞過契約驗證]
+  - scenario_id: api10-untrusted-upstream-fixture
+    title: 虛構上游資料處理缺陷
+    description: 設計以固定 fixture 表現不可信上游資料影響，不下載或執行外部內容。
+    categories:
+      - {taxonomy_id: owasp-api-security-2023, category_id: 'API10:2023'}
+    status: designed
+    verification: [上游內容只能來自包內固定資料, 不執行反序列化程式碼或任意請求]

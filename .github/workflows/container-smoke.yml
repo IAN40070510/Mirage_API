@@ -19,11 +19,11 @@ jobs:
         run: docker compose up --build --wait --wait-timeout 180
 
       - name: Exercise attack-shaped requests and logical consistency
-        run: docker compose exec -T mirage python tools/verify_ecommerce_api.py --base-url http://127.0.0.1:8000 --output /app/generated/verification/ecommerce-api.json
+        run: docker compose exec -T mirage python tools/verify_domain_api.py --domain ecommerce --base-url http://127.0.0.1:8000
 
       - name: Copy the verification report
         if: always()
-        run: docker compose cp mirage:/app/generated/verification/ecommerce-api.json ecommerce-api.json
+        run: docker compose cp mirage:/app/generated/domains/ecommerce/verification/http-api.json ecommerce-api.json
 
       - uses: actions/upload-artifact@v4
         if: always()

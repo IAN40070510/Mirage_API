@@ -1,7 +1,6 @@
 """C/J：自家必經控制流程與受限 LLM 工具規劃；成功只回同一份通過 I 的內部候選。"""
 
 import asyncio
-import copy
 import json
 import time
 from datetime import datetime, timedelta, timezone
@@ -11,14 +10,12 @@ from pydantic import Field, JsonValue
 
 from deception.generation import GenerationContext, GenerationIntent
 from deception.generation.models import digest
-from deception.generation.pointers import get
 from deception.generation.schema import field_schema
 from deception.llm import BudgetExceeded, RunBudget
 from deception.scenarios import fingerprint_request
 from deception.scenarios.models import ScenarioIssue
-from deception.synthetic import generate_dataset
-from deception.synthetic.generator import checked_dataset
-from deception.synthetic.models import SyntheticConfig, SyntheticModel
+from deception.common.models import SyntheticModel
+from deception.domains.registry import get_data_provider
 from mirage_validator.gate import GateResult
 
 from .handoff import verify_candidate
@@ -34,27 +31,6 @@ class PipelineResult(SyntheticModel):
     gate_result: GateResult | None = None
     trace: dict[str, JsonValue] = Field(default_factory=dict)
     errors: list[ScenarioIssue] = Field(default_factory=list)
-
-
-class SyntheticSnapshotProvider:
-    """內建 E 電商快照供應器；其他領域可注入自己的 load/facts/composition_data 介面。"""
-
-    def load(self, config, data, expected_scope):
-        """核對管理者的完整設定與 scope，禁止把舊資料重新標記為新情境。"""
-        config = SyntheticConfig.model_validate(config.model_dump(mode="json"))
-        if config.scope != expected_scope:
-            raise ValueError("Generation configuration does not match the prepared scenario scope")
-        return generate_dataset(config) if data is None else checked_dataset(data, config)
-
-    def facts(self, data, plan) -> dict:
-        """只投影 H 已允許的權威欄位，整個原始請求與完整 E 資料不送模型。"""
-        source = {"products": [p.model_dump(mode="json") for p in data.products],
-                  "variants": [v.model_dump(mode="json") for v in data.variants]}
-        return {binding.target_pointer: copy.deepcopy(get(source, binding.source_pointer)) for binding in plan.bindings}
-
-    def composition_data(self, data):
-        """H 目前支援 E 商品資料；新領域若不使用 E 映射可由自己的 provider 回 None。"""
-        return data
 
 
 class _Stop(ValueError):
@@ -75,7 +51,7 @@ class DeceptionOrchestrator:
             raise ValueError("Scenario and generation domains must match")
         self.identifier, self.profiles, self.scenarios = identifier, profiles, scenarios
         self.generator, self.composer, self.gate = generator, composer, gate
-        self.data_provider = SyntheticSnapshotProvider() if data_provider is None else data_provider
+        self.data_provider = get_data_provider(scenarios.domain_id) if data_provider is None else data_provider
         self.recovery = RecoveryTool() if recovery is None else recovery
         if self.recovery.policy is not None and self.recovery.policy.domain != scenarios.domain_id:
             raise ValueError("Recovery and scenario domains must match")

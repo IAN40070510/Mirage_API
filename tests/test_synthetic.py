@@ -296,7 +296,7 @@ def test_d_profile_identity_binding_does_not_promote_source_approval():
 
 def test_medusa_source_to_profile_to_persisted_synthetic_query(tmp_path):
     """使用 repo 真實來源做離線 D/E 閉環，仍不將內部實體當成 Medusa 完整回應。"""
-    source = Path(__file__).resolve().parents[1] / "inputs/sources/medusa/source.yaml"
+    source = Path(__file__).resolve().parents[1] / "domains/ecommerce/inputs/sources/medusa/source.yaml"
     generated = tmp_path / "generated"
     profile = build_profile(source, generated)
     context = ProfileTool(generated).get_operation(

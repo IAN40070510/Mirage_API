@@ -8,7 +8,7 @@ from pydantic import JsonValue
 
 from deception.discovery.models import IdentifiedOperation
 from deception.profile_builder.models import OperationContext
-from deception.synthetic.models import SLUG
+from deception.common.models import SLUG
 
 from .models import DomainOutcome, DomainPolicy, PreparedScenario, ScenarioRuleBase
 
@@ -64,6 +64,7 @@ class DomainRegistry:
 
 def default_registry() -> DomainRegistry:
     """目前內建電商；後續領域由應用程式明確註冊各自的處理器。"""
-    from .domains.ecommerce import EcommerceDomain
+    from deception.domains.registry import default_implementations
 
-    return DomainRegistry([EcommerceDomain()])
+    implementations = default_implementations()
+    return DomainRegistry([implementations.get(domain).scenario_factory() for domain in implementations.domain_ids()])

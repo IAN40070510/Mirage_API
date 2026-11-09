@@ -36,7 +36,7 @@
 
 ## 設定與公開 API
 
-`inputs/policies/recovery.yaml` 提供可解析但預設 `enabled: false` 的範本。頂層欄位如下：
+`domains/ecommerce/inputs/policies/recovery.yaml` 提供可解析但預設 `enabled: false` 的範本。頂層欄位如下：
 
 | 欄位 | 用途 |
 | --- | --- |

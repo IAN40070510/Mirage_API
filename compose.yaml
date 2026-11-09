@@ -7,9 +7,12 @@ services:
     init: true
     environment:
       MIRAGE_DEMO_MODE: ${MIRAGE_DEMO_MODE:-fallback}
+      MIRAGE_DOMAIN: ${MIRAGE_DOMAIN:-ecommerce}
+      MIRAGE_APP_CONFIG: /app/configs/app.yaml
+      MIRAGE_DOMAINS_DIR: /app/domains
+      MIRAGE_SECURITY_TAXONOMIES_DIR: /app/inputs/security_taxonomies
       MIRAGE_DEMO_ORIGIN: http://127.0.0.1:${MIRAGE_HTTP_PORT:-8000}
-      MIRAGE_DEMO_CONFIG: /app/configs/demo.yaml
-      MIRAGE_DEMO_OUTPUT: /app/generated/demo
+      MIRAGE_OUTPUT_ROOT: /app/generated
       MIRAGE_LLM_CONFIG: /app/configs/llm.yaml
     ports:
       - "127.0.0.1:${MIRAGE_HTTP_PORT:-8000}:8000"

@@ -18,9 +18,11 @@ ENV PYTHONUNBUFFERED=1 \
     PYDANTIC_AI_NO_BANNER=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     MIRAGE_DEMO_MODE=fallback \
+    MIRAGE_APP_CONFIG=/app/configs/app.yaml \
+    MIRAGE_DOMAINS_DIR=/app/domains \
+    MIRAGE_SECURITY_TAXONOMIES_DIR=/app/inputs/security_taxonomies \
     MIRAGE_DEMO_ORIGIN=http://127.0.0.1:8000 \
-    MIRAGE_DEMO_CONFIG=/app/configs/demo.yaml \
-    MIRAGE_DEMO_OUTPUT=/app/generated/demo \
+    MIRAGE_OUTPUT_ROOT=/app/generated \
     MIRAGE_LLM_CONFIG=/app/configs/llm.yaml
 
 WORKDIR /app
@@ -29,10 +31,12 @@ RUN python -m pip install --no-cache-dir --no-index --find-links=/wheels mirage-
     && rm -rf /wheels \
     && groupadd --gid 10001 mirage \
     && useradd --uid 10001 --gid 10001 --create-home --home-dir /home/mirage mirage \
-    && mkdir -p /app/generated/demo \
+    && mkdir -p /app/generated \
     && chown -R 10001:10001 /app/generated
 
 COPY --chown=10001:10001 configs/ ./configs/
+COPY --chown=10001:10001 domains/ ./domains/
+COPY --chown=10001:10001 inputs/security_taxonomies/ ./inputs/security_taxonomies/
 COPY --chown=10001:10001 tools/ ./tools/
 COPY --chown=10001:10001 docs/ ./docs/
 COPY --chown=10001:10001 README.md ./README.md

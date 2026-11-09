@@ -16,7 +16,7 @@
 | 檔案 | 目的 |
 | --- | --- |
 | `openapi.yaml` | 已修正的 Store/Auth 子集，供契約驗證器的正式格式 Gate 使用（尚未啟用） |
-| `inputs/sources/medusa/openapi.yaml` | 平台規格工具使用的同一份 bytes；與 Gate 契約完全相同 |
+| `domains/ecommerce/inputs/sources/medusa/openapi.yaml` | 平台規格工具使用的同一份 bytes；與 Gate 契約完全相同 |
 | `manifest.yaml.example` | 已更新固定來源 commit、子集 SHA-256；`approved: false`，不會載入 |
 | `api-scope.json` | 歷史 XGBoost 推論操作範圍記錄，**不作為驗證器輸入**；其中原始來源 SHA 與這次取得的官方完整 OpenAPI SHA 不相同 |
 | `input-audit.json` | 已更新子集 SHA、官方來源資訊及靜態修補狀態；靜態修補後的執行期測試仍待跑 |
@@ -41,9 +41,9 @@ ced300a2de92b9829e6e600964588e894b760f07f8d79c1df657e1abe0529058
 在專案根目錄（Python 3.11+、已安裝 `.[test]`）執行：
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests/test_medusa_pinned_contract.py -q
+.\.venv\Scripts\python.exe -m pytest -q
 $env:PYTHONPATH = "$PWD/src"
-.\.venv\Scripts\python.exe -m deception.profile_builder --source inputs/sources/medusa/source.yaml --output generated
+.\.venv\Scripts\python.exe -m deception.profile_builder --source domains/ecommerce/inputs/sources/medusa/source.yaml --output generated
 ```
 
 此回歸測試核對平台規格工具/契約驗證器相同 bytes、固定 SHA、版本區分、77 operations、133 schemas、51 份 `x-allowed`、`BaseRefund` 新欄位與內部 `$ref`；**不能替代固定 Medusa 部署的實際 HTTP 對照測試**。
@@ -55,4 +55,4 @@ $env:PYTHONPATH = "$PWD/src"
 3. 對新規格重新執行 Profile 建立、OpenAPI Gate／pytest 與對照測試，確認更新無回歸。
 4. 維護者完成來源、部署與覆蓋審查後，再決定是否建立 `manifest.yaml` 與核准。原始 `manifest.yaml.example` 的網站 `https://shop.example` 只是占位值。
 
-詳細發現與修補歷程：[審查紀錄](../../docs/audits/medusa-v2.22.4-contract-2026-11-08.md)。
+詳細發現與修補歷程：[審查紀錄](../../../docs/audits/medusa-v2.22.4-contract-2026-11-08.md)。

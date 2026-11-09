@@ -50,7 +50,7 @@ openapi_file: openapi.yaml
 
 ```powershell
 $env:PYTHONPATH = "$PWD/src"
-.\.venv\Scripts\python.exe -m deception.profile_builder --source inputs/sources/medusa/source.yaml --output generated
+.\.venv\Scripts\python.exe -m deception.profile_builder --source domains/ecommerce/inputs/sources/medusa/source.yaml --output generated
 ```
 
 目前 Medusa 輸入已依官方 `v2.22.4` 固定 commit 的完整 OpenAPI 修補子集：補上 `BaseRefund.idempotency_key`、51 個 operation 的 `x-allowed`，平台規格工具與契約驗證器規格檔 bytes 一致。目標平台版本 `2.22.4` 與官方規格 `info.version: 2.22.3` 分別記錄；來源仍維持 `approved: false`，尚未驗證實際部署。輸出有 77 個 operations。WooCommerce 只有 `source.yaml.example`，必須先提供固定規格才能執行，不能用現有 PoC schema 替代。

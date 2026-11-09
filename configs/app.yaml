@@ -1,0 +1,4 @@
+# 共用入口僅選擇領域包；更換領域需同時具備已註冊的處理器與該領域資產。
+schema_version: 1
+domain: ecommerce
+domains_dir: domains

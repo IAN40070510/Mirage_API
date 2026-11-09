@@ -4,7 +4,7 @@
 
 > 本節覆蓋本文前述「尚未修補」的歷史記錄；**靜態規格已修補、執行期與部署驗證尚未完成**。
 
-- 將 `inputs/platforms/medusa/openapi.yaml` 及 `inputs/sources/medusa/openapi.yaml` 更新為相同的 UTF-8 LF bytes；`info.version` 改回官方 `v2.22.4` tag 所含文件的原始值 **`2.22.3`**，`platform_version`（目標套件）保持 **`2.22.4`**。
+- 將 `domains/ecommerce/inputs/platforms/medusa/openapi.yaml` 及 `domains/ecommerce/inputs/sources/medusa/openapi.yaml` 更新為相同的 UTF-8 LF bytes；`info.version` 改回官方 `v2.22.4` tag 所含文件的原始值 **`2.22.3`**，`platform_version`（目標套件）保持 **`2.22.4`**。
 - 依上游 `openapi.full.yaml` 逐操作補回 **51 個 `x-allowed` 區塊**；修補後比對：**51/51 與上游相同操作的區塊文字完全一致**。
 - 依官方 `BaseRefund` 定義補回可選的 `idempotency_key: string`。
 - 更新平台規格工具來源與契約驗證器未啟用 manifest 範本的 `source_revision` 為固定 commit `81edb06c323812773c9c0dcc4da2d9784f3b3319`，`source_url` 指向固定 commit 的官方 `openapi.full.yaml`。
@@ -39,16 +39,16 @@
 
 ## 已執行的比對
 
-1. 本地 `inputs/platforms/medusa/openapi.yaml`：67 paths、77 method/path operations。
+1. 本地 `domains/ecommerce/inputs/platforms/medusa/openapi.yaml`：67 paths、77 method/path operations。
 2. 上游固定 tag 的 `specs/store/paths/`：69 個路徑檔；本地 67 條路徑的對應檔案均存在。
 3. 逐一讀取上述 67 個上游路徑檔，抽取各 operation 的 **method、operationId、已宣告 response status keys**，與本地 77 個 operation 比較：**77/77 一致；未發現缺少或多餘的本地 operation**。
 4. 官方另有兩條路徑不在本地子集：`/store/search`、`/store/payment-collections/{id}/payment-sessions/{session_id}`。本地是 XGBoost inference 範圍選擇的子集，**不應據此推論完整 API 覆蓋**。
 5. 上游逐操作檔中，**51 個 Store operations 存在 `x-allowed` 擴充欄位，但本地子集相同操作沒有保留**；包含 `GET /store/products`、`GET /store/products/{id}`、購物車及多個其他 Store 操作。
 6. 抽樣檢視 `StoreProductResponse`、`StoreProduct`、`StoreCartResponse`、`StoreProductVariant` 的 schema 開頭／required：所見欄位相符；**未完成全部 schema、型別、`$ref`、response header、query 動態選欄及實際服務行為的逐位元／語意比較**。
 7. 本地兩個 `openapi.yaml` 經 CRLF → LF 正規化後內容相同，但原始 bytes 與 SHA-256 不同：
-   - `inputs/sources/medusa/openapi.yaml`：CRLF，SHA-256 `65b6917fb04c52d3a2394cabe8c391db8ebfa74e5aec336eb88069ed5e14ba0b`
-   - `inputs/platforms/medusa/openapi.yaml`：LF，SHA-256 `69d267893f845e79c22cc9a235d3e98e34730a70a74885217de4a4ec8186a4ad`
-   - `inputs/sources/medusa/source.yaml` 的 `spec_sha256` 對應 CRLF 檔。這是平台規格工具、契約驗證器契約身份需要先處理的問題，不能將其中一個雜湊直接貼給另一個檔案。
+   - `domains/ecommerce/inputs/sources/medusa/openapi.yaml`：CRLF，SHA-256 `65b6917fb04c52d3a2394cabe8c391db8ebfa74e5aec336eb88069ed5e14ba0b`
+   - `domains/ecommerce/inputs/platforms/medusa/openapi.yaml`：LF，SHA-256 `69d267893f845e79c22cc9a235d3e98e34730a70a74885217de4a4ec8186a4ad`
+   - `domains/ecommerce/inputs/sources/medusa/source.yaml` 的 `spec_sha256` 對應 CRLF 檔。這是平台規格工具、契約驗證器契約身份需要先處理的問題，不能將其中一個雜湊直接貼給另一個檔案。
 8. 既有 `input-audit.json` 記載 10 個成功狀態回應缺少 `content`；本次沒有完成所有這些回應是否有回應本文的官方／實際服務核對，仍不可自動補 schema。
 
 ## 尚未通過的核實項目（阻擋正式放行）
@@ -81,7 +81,7 @@
 
 ### 核實方式與結果
 
-讀入官方完整規格及本地 `inputs/platforms/medusa/openapi.yaml`，將 YAML 內容轉為結構樹後，依路徑／操作 ID 比對操作、參數、requestBody、response status、media type、Schema `$ref`、required、型別、限制、enum 等結構屬性。為避免文字與排版干擾，比對時排除 `description`、`summary`、`title`、`example(s)`、`externalDocs` 等說明性欄位與 `x-*` 擴充欄位；**`x-allowed` 另外逐一統計，不視為已通過**。比對器為此審查執行的離線結構檢查，非正式 Gate 的整合測試。
+讀入官方完整規格及本地 `domains/ecommerce/inputs/platforms/medusa/openapi.yaml`，將 YAML 內容轉為結構樹後，依路徑／操作 ID 比對操作、參數、requestBody、response status、media type、Schema `$ref`、required、型別、限制、enum 等結構屬性。為避免文字與排版干擾，比對時排除 `description`、`summary`、`title`、`example(s)`、`externalDocs` 等說明性欄位與 `x-*` 擴充欄位；**`x-allowed` 另外逐一統計，不視為已通過**。比對器為此審查執行的離線結構檢查，非正式 Gate 的整合測試。
 
 | 核實範圍 | 官方完整規格 | 本地子集 | 結果 |
 | --- | ---: | ---: | --- |

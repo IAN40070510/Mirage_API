@@ -14,6 +14,7 @@ GUIDES = {
     "orchestration": ("src/deception/core/orchestrator.py", "docs/orchestration.md"),
     "profiles": ("src/deception/profile_builder", "docs/profiles.md"),
     "synthetic_data": ("src/deception/synthetic", "docs/synthetic.md"),
+    "ecommerce_data": ("src/deception/domains/ecommerce/synthetic", "domains/ecommerce/docs/synthetic.md"),
     "scenarios": ("src/deception/scenarios", "docs/scenarios.md"),
     "generation": ("src/deception/generation", "docs/generation.md"),
     "composition": ("src/deception/core/composer.py", "docs/composer.md"),
@@ -27,6 +28,10 @@ GUIDES = {
     "demonstration_service": ("src/deception/api/demo.py", "docs/docker.md"),
     "http_verification": ("tools/verify_ecommerce_api.py", "docs/verification.md"),
     "container_packaging": ("Dockerfile", "docs/docker.md"),
+    "common_data": ("src/deception/common", "docs/common-data.md"),
+    "domains": ("src/deception/domains", "docs/domains.md"),
+    "security_catalog": ("src/deception/security", "docs/owasp-design.md"),
+    "domain_verification": ("tools/verify_domain_api.py", "docs/verification.md"),
 }
 
 
@@ -65,9 +70,10 @@ def check_guides(root: Path) -> list[str]:
 
 
 def check_links(root: Path) -> list[str]:
-    """檢查 docs Markdown 的本地連結目標；跳過範例程式、外部網址及頁內 anchor。"""
+    """檢查共用 docs 與 domains 文件的本地連結；跳過範例程式、外部網址及頁內 anchor。"""
     errors = []
-    for path in sorted((root / "docs").rglob("*.md")):
+    paths = sorted((root / "docs").rglob("*.md")) + sorted((root / "domains").rglob("*.md"))
+    for path in paths:
         value = path.read_text(encoding="utf-8-sig")
         value = re.sub(r"(?ms)^\s*```.*?^\s*```[^\n]*", "", value)
         for match in re.finditer(r"\[[^\]\n]*\]\(([^)\n]+)\)", value):

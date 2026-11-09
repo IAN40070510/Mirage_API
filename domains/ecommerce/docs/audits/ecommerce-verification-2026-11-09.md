@@ -35,6 +35,6 @@
 - 檢查 wheel 含展示入口、完整 HTTP 接入、回送及備援模組，以及四份示意契約。
 - 將 wheel 安裝至獨立目錄，確認從該目錄匯入模組並實際取得商品 200 假回應。
 - `compose.yaml` 經 [官方 Compose schema](https://github.com/compose-spec/compose-spec/blob/master/schema/compose-spec.json) 驗證通過；本次 schema bytes SHA-256 為 `d549057ebc2925f39f62799eab0db7b9e2c18b35b6c00595199116da3ed10e64`。
-- 已加入容器建置、健康檢查與 HTTP 案例的 [CI 工作流程](../../.github/workflows/container-smoke.yml)，尚未執行。
+- 已加入容器建置、健康檢查與 HTTP 案例的 [CI 工作流程](../../../../.github/workflows/container-smoke.yml)，尚未執行。
 
-本機沒有可用的 Docker 命令，亦未找到可改用的 Linux 子系統，因此沒有執行映像 build 或容器 run，不把 wheel／schema／原生 HTTP 通過當成容器實測。容器啟動方式、input、呼叫、元件目的及套件授權見 [Docker 使用說明](../docker.md)。
+本機沒有可用的 Docker 命令，亦未找到可改用的 Linux 子系統，因此沒有執行映像 build 或容器 run，不把 wheel／schema／原生 HTTP 通過當成容器實測。容器啟動方式、input、呼叫、元件目的及套件授權見 [Docker 使用說明](../../../../docs/docker.md)。

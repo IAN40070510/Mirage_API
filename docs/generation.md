@@ -38,7 +38,7 @@
 
 ## 設定
 
-`inputs/policies/generation.yaml` 是可解析但預設停用的任務協調與內容生成政策範本；它與合成資料工具使用的 `configs/generation.yaml` 分開。啟用前須替換實際平台識別與規格工具身份、情境選擇工具 outcome、生成位置與完整回應模板。範本的精簡商品欄位不代表完整 Medusa body。
+`domains/ecommerce/inputs/policies/generation.yaml` 是可解析但預設停用的任務協調與內容生成政策範本；它與合成資料工具使用的 `domains/ecommerce/configs/generation.yaml` 分開。啟用前須替換實際平台識別與規格工具身份、情境選擇工具 outcome、生成位置與完整回應模板。範本的精簡商品欄位不代表完整 Medusa body。
 
 ```yaml
 schema_version: 1
@@ -47,7 +47,7 @@ policy_id: product-content-generation
 policy_version: '1'
 prompt_version: '1'
 enabled: false
-# limits 與 rules 的完整格式見 inputs/policies/generation.yaml。
+# limits 與 rules 的完整格式見 domains/ecommerce/inputs/policies/generation.yaml。
 ```
 
 每個 `GenerationRule` 必須明確配置契約身份、分支、保護位置與 `fields`。欄位設定如下：
@@ -133,7 +133,7 @@ $env:PYTHONPATH = "$PWD/src"
 .\.venv\Scripts\python.exe -m deception.generation --demo --domain ecommerce
 ```
 
-它依預設 Foundation Reasoning 模型執行合成契約的 `200 → 404 → 200`，檢查合成資料工具不變、相同商品 body 一致、前兩次真生成及第三次內容快取。報告與 SQLite 存在 `generated/generation/`。模型不存在、摘要不符或生成失敗時，命令回非零結束碼；實測證據及適用範圍見 [任務協調與內容生成實測紀錄](orchestration.md#本次真本機模型展示證據2026-11-08)。
+共用入口依註冊領域派送展示；目前電商實作依預設 Foundation Reasoning 模型執行合成契約的 `200 → 404 → 200`，檢查資料不變、相同商品 body 一致、前兩次真生成及第三次內容快取。預設報告與 SQLite 位於 `generated/domains/ecommerce/generation/`，可用 `--output` 覆寫領域輸出根目錄。模型不存在、摘要不符或生成失敗時，命令回非零結束碼；歷史實測證據及適用範圍見 [任務協調與內容生成實測紀錄](orchestration.md#本次真本機模型展示證據2026-11-08)。
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests/test_generation.py tests/test_orchestrator.py -q

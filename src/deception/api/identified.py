@@ -1,4 +1,4 @@
-"""可選的 A → B 接入；識別成功後仍明確回報 C 尚未實作。"""
+"""僅識別的診斷入口；設定由明確覆寫或所選領域 manifest 提供，不執行內容生成。"""
 
 import os
 from pathlib import Path
@@ -6,6 +6,7 @@ from pathlib import Path
 from fastapi.responses import JSONResponse
 
 from deception.discovery import PlatformIdentifier, RuntimeContext
+from deception.domains.assets import resolve_identification_paths
 
 from .app import create_app as create_ingress_app
 
@@ -28,9 +29,10 @@ def make_identification_handler(identifier: PlatformIdentifier, *, context: Runt
 
 def create_app():
     """給 uvicorn --factory 使用；設定錯誤會使啟動失敗，不選用猜測綁定。"""
-    identifier = PlatformIdentifier.from_paths(
-        Path(os.environ.get("MIRAGE_PLATFORMS_DIR", "inputs/platforms")),
-        Path(os.environ.get("MIRAGE_BINDINGS_FILE", "configs/bindings.yaml")))
+    platforms, bindings = resolve_identification_paths(
+        Path(os.environ["MIRAGE_PLATFORMS_DIR"]) if os.environ.get("MIRAGE_PLATFORMS_DIR") else None,
+        Path(os.environ["MIRAGE_BINDINGS_FILE"]) if os.environ.get("MIRAGE_BINDINGS_FILE") else None)
+    identifier = PlatformIdentifier.from_paths(platforms, bindings)
     values = [os.environ.get(name) for name in (
         "MIRAGE_ENVIRONMENT_ID", "MIRAGE_DEPLOYMENT_ID", "MIRAGE_SERVICE_ID")]
     if any(values) and not all(values):

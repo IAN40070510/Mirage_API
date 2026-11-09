@@ -9,6 +9,7 @@ import pytest
 import yaml
 
 from deception.core import CompositionError, CompositionPlan, DataBinding, ResponseComposer
+from deception.common import CompositionData
 from deception.profile_builder import build_profile
 from deception.synthetic import DatasetScope, SyntheticConfig, generate_dataset
 from mirage_validator.gate import OfficialResponseGate, PlatformRegistry
@@ -146,6 +147,45 @@ def test_composition_is_deterministic_and_keeps_unicode(tmp_path):
     assert "合成商品" in first.body
 
 
+def test_composition_dto_rejects_a_different_run_scope(tmp_path):
+    """通用資料格式不能繞過 run 隔離，其他執行的正確商品仍須拒絕。"""
+    composer, scope, dataset, _, _ = setup_composer(tmp_path)
+    projection = dataset.to_composition_data()
+    projection.scope.run_id = "different-run"
+    with pytest.raises(CompositionError) as error:
+        composer.compose(plan_for(scope), dataset=projection)
+    assert error.value.code == "scope_mismatch"
+
+
+def test_composition_dto_revalidates_mutated_payload_before_accepting_a_candidate(tmp_path):
+    """領域投影被修改為違反回應契約的型別後，不得以既有 DTO 身份放行。"""
+    composer, scope, dataset, _, _ = setup_composer(tmp_path)
+    projection = dataset.to_composition_data()
+    projection.payload["products"][0]["id"] = 123
+    with pytest.raises(CompositionError) as error:
+        composer.compose(plan_for(scope), dataset=projection)
+    assert error.value.code == "contract_mismatch"
+
+
+def test_composition_adapter_must_return_the_explicit_dto(tmp_path):
+    """未宣告 adapter 的字典及回傳裸字典的 adapter 都不是可接受的權威映射輸入。"""
+    composer, scope, dataset, _, _ = setup_composer(tmp_path)
+    projection = dataset.to_composition_data()
+
+    class DictionaryAdapter:
+        """故意違反投影介面，驗證組合器不會隱含信任任意字典。"""
+
+        def to_composition_data(self):
+            """回傳裸字典作為錯誤測試輸入，不能被隱含轉成已驗證 DTO。"""
+            return projection.model_dump(mode="json")
+
+    for value in (projection.model_dump(mode="json"), DictionaryAdapter(), object()):
+        with pytest.raises(CompositionError) as error:
+            composer.compose(plan_for(scope), dataset=value)
+        assert error.value.code == "invalid_dataset"
+    assert isinstance(projection, CompositionData)
+
+
 @pytest.mark.parametrize("changes", [
     {"status_code": 201}, {"status_code": 204, "body": None, "bindings": []},
     {"media_type": "text/plain"}, {"media_type": "application/json; charset=iso-8859-1"},
@@ -210,7 +250,7 @@ def test_unreviewed_source_requires_explicit_preview_and_remains_unapproved(tmp_
 
 def test_real_medusa_404_preflight_does_not_approve_source_or_deployment(tmp_path):
     """讀現有來源驗證404格式；I仍應拒絕未審規格，不能把preflight當正式pass。"""
-    source_path = Path(__file__).resolve().parents[1] / "inputs/sources/medusa/source.yaml"
+    source_path = Path(__file__).resolve().parents[1] / "domains/ecommerce/inputs/sources/medusa/source.yaml"
     output = tmp_path / "generated"
     profile = build_profile(source_path, output)
     source = profile.source
@@ -384,7 +424,7 @@ def explicit_medusa_product_fixture():
 
 def test_real_medusa_200_explicit_fixture_maps_e_and_rejects_missing_field(tmp_path):
     """實際來源的200必填值全部明確提供；H不補猜缺值，也不提升來源核准狀態。"""
-    source_path = Path(__file__).resolve().parents[1] / "inputs/sources/medusa/source.yaml"
+    source_path = Path(__file__).resolve().parents[1] / "domains/ecommerce/inputs/sources/medusa/source.yaml"
     output = tmp_path / "generated"
     profile = build_profile(source_path, output)
     source = profile.source

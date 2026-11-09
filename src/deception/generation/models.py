@@ -8,7 +8,7 @@ from pydantic import Field, JsonValue, model_validator
 
 from deception.core.models import CompositionPlan
 from deception.llm.models import RunLimits
-from deception.synthetic.models import SLUG, DatasetScope, SyntheticModel
+from deception.common.models import SLUG, DatasetScope, SyntheticModel
 
 from .pointers import tokens as pointer_tokens
 

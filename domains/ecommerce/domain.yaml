@@ -1,0 +1,9 @@
+schema_version: 1
+domain_id: ecommerce
+title: 電商誘餌領域
+demo_config: configs/demo.yaml
+source_dir: inputs/sources
+platform_dir: inputs/platforms
+bindings_config: configs/bindings.yaml
+policy_dir: inputs/policies
+weakness_catalog: security/owasp-scenarios.yaml

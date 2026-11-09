@@ -4,6 +4,9 @@ domain: ecommerce
 origin: http://127.0.0.1:8000
 # fallback：刻意停用模型，使用明確固定欄位備援；local：使用 llm.yaml 的真本機模型。
 mode: fallback
+# 選用的合成弱點情境；null 保持一般商品查詢。
+# 可選 api3-internal-product-properties、api8-debug-header-disclosure。
+weakness_scenario: null
 seed: 20261109
 product_count: 2
 run_id: isolated-demo

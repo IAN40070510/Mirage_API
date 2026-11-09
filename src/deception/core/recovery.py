@@ -7,7 +7,7 @@ from typing import Literal
 from pydantic import Field, JsonValue, model_validator
 
 from deception.generation.models import digest
-from deception.synthetic.models import SLUG, SyntheticModel
+from deception.common.models import SLUG, SyntheticModel
 
 
 class FallbackRule(SyntheticModel):

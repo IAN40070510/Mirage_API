@@ -270,15 +270,15 @@ def test_data_changed_during_fallback_composition_is_not_released(generation_sta
     backend, _ = function_backend(value=0)
     pipeline, _, _ = make_pipeline(generation_stack, backend=backend)
     enable_recovery(pipeline)
-    compose = pipeline.composer.compose
+    project = pipeline.data_provider.composition_data
 
-    def compose_then_mutate(plan, **kwargs):
-        """先以原資料組合，再模擬共享資料遭另一工作變更。"""
-        candidate = compose(plan, **kwargs)
-        kwargs["dataset"].products[0].title = "Changed after composition"
-        return candidate
+    def project_then_mutate(data):
+        """先建立通用資料投影，再模擬該 run 的原始資料遭其他工作變更。"""
+        projected = project(data)
+        data.products[0].title = "Changed after composition"
+        return projected
 
-    pipeline.composer.compose = compose_then_mutate
+    pipeline.data_provider.composition_data = project_then_mutate
     result = run_pipeline(generation_stack, pipeline)
     assert result.decision == "unverifiable" and result.candidate is None, result
     assert result.errors[0].code == "context_changed"

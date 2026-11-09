@@ -19,7 +19,11 @@ build
 dist
 generated
 tests
-inputs
+inputs/*
+!inputs/security_taxonomies
+!inputs/security_taxonomies/**
+domains/**/generated
+domains/**/outputs
 *.bundle
 *.log
 *.sqlite3

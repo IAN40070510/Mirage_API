@@ -5,7 +5,7 @@ from urllib.parse import urlsplit
 
 from pydantic import Field, field_validator
 
-from deception.synthetic.models import SyntheticModel
+from deception.common.models import SyntheticModel
 
 
 class LLMConfig(SyntheticModel):

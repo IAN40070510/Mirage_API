@@ -2,7 +2,7 @@
 
 `POST /v1/validate` 改用網站綁定的 OpenAPI 驗證。原示意契約只供 `/v1/poc/validate` 使用，不能作正式放行依據。這是輸入格式的破壞性變更。
 
-**目前沒有完成部署審查的 WooCommerce／Medusa 契約，也沒有實際官方服務的對照測試；預設不放行任何網站。** Medusa Store／Auth 子集已固定官方來源 commit，平台規格工具/契約驗證器使用相同 bytes，但部署、origin 與行為對照尚未核實，仍維持未審查；詳見 [來源狀態](../inputs/platforms/medusa/README.md)。合成規格測試與固定來源離線回歸均不等於真實部署的官方相容性證據。
+**目前沒有完成部署審查的 WooCommerce／Medusa 契約，也沒有實際官方服務的對照測試；預設不放行任何網站。** Medusa Store／Auth 子集已固定官方來源 commit，平台規格工具/契約驗證器使用相同 bytes，但部署、origin 與行為對照尚未核實，仍維持未審查；詳見 [來源狀態](../domains/ecommerce/inputs/platforms/medusa/README.md)。合成規格測試與固定來源離線回歸均不等於真實部署的官方相容性證據。
 
 `pass` 只證明符合已載入契約描述的規則。要聲稱與官方實際回應完全一致，仍須有精確版本、部署環境、可重現測試資料及官方服務對照測試。若官方規格缺少動態欄位、外掛、授權、headers 或業務規則，單靠 OpenAPI 套件不能補足保證。
 
@@ -13,7 +13,7 @@ Python 3.11+，在專案根目錄以 PowerShell 執行：
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[test]"
-$env:MIRAGE_PLATFORMS_DIR = "$PWD/inputs/platforms"
+$env:MIRAGE_DOMAIN = "ecommerce"
 .\.venv\Scripts\python.exe -m uvicorn mirage_validator.api:app --reload
 ```
 
@@ -23,12 +23,12 @@ $env:MIRAGE_PLATFORMS_DIR = "$PWD/inputs/platforms"
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-平台根目錄預設為工作目錄下的 `inputs/platforms`；正式使用建議指定絕對路徑。`.env.example` 僅記錄設定名稱，不自動載入 `.env`。更新套件後需重啟。無效規格或雜湊不符使啟動失敗，不會略過後放行。
+未設定 `MIRAGE_PLATFORMS_DIR` 時，平台根目錄由共用 app 設定選定領域，再讀該領域 manifest 的 `platform_dir`；電商對應 `domains/ecommerce/inputs/platforms`。也可明確指定絕對路徑作為獨立契約入口，不必載入領域設定。`.env.example` 僅記錄設定名稱，不自動載入 `.env`。更新套件後需重啟。無效規格或雜湊不符使啟動失敗，不會略過後放行。
 
 ## 平台入口
 
 ```text
-inputs/platforms/<網站與版本套件>/
+domains/<domain>/inputs/platforms/<網站與版本套件>/
   manifest.yaml         # 來源、版本、部署綁定、SHA-256、審查聲明
   openapi.yaml          # 固定版本的官方契約，使用內部 $ref
   samples/              # 可選；不推導契約、不當作驗證依據
@@ -45,7 +45,7 @@ WooCommerce 與 Medusa 目錄內的 `manifest.yaml.example` 不會被載入。�
 7. 完成來源、部署與規則覆蓋審查後，維護者才設定 `approved: true`。這是受信任設定維護者的聲明，不是程式完成的官方認證。規格或部署變更必須重審。
 
 ```powershell
-(Get-FileHash inputs/platforms/your-site/openapi.yaml -Algorithm SHA256).Hash.ToLowerInvariant()
+(Get-FileHash domains/your-domain/inputs/platforms/your-site/openapi.yaml -Algorithm SHA256).Hash.ToLowerInvariant()
 ```
 
 `profile.yaml`、samples 或補充 schema 目前不載入，也不能偷偷放寬官方規則。不要將未指定的 `additionalProperties` 自行改為 false，然後宣稱更接近官方。

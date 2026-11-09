@@ -322,7 +322,7 @@ def test_load_policy_uses_registry_to_parse_the_selected_domain(helpdesk_stack, 
 
 def test_default_policy_explicitly_selects_ecommerce():
     """可交付的政策範本清楚標示電商，並維持原本停用的審查邊界。"""
-    path = Path(__file__).resolve().parents[1] / "inputs" / "policies" / "deception.yaml"
+    path = Path(__file__).resolve().parents[1] / "domains" / "ecommerce" / "inputs" / "policies" / "deception.yaml"
     policy = load_policy(path)
     assert policy.domain == "ecommerce"
     assert policy.enabled is False

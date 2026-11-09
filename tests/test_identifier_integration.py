@@ -116,8 +116,8 @@ def test_b_d_e_h_i_same_request_and_contract_identity(stack):
 def test_repo_medusa_contract_is_not_approved_by_enabled_binding(tmp_path):
     """實際 Medusa 快照在臨時部署載入；enabled 不能把未審來源變成 approved。"""
     root = Path(__file__).resolve().parents[1]
-    source = yaml.safe_load((root / "inputs/sources/medusa/source.yaml").read_bytes())
-    raw = (root / "inputs/sources/medusa/openapi.yaml").read_bytes()
+    source = yaml.safe_load((root / "domains/ecommerce/inputs/sources/medusa/source.yaml").read_bytes())
+    raw = (root / "domains/ecommerce/inputs/sources/medusa/openapi.yaml").read_bytes()
     directory = tmp_path / "contracts" / "medusa-test"
     directory.mkdir(parents=True)
     (directory / "openapi.yaml").write_bytes(raw)
@@ -134,7 +134,7 @@ def test_repo_medusa_contract_is_not_approved_by_enabled_binding(tmp_path):
     result = identifier.identify("https://shop.example/store/products/prod-test", "GET")
     assert result.decision == "unverifiable"
     assert result.errors[0].code == "contract_not_approved"
-    assert (root / "inputs/sources/medusa/openapi.yaml").read_bytes() == raw
+    assert (root / "domains/ecommerce/inputs/sources/medusa/openapi.yaml").read_bytes() == raw
 
 
 def test_a_b_factory_reads_explicit_server_configuration(stack, tmp_path, monkeypatch):

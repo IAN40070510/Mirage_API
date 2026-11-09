@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 from . import PlatformIdentifier, RuntimeContext
+from deception.domains.assets import resolve_identification_paths
 
 
 def main():
@@ -14,8 +15,8 @@ def main():
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description="Identify one explicitly bound HTTP API operation")
-    parser.add_argument("--platforms", type=Path, default=Path("inputs/platforms"))
-    parser.add_argument("--bindings", type=Path, default=Path("configs/bindings.yaml"))
+    parser.add_argument("--platforms", type=Path, help="Override the selected domain manifest's platform directory")
+    parser.add_argument("--bindings", type=Path, help="Override the selected domain manifest's deployment bindings")
     parser.add_argument("--url", required=True)
     parser.add_argument("--method", default="GET")
     parser.add_argument("--environment-id")
@@ -28,7 +29,8 @@ def main():
     try:
         context = RuntimeContext(environment_id=args.environment_id, deployment_id=args.deployment_id,
                                  service_id=args.service_id) if all(supplied) else None
-        identifier = PlatformIdentifier.from_paths(args.platforms, args.bindings)
+        platforms, bindings = resolve_identification_paths(args.platforms, args.bindings)
+        identifier = PlatformIdentifier.from_paths(platforms, bindings)
         result = identifier.identify(args.url, args.method, context=context)
     except Exception as exc:
         parser.exit(1, f"Identifier configuration failed: {exc}\n")

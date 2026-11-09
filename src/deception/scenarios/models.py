@@ -6,7 +6,7 @@ from typing import Literal
 from pydantic import AwareDatetime, Field, JsonValue, field_validator, model_validator
 
 from deception.core.models import CompositionPlan
-from deception.synthetic.models import SLUG, DatasetScope, SyntheticModel
+from deception.common.models import SLUG, DatasetScope, SyntheticModel
 
 
 class AttackAssessment(SyntheticModel):

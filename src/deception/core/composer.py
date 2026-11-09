@@ -10,8 +10,7 @@ from openapi_core import Config
 from werkzeug.datastructures import Headers
 
 from deception.profile_builder import ProfileTool
-from deception.synthetic.generator import checked_dataset
-from deception.synthetic.models import SyntheticDataset
+from deception.common.data import CompositionData
 from mirage_validator.gate import StrictV30ResponseValidator, StrictV31ResponseValidator
 from mirage_validator.openapi_utils import create_openapi
 
@@ -74,8 +73,8 @@ def _get(node, tokens: tuple[str, ...]):
     return node
 
 
-def _apply_bindings(body, bindings, dataset: SyntheticDataset | None):
-    """只對既有模板位置做顯式替換，不新增欄位、不展開程式或文字表達式。"""
+def _apply_bindings(body, bindings, dataset: CompositionData | None):
+    """只映射已核對 payload 的既有位置，不解讀領域實體或開啟檔案路徑。"""
     targets = []
     for binding in bindings:
         target = _tokens(binding.target_pointer)
@@ -84,14 +83,13 @@ def _apply_bindings(body, bindings, dataset: SyntheticDataset | None):
         targets.append(target)
     if bindings and dataset is None:
         raise CompositionError("dataset_missing", "E data is required for bindings")
-    source = {"products": [p.model_dump(mode="json") for p in dataset.products],
-              "variants": [v.model_dump(mode="json") for v in dataset.variants]} if dataset is not None else {}
+    source = dataset.payload if dataset is not None else {}
     result = copy.deepcopy(body)
     try:
         for binding, target in zip(bindings, targets):
             origin = _tokens(binding.source_pointer)
-            if not origin or origin[0] not in ("products", "variants"):
-                raise CompositionError("invalid_binding", "Only E products and variants may be mapped")
+            if not origin or origin[0] not in source:
+                raise CompositionError("invalid_binding", "Only existing composition payload roots may be mapped")
             value = copy.deepcopy(_get(source, origin))
             if not target:
                 result = value
@@ -177,9 +175,15 @@ class ResponseComposer:
         """記錄 D 產物根目錄，實際組合時再讀取並核對對應契約。"""
         self.profile_root = profile_root
 
-    def compose(self, plan: CompositionPlan, *, dataset: SyntheticDataset | None = None,
+    def compose(self, plan: CompositionPlan, *, dataset: object | None = None,
                 allow_unreviewed: bool = False) -> CandidateResponse:
-        """將明確的 body／映射組合成候選；未審來源只能顯式離線預覽。"""
+        """依 plan 及可選領域資料投影，回傳契約 preflight 通過的不可變候選。
+
+        dataset 可為 CompositionData 或可信的 to_composition_data adapter，
+        重新核對型別與 scope 後只複製明列的映射，不修改輸入或補猜欄位。
+        來源、映射、HTTP metadata 或契約不符時拋 CompositionError；
+        allow_unreviewed 只供離線預覽，候選仍須通過部署 gate 才能回送。
+        """
         try:
             plan = CompositionPlan.model_validate(plan.model_dump(mode="json"))
             scope = plan.scope
@@ -190,9 +194,16 @@ class ResponseComposer:
             if plan.method == "HEAD" or plan.status_code in (204, 205, 304):
                 raise CompositionError("unsupported_bodyless_response", "This composer only supports responses with a JSON body")
             if dataset is not None:
-                dataset = checked_dataset(dataset, dataset.config)
-                if dataset.config.scope != scope:
-                    raise CompositionError("scope_mismatch", "E data does not match the composition scope")
+                if not isinstance(dataset, CompositionData):
+                    convert = getattr(dataset, "to_composition_data", None)
+                    if not callable(convert):
+                        raise CompositionError("invalid_dataset", "Data requires an explicit verified composition adapter")
+                    dataset = convert()
+                if not isinstance(dataset, CompositionData):
+                    raise CompositionError("invalid_dataset", "The composition adapter must return CompositionData")
+                dataset = CompositionData.model_validate(dataset.model_dump(mode="json"))
+                if dataset.scope != scope:
+                    raise CompositionError("scope_mismatch", "Composition data does not match the composition scope")
             headers = _headers(plan)
             value = _apply_bindings(plan.body, plan.bindings, dataset)
             # 固定序列化，保留原始 JSON 型別，不依驗證結果 cast／補值／刪除欄位。

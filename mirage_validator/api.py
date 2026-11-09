@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 
 from fastapi import FastAPI
+from deception.domains.assets import load_application_selection
 
 from .gate import GateRequest, GateResult, OfficialResponseGate, PlatformRegistry
 
@@ -10,7 +11,17 @@ from .validator import ResponseContractValidator
 
 app = FastAPI(title="Mirage Response Contract Validator PoC", version="0.1.0")
 validator = ResponseContractValidator()
-gate = OfficialResponseGate(PlatformRegistry(Path(os.environ.get("MIRAGE_PLATFORMS_DIR", "inputs/platforms"))))
+
+
+def selected_platform_root() -> Path:
+    """優先使用管理者明確平台目錄，否則從已選領域資產取得，避免固定電商預設。"""
+    if os.environ.get("MIRAGE_PLATFORMS_DIR"):
+        return Path(os.environ["MIRAGE_PLATFORMS_DIR"])
+    _, assets = load_application_selection()
+    return assets.resolve(assets.manifest.platform_dir)
+
+
+gate = OfficialResponseGate(PlatformRegistry(selected_platform_root()))
 
 
 @app.post("/v1/poc/validate", response_model=ValidationResult, deprecated=True)

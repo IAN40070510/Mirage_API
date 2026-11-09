@@ -112,7 +112,7 @@ async def run_once():
         cache.close()
 ```
 
-`dataset=None` 時，內建電商資料供應器會依明確的合成資料工具設定生成；提供快照時則以該完整設定重建檢查。情境選擇工具、生成政策與資料供應器須使用同一領域；其他領域可注入自己的 `load`、`facts`、`composition_data` 介面。`PipelineResult` 區分 `validated`、`not_applicable`、`unverifiable` 與 `reject`，失敗結果沒有可對外使用的候選。
+`dataset=None` 時，內建電商資料供應器會依明確的合成資料工具設定生成；提供快照時則以該完整設定重建檢查。情境選擇工具、生成政策與資料供應器須使用同一領域；預設供應器依註冊領域建立，其他領域可明確注入自己的 `load`、`facts`、`composition_data` 介面。最後一個介面回傳通用 `CompositionData`，共用協調器與組合器不匯入商品模型，見 [領域擴充](domains.md)。`PipelineResult` 區分 `validated`、`not_applicable`、`unverifiable` 與 `reject`，失敗結果沒有可對外使用的候選。
 
 任務協調器可另注入 `recovery=RecoveryTool(reviewed_recovery_policy)`，以 [修正與備援工具政策](recovery.md) 啟用同分支固定欄位備援；省略時只保留有上限的重新生成。所有修正沿用同一 `RunBudget`，備援不寫入內容生成器的模型內容快取。模型不會自行選擇備援或宣告驗證成功。由 [HTTP 回送器／完整 HTTP app](renderer.md) 明確注入可信判定 provider，即可將內部結果接至 HTTP 請求入口的回送流程。
 
@@ -120,10 +120,10 @@ async def run_once():
 
 ```powershell
 $env:PYTHONPATH = "$PWD/src"
-.\.venv\Scripts\python.exe -m deception.generation --demo --domain ecommerce --llm-config configs/llm.yaml --output generated
+.\.venv\Scripts\python.exe -m deception.generation --demo --domain ecommerce --llm-config configs/llm.yaml
 ```
 
-命令只接受 `execution_mode: local`，不注入 `FunctionModel`，服務或模型不符時明確失敗。`configs/llm.yaml` 預設使用本機已安裝的 **Foundation-Sec-8B-Reasoning Q4_K_M GGUF**：完整 Ollama 名稱為 `hf.co/fdtn-ai/Foundation-Sec-8B-Reasoning-Q4_K_M-GGUF:Q4_K_M`，本次核對 digest 為 `77a78066847b2002fd602955667bd26857eb2cb751c6ed2e975c21b4a826b0a5`。這是 Reasoning 量化變體，不等同於基礎 `Foundation-Sec-8B` 或全部 Foundation 系列模型。換模型或更新權重時須同步核對設定與權重授權。`inputs/policies/generation.yaml` 則是停用的任務協調與內容生成政策範本，與合成資料工具的 `configs/generation.yaml` 分開；展示自行建立隔離的合成契約及政策，不能把它的精簡商品 body 當成完整 Medusa 契約。
+命令只接受 `execution_mode: local`，不注入 `FunctionModel`，服務或模型不符時明確失敗。`configs/llm.yaml` 預設使用本機已安裝的 **Foundation-Sec-8B-Reasoning Q4_K_M GGUF**：完整 Ollama 名稱為 `hf.co/fdtn-ai/Foundation-Sec-8B-Reasoning-Q4_K_M-GGUF:Q4_K_M`，本次核對 digest 為 `77a78066847b2002fd602955667bd26857eb2cb751c6ed2e975c21b4a826b0a5`。這是 Reasoning 量化變體，不等同於基礎 `Foundation-Sec-8B` 或全部 Foundation 系列模型。換模型或更新權重時須同步核對設定與權重授權。`domains/ecommerce/inputs/policies/generation.yaml` 則是停用的任務協調與內容生成政策範本，與合成資料工具的 `domains/ecommerce/configs/generation.yaml` 分開；展示自行建立隔離的合成契約及政策，不能把它的精簡商品 body 當成完整 Medusa 契約。
 
 可先列出本機已安裝且未標示 cloud／remote 的模型，不需指定展示或領域：
 
@@ -134,14 +134,14 @@ $env:PYTHONPATH = "$PWD/src"
 展示時可明確選另一個已安裝的完整名稱：
 
 ```powershell
-.\.venv\Scripts\python.exe -m deception.generation --demo --domain ecommerce --model "qwen2.5-coder:7b" --output generated
+.\.venv\Scripts\python.exe -m deception.generation --demo --domain ecommerce --model "qwen2.5-coder:7b"
 ```
 
 `--model` 會從本機 `/api/tags` 唯一選取名稱，將讀到的完整 digest 固定於本次設定；`--model-digest <完整SHA256>` 可再加上呼叫端要求的核對。省略 `--model` 時，仍須與 `configs/llm.yaml` 原先固定的 digest 相同，模型 tag 改變不會自動獲得接受。這些操作只有受限 loopback metadata GET，不下載缺少的模型、不中途切換雲端模型，也不從任意 URL 查模。
 
 Python 呼叫端可從 `deception.llm.selection` 匯入函式，以 `await list_local_models(config)` 列模，或 `await select_local_model(config, model_name, expected_digest=...)` 建立固定選擇，再交給 `PydanticAIBackend`。模型清單表示已安裝，不代表該模型已通過工具規劃或內容品質驗證；每個實際模型組合仍須另跑展示及測試。
 
-展示依次查詢存在商品、不存在商品及同一存在商品，要求狀態為 `200 → 404 → 200`、每次契約驗證器通過、合成資料工具與商品權威欄位不變、兩次商品 body 完全相同。每次展示建立新持久快取檔，要求前兩次內容生成器實際生成，第三次重用同實體內容。結果保存於 `generated/generation/<報告SHA256>.json`，SQLite 位於 `generated/generation/cache/`；生成流程回傳失敗時也保存局部診斷報告並回非零結束碼，設定或選模的前置檢查錯誤則直接拒絕開始。報告的 `real_model` 只在實際 trace 確認本機模型身份後才為 true，不能將執行模式設定本身當作實測成功證據。
+展示依次查詢存在商品、不存在商品及同一存在商品，要求狀態為 `200 → 404 → 200`、每次契約驗證器通過、合成資料工具與商品權威欄位不變、兩次商品 body 完全相同。每次展示建立新持久快取檔，要求前兩次內容生成器實際生成，第三次重用同實體內容。共用入口預設輸出根目錄為 `generated/domains/<domain>`，電商報告位於其中 `generation/<報告SHA256>.json`，SQLite 位於 `generation/cache/`；`--output` 可明確覆寫根目錄。生成流程回傳失敗時也保存局部診斷報告並回非零結束碼，設定或選模的前置檢查錯誤則直接拒絕開始。報告的 `real_model` 只在實際 trace 確認本機模型身份後才為 true，不能將執行模式設定本身當作實測成功證據。
 
 ## 本機模型與共用執行預算
 
@@ -221,7 +221,7 @@ Pydantic AI 及 Ollama 的 MIT 是程式碼授權，模型權重、tokenizer、�
 
 任務協調器的輸出仍是經回應組合與契約驗證檢查的內部候選；[HTTP 回送器](renderer.md) 已提供最終 HTTP renderer，可由 `deception.api.pipeline.create_app` 接上 HTTP 請求入口。HTTP 回送器在加入本次 `X-Request-ID` 與精確 `Content-Length` 後重新執行契約驗證，HTTP 請求入口對封存的 HTTP 回送器回應不再改寫 headers。任務協調器成功結果必須帶 `trace.release_deadline_monotonic`，取情境選擇工具判定與共用總預算較早到期者；HTTP 回送器在最終驗證及發送前仍會核對。該期限只供同程序即時交接，保存的報告或跨程序結果不能當作可重放的回送許可。預設原始 HTTP 請求入口與僅平台識別入口維持診斷用途；外部判定來源認證接收器、OCI 與真實 Medusa 部署對照仍待完成。
 
-現有 `configs/generation.yaml` 的舊契約 hash 與 `product-found` scope 不能直接套到目前固定來源及 `product-lookup` family。正式資料載入須核對本次平台規格工具與情境選擇工具 scope，不自動重標既有資料或提升 Medusa `approved`。
+現有 `domains/ecommerce/configs/generation.yaml` 的舊契約 hash 與 `product-found` scope 不能直接套到目前固定來源及 `product-lookup` family。正式資料載入須核對本次平台規格工具與情境選擇工具 scope，不自動重標既有資料或提升 Medusa `approved`。
 
 ## 本次真本機模型展示證據（2026-11-08）
 
