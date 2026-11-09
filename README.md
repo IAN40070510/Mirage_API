@@ -8,74 +8,62 @@ Mirage_API 接收外部系統的可信攻擊判定，依目標服務契約、領
 
 ## 系統架構
 
-本次拆分新增了明確的領域選擇、領域資產包、領域實作註冊表及共用資料交換介面；OWASP 分類由核心共用，各領域自行維護弱點情境。下列兩張圖分別呈現啟動組裝與每次請求的處理流程。
+整體流程是：接收 API 請求與外部攻擊判定，依目標服務的規格、虛構資料及情境生成假回應，通過驗證後回送。任務協調器負責串起各工具，讓這次回應使用同一份服務身份、資料與規則。
 
-### 領域載入與啟動組裝
-
-此圖對應共用展示入口 `deception.api.demo:create_app`。正式部署也可由自己的組裝程式建立元件，再注入 `deception.api.pipeline.create_app`。
+### 整體流程
 
 ```mermaid
 flowchart TB
-    appConfig["共用設定與環境覆寫<br/>configs/app.yaml"] --> selection["核對所選領域、資產路徑及已註冊實作"]
-    assets["領域資產包<br/>domains/領域名稱/<br/>domain.yaml、configs、inputs、security"] --> selection
-    registry["受信任程式註冊的領域實作<br/>src/deception/domains/<br/>情境處理器、資料供應器及展示入口"] --> selection
-    selection --> factory["所選領域的展示工廠"]
-    factory -->|未選弱點情境| prepare["建立領域契約、Profile、合成資料與政策"]
-    factory -->|明確選用弱點情境| security["核對情境目錄與分類版次<br/>只接受已實作的受控處理器"]
-    taxonomies["共用安全分類<br/>inputs/security_taxonomies/"] --> security
-    security -->|套用合成契約與政策限制| prepare
-    security -->|未知或僅設計中的情境| startupFailure["停止啟動"]
-    prepare --> assemble["組裝共用協調器、生成器、組合器<br/>契約 gate、修正備援與 HTTP 回送器"]
-    modelConfig["共用模型設定<br/>configs/llm.yaml"] --> assemble
-    assemble --> app["FastAPI 展示服務<br/>模型模式或固定備援模式"]
-    prepare --> outputs["領域展示產物<br/>generated/domains/領域名稱/"]
-```
+    request["HTTP API 請求"] --> ingress["FastAPI 請求入口"]
+    ingress --> orchestrator["任務協調器<br/>識別平台並安排工具調用"]
+    assessment["外部攻擊判定<br/>由可信 provider 注入"] --> orchestrator
 
-弱點情境在啟動時由管理者選定。展示工廠先把固定誘餌值及必要標頭等限制加入合成契約，再建立規格摘要與 Profile，並將固定值套入相應政策；目前沒有依訪客請求自動偵測 OWASP 類別或切換弱點的功能。未知領域、資產越界及不符設定也會停止啟動。
-
-### 每次請求的生成與回送
-
-下圖呈現完整 HTTP 接入的共用流程。虛線表示領域供應器、模型服務或內容快取的資料依賴；外部系統的來源認證由部署整合負責，隔離展示則明確注入 `simulated_malicious` 模擬判定。
-
-```mermaid
-flowchart TB
-    request["HTTP API 請求"] --> ingress["FastAPI 入口<br/>標準化、大小限制與追蹤 ID"]
-    ingress --> assessment["取得伺服器注入的可信判定<br/>展示使用模擬判定"]
-    assessment --> identify
-
-    subgraph orchestration["共用任務協調器：同一次執行的預算與期限"]
-        identify["平台與部署識別<br/>讀取固定操作 Profile"] --> scenario["準備情境、核對領域資料<br/>選定結果分支與映射"]
-        scenario --> planning["受限模型工具規劃"]
-        planning --> content["白名單欄位生成<br/>查詢片段快取，未命中才生成"]
-        content --> candidate["回應組合與候選契約驗證<br/>保留 scope、事實映射及固定誘餌值"]
-        candidate -->|通過| checked["重查上下文與有效期限<br/>模型路徑另核對模型身份及發布內容快取"]
-        planning -->|模型不可用或規劃失敗且符合備援條件| fallback["精確同分支的固定欄位備援"]
-        recovery["有限欄位修正<br/>沿用同一次執行預算"]
-        content -->|可修正的內容錯誤| recovery
-        candidate -->|可修正的模型生成內容錯誤| recovery
-        recovery -->|預算內重新生成允許欄位| content
-        recovery -->|修正用盡且政策與預算仍允許| fallback
-        fallback -->|套用後重新組合驗證| candidate
-        fallback -->|未設定或條件不符| failure["停止生成並回固定診斷"]
-        recovery -->|預算或期限耗盡| failure
-        candidate -->|備援驗證失敗或其他不可修正錯誤| failure
-        checked -->|重查或快取競爭核對失敗| failure
+    subgraph tools["工具調用層"]
+        profile["平台規格工具"]
+        data["領域合成資料工具"]
+        scenario["情境選擇工具"]
     end
 
-    provider["所選領域的情境處理器與資料供應器<br/>事實投影及 CompositionData(scope, payload)"] -.-> scenario
-    provider -.-> candidate
-    model["Pydantic AI 與本機 Ollama"] -.-> planning
-    model -.-> content
-    cache[("已驗證的生成片段快取")] -.-> content
-    checked -.->|僅模型生成路徑發布片段| cache
-    checked --> renderer["HTTP 回送器<br/>完成傳輸標頭並重驗最終契約"]
-    renderer -->|通過並封存| response["HTTP 誘餌回應<br/>status、headers 與原樣 body bytes"]
-    renderer -->|最終驗證失敗| failure
+    orchestrator --> profile
+    orchestrator --> data
+    orchestrator --> scenario
+    profile --> context["生成上下文<br/>本次使用的規格、事實與情境"]
+    data --> context
+    scenario --> context
+    context --> generate["內容生成器"]
+    model["本機模型／Ollama"] <--> orchestrator
+    model <--> generate
+    generate --> compose["回應組合器"]
+    compose --> validate{"契約驗證通過？"}
+    validate -->|通過| render["HTTP 回送器<br/>完成標頭並重驗最終回應"]
+    render --> response["誘餌 HTTP 回應"]
+    validate -->|允許修正的內容錯誤| recover["有限修正／同分支備援"]
+    recover -->|重新生成| generate
+    recover -->|固定欄位備援| compose
+
+    domain["所選領域包<br/>契約、資料規則與 OWASP 情境"] -.-> tools
 ```
 
-組合器接收領域供應器已核對的 `CompositionData`，不限定商品或變體根節點。快取只保存生成片段，命中時仍須經過本次身份、情境、模型規劃及回應驗證；發布競爭若取得另一份勝出值，會重新組合並驗證。固定備援不寫入模型內容快取，也必須通過相同的組合、契約及最終 HTTP 驗證。
+1. **接收與識別**：入口保留原始請求，協調器核對可信判定及目標服務，找到適用的 API 規格。
+2. **準備與生成**：規格、合成資料與情境共同決定回應內容；模型只填入允許生成的欄位，實體 ID 等固定事實由資料工具提供。
+3. **驗證與回送**：組合完整回應並驗證契約；允許的內容錯誤可有限修正或使用同分支備援，最後由 HTTP 回送器重驗再送出。
 
-圖中修正僅處理允許的生成欄位；模型不可用或規劃失敗時，符合條件才直接選固定備援，不進入欄位重新生成迴圈。來源、身份、HTTP metadata、資料、判定關聯或期限不符時會停止，不能透過修正或備援放行。部署代理接入、遠端判定來源認證、集中設定及交易狀態更新仍列於下方「驗證與目前邊界」，未畫成已實作元件。
+圖中呈現元件分工；修正、備援或最終驗證失敗時會停止，不回送未驗證候選。快取、期限、模型不可用及其他錯誤分支詳見 [詳細架構與執行邊界](docs/architecture.md)。
+
+### 領域包如何接入
+
+共用核心處理請求、模型調用、回應組合與驗證；領域包提供自己的契約、虛構資料、業務規則與弱點情境。管理者先在 `configs/app.yaml` 選領域，例如 `ecommerce`，系統再載入對應資產與已註冊的處理器。
+
+| 放置位置 | 負責內容 |
+| --- | --- |
+| `src/deception/` 的共用模組 | 入口、識別、協調、生成、組合、驗證與回送 |
+| `domains/<domain>/` | 該領域的設定、來源、契約、政策、OWASP 情境及文件 |
+| `src/deception/domains/<domain>/` | 該領域的資料模型、資料供應器與情境處理器 |
+| `inputs/security_taxonomies/` | 各領域共用的版本化 OWASP 分類 |
+
+OWASP 分類是設計弱點情境的依據。管理者在啟動時選定已實作的情境，領域處理器套用相應的虛構資料與回應規則；目前不會依每個訪客請求自動判定 OWASP 類別或切換弱點。
+
+目前提供本地設定與可信判定供應器介面；跨環境流量代理接入、遠端判定來源認證及集中設定服務仍待實作。隔離展示使用模擬攻擊判定，合成資料仍為唯讀快照；購買扣款及庫存更新尚未提供。
 
 ## 快速使用
 
