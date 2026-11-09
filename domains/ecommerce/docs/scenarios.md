@@ -142,7 +142,7 @@ if preparation.decision == "prepared":
 
 Python 標準庫的 `hashlib`、`hmac`、`json`、`datetime`、`secrets` 等隨 Python 提供，按 Python 的 PSF 授權及隨附聲明分發。此表涵蓋情境選擇工具直接使用與主要共用依賴，不是完整 SBOM；例如 Pydantic 的 `pydantic-core`、Faker 的 `tzdata` 仍須依實際安裝與打包版本管理。共用鏈的細節可參閱 [合成資料工具說明](synthetic.md)、[回應組合器說明](../../../docs/composer.md) 及 [README 授權清單](../../../README.md#開源軟體模型與資料授權)。
 
-分發包含第三方元件的程式、容器或安裝包時，保存相應 LICENSE、版權與免責聲明；Apache-2.0 元件若帶 NOTICE，按條款保留適用內容及修改標示。未採用的候選不構成本版本的套件依賴。此清單沒有替 Mirage_API 原始碼選定授權，也不代表已核准 API 規格、文件或模型權重的再散布。
+分發包含第三方元件的程式、容器或安裝包時，保存相應 LICENSE、版權與免責聲明；Apache-2.0 元件若帶 NOTICE，按條款保留適用內容及修改標示。未採用的候選不構成本版本的套件依賴。Mirage_API 自有程式與原創文件採 Apache-2.0，第三方規格、分類資料及模型依各自條款處理，詳見 [授權總覽](../../../docs/licensing.md)。此清單不代替來源核准或各材料的個別許可。
 
 ## 有效性驗證
 

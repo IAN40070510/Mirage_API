@@ -43,7 +43,7 @@
 | [FastAPI](https://github.com/fastapi/fastapi/blob/master/LICENSE) | 0.135.4 | MIT | 可選的 HTTP 請求入口→平台識別器 HTTP 接入 |
 | [Starlette](https://github.com/Kludex/starlette/blob/main/LICENSE.md) | 1.10.0 | BSD-3-Clause | 既有 ASGI 請求與回應處理 |
 
-標準庫的 `re`、`urllib.parse`、`dataclasses`、`pathlib` 等隨 Python 提供，依 Python 的 PSF 授權及隨附聲明管理。OpenAPI 驗證的主要間接依賴、版本與授權另見 [回應組合器套件表](composer.md#使用的套件與授權)，全專案界線見 [README 授權說明](../README.md#開源軟體模型與資料授權)。本表不是完整間接依賴 SBOM；分發實際包含的第三方套件時保存各套件的 LICENSE、版權、免責聲明及適用 NOTICE。平台識別器沒有修改第三方原始碼或替 Mirage_API 選定新的授權。
+標準庫的 `re`、`urllib.parse`、`dataclasses`、`pathlib` 等隨 Python 提供，依 Python 的 PSF 授權及隨附聲明管理。OpenAPI 驗證的主要間接依賴、版本與授權另見 [回應組合器套件表](composer.md#使用的套件與授權)，全專案界線見 [README 授權說明](../README.md#開源軟體模型與資料授權)。本表不是完整間接依賴 SBOM；分發實際包含的第三方套件時保存各套件的 LICENSE、版權、免責聲明及適用 NOTICE。平台識別器未修改第三方原始碼；自有程式採 Apache-2.0，個別材料邊界見 [授權總覽](licensing.md)。
 
 ## 綁定設定與使用
 

@@ -202,7 +202,7 @@ Pydantic AI 及 Ollama 的 MIT 是程式碼授權，模型權重、tokenizer、�
 
 共用平台規格工具／合成資料工具／回應組合與契約驗證的 Pydantic、PyYAML、Faker、openapi-core、Werkzeug 與 schema 驗證依賴沿用 [合成資料工具套件說明](synthetic.md)、[回應組合器套件說明](composer.md) 及 [情境選擇工具套件說明](scenarios.md)。採用與未採用的候選必須分開；僅研究 Galah 不會讓它成為執行期依賴。
 
-分發第三方元件時，保存實際包含版本的 LICENSE、版權、免責聲明及適用的 NOTICE；此文件不替 Mirage_API 原始碼選定授權，也不核准 API 規格、模型或資料的再散布。
+分發第三方元件時，保存實際包含版本的 LICENSE、版權、免責聲明及適用的 NOTICE。Mirage_API 自有程式與原創文件採 Apache-2.0；API 規格、分類資料、套件及模型仍依各自原條款處理，不能以本專案授權代替它們的許可。完整邊界見 [授權總覽](licensing.md)。
 
 ## 有效性驗證與目前限制
 

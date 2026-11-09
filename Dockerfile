@@ -6,6 +6,8 @@ FROM ${PYTHON_IMAGE} AS wheels
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /build
 COPY pyproject.toml ./
+COPY LICENSE NOTICE ./
+COPY licenses/ ./licenses/
 COPY src/ ./src/
 COPY mirage_validator/ ./mirage_validator/
 # 套件與相依 wheel 在建置階段解析；執行映像不保留編譯來源或下載工具。
@@ -40,6 +42,8 @@ COPY --chown=10001:10001 inputs/security_taxonomies/ ./inputs/security_taxonomie
 COPY --chown=10001:10001 tools/ ./tools/
 COPY --chown=10001:10001 docs/ ./docs/
 COPY --chown=10001:10001 README.md ./README.md
+COPY --chown=10001:10001 LICENSE NOTICE ./
+COPY --chown=10001:10001 licenses/ ./licenses/
 
 USER 10001:10001
 EXPOSE 8000

@@ -1,0 +1,56 @@
+Mirage_API
+Copyright 2026 Mirage_API contributors
+
+Original project source code and original project documentation are licensed
+under the Apache License, Version 2.0. See LICENSE.
+
+Third-party materials retain their respective licenses and notices. This
+project's Apache-2.0 license does not replace the following terms.
+
+Medusa API reference materials
+----------------------------
+Copyright (c) 2021 Medusajs
+Licensed under the MIT License, subject to the upstream repository's stated
+exceptions. The API reference used here is outside those Enterprise paths.
+The complete upstream notice is included in licenses/Medusa-MIT.txt.
+
+Source repository: https://github.com/medusajs/medusa
+Source revision: 81edb06c323812773c9c0dcc4da2d9784f3b3319
+Source file: www/apps/api-reference/specs/store/openapi.full.yaml
+
+The following files contain a modified Store/Auth API reference subset:
+  domains/ecommerce/inputs/sources/medusa/openapi.yaml
+  domains/ecommerce/inputs/platforms/medusa/openapi.yaml
+
+The project retains a subset of paths and schemas, preserves the upstream
+document version, and applies the documented contract corrections. Related
+profiles and reference files may contain excerpts from the same API reference.
+Modification and provenance details are recorded in:
+  domains/ecommerce/inputs/platforms/medusa/README.md
+  domains/ecommerce/docs/audits/medusa-v2.22.4-contract-2026-11-08.md
+
+OWASP classification materials
+------------------------------
+Attribution: OWASP API Security Project and OWASP Top 10 Project contributors.
+The following classification files, including the project's Chinese
+translations of category names, are licensed under CC-BY-SA-4.0:
+  inputs/security_taxonomies/owasp-api-security-2023.yaml
+  inputs/security_taxonomies/owasp-web-2025.yaml
+
+The category identifiers and English names were reorganized into YAML and
+Chinese category names were added. The domain-specific scenario mappings and
+implementation status are project designs, not official OWASP mappings or
+endorsements. Adapted OWASP classification text retains its original license.
+
+Sources:
+  https://api-security.owasp.org/editions/2023/en/0x11-t10/
+  https://top10.owasp.org/2025/0x00_2025-Introduction/
+License: https://creativecommons.org/licenses/by-sa/4.0/
+License text: licenses/CC-BY-SA-4.0.txt
+
+Runtime dependencies and separately obtained model weights
+--------------------------------------------------------
+Runtime dependencies retain their original licenses. Model weights are not
+included in this repository or the project's Python package. Separately
+obtained weights and tokenizers remain subject to their own license terms.
+See docs/licensing.md and the component guides for details.

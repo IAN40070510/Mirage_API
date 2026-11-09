@@ -149,4 +149,4 @@ Compose 不自動下載模型。確認精確權重及 tokenizer 的 LICENSE／NO
 | Ollama runtime | MIT，僅程式，模型權重另行管理 |
 | Foundation Reasoning 權重 | 底層 Llama 3.1 Community License 與 Cisco 修改部分 Apache-2.0 分開管理 |
 
-精確版本、主要間接依賴與權重條款見 [模型整合授權](orchestration.md#套件模型與資料授權) 及各領域文件。分類文字及 OWASP 來源權利見 [OWASP 設計](owasp-design.md)。封裝未新增 Python 執行期套件；此表不是完整容器 SBOM，也未替 Mirage_API 原始碼選定授權。
+精確版本、主要間接依賴與權重條款見 [模型整合授權](orchestration.md#套件模型與資料授權) 及各領域文件。分類文字及 OWASP 來源權利見 [OWASP 設計](owasp-design.md)。封裝未新增 Python 執行期套件，此表不是完整容器 SBOM。自有程式採 Apache-2.0，根 `LICENSE`、`NOTICE` 與 `licenses/` 聲明隨建置及執行映像保留，詳見 [授權與封裝範圍](licensing.md)。

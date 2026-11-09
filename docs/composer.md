@@ -53,7 +53,7 @@ preflight 只表示符合載入的回應契約，不檢查原網站綁定、已�
 | [openapi-schema-validator](https://github.com/python-openapi/openapi-schema-validator) | 0.6.3 | BSD-3-Clause | OpenAPI schema 驗證依賴 |
 | [openapi-spec-validator](https://github.com/python-openapi/openapi-spec-validator) | 0.7.2 | Apache-2.0 | OpenAPI 規格驗證依賴 |
 
-Python 標準庫的 `json`、`dataclasses`、`pathlib` 等隨 Python 提供，依其 PSF 授權及隨附聲明分發。本表涵蓋回應組合器直接使用及主要共用依賴，不是完整間接依賴 SBOM；Faker 的 `tzdata` 等仍依 [合成資料工具授權說明](synthetic.md) 及實際安裝版本管理。打包第三方套件時保存其原始 LICENSE、版權、免責聲明，以及實際存在的 NOTICE。本次只是呼叫公開 API／既有鎖版擴充點，未修改第三方原始碼，也未替本專案選定新的授權。
+Python 標準庫的 `json`、`dataclasses`、`pathlib` 等隨 Python 提供，依其 PSF 授權及隨附聲明分發。本表涵蓋回應組合器直接使用及主要共用依賴，不是完整間接依賴 SBOM；Faker 的 `tzdata` 等仍依 [合成資料工具授權說明](synthetic.md) 及實際安裝版本管理。打包第三方套件時保存其原始 LICENSE、版權、免責聲明，以及實際存在的 NOTICE。本工具呼叫公開 API／既有鎖版擴充點，未修改第三方原始碼；自有程式的 Apache-2.0 與第三方材料邊界見 [授權總覽](licensing.md)。
 
 ## 指令格式與執行
 

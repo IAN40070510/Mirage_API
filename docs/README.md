@@ -4,6 +4,8 @@
 
 首次閱讀可先看 [README 架構總覽](../README.md#系統架構)；部署組裝、快取及錯誤分支詳見 [詳細架構與執行邊界](architecture.md)。
 
+專案自有程式採 Apache-2.0；Medusa 規格、OWASP 分類資料、套件及模型的個別授權與封裝聲明見 [專案授權與第三方材料](licensing.md)。
+
 | 工具／介面 | 程式位置 | 說明文件 |
 | --- | --- | --- |
 | 共用模型與資料交換 | `src/deception/common/` | [嚴格型別、隔離範圍與通用資料投影](common-data.md) |

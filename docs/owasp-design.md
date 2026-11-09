@@ -83,6 +83,6 @@ print(scenario.handler_id)
 
 分類檔已以共用模型檢查各有十個唯一 ID，電商目錄的所有引用均可解析。HTTP 行為、資料一致性與實際情境處理器仍須分別測試；分類載入通過不代表所有弱點已實作或官方服務已相容。
 
-OWASP Top 10 與 API Security 的原始分類文件均採 **CC-BY-SA-4.0**，來源分別為 [Web 專案授權](https://github.com/OWASP/Top10/blob/master/LICENSE) 與 [API 專案授權](https://github.com/OWASP/API-Security/blob/master/LICENSE)。本專案將分類名稱重新編排為 YAML，中文名稱為本專案翻譯；兩份分類檔保留來源及授權。分發改作分類資料時應依原條款保留歸屬、授權及修改說明，不宣稱 OWASP 背書本專案。這裡不替整個專案原始碼選定授權。
+OWASP Top 10 與 API Security 的原始分類文件均採 **CC-BY-SA-4.0**，來源分別為 [Web 專案授權](https://github.com/OWASP/Top10/blob/master/LICENSE) 與 [API 專案授權](https://github.com/OWASP/API-Security/blob/master/LICENSE)。本專案將分類名稱重新編排為 YAML，中文名稱為本專案翻譯；兩份分類檔及分類翻譯維持 CC-BY-SA-4.0，保留來源及授權，完整副本見 [CC-BY-SA-4.0.txt](../licenses/CC-BY-SA-4.0.txt)。分發改作分類資料時依原條款保留歸屬、授權及修改說明，不宣稱 OWASP 背書本專案。這些材料不納入自有程式的 Apache-2.0 範圍，詳見 [授權總覽](licensing.md)。
 
 目錄驗證沿用 Pydantic（MIT）、PyYAML（MIT）及 Python 標準庫（PSF 與隨附聲明），未新增第三方套件。分類資料授權、模型權重授權、來源契約權利及程式套件授權分開管理。

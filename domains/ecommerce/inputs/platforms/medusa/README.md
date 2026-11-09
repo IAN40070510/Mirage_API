@@ -11,6 +11,10 @@
 - 上游 Git blob SHA-1：`000dcd0fb6d124a9675e5168b49ef7b354ac8a19`
 - **官方發行套件版本為 `2.22.4`，該 tag 的 Store API 文件 `info.version` 仍為 `2.22.3`。** 本子集保留官方文件值，不將兩個版本混為一談。
 
+## 授權與歸屬
+
+本目錄及平台規格工具來源的 OpenAPI 是上述固定官方來源的子集及修正版。上游內容維持 MIT，版權為 `Copyright (c) 2021 Medusajs`；完整版權與許可聲明見 [Medusa-MIT.txt](../../../../../licenses/Medusa-MIT.txt)，來源與修改摘要見 [專案 NOTICE](../../../../../NOTICE)。本專案的 Apache-2.0 不改變此上游內容的授權。自製程式、分類資料與模型權重的區分見 [授權總覽](../../../../../docs/licensing.md)。
+
 ## 本地檔案
 
 | 檔案 | 目的 |
