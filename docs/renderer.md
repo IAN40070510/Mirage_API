@@ -60,7 +60,7 @@ HTTP 請求入口對 `ValidatedHTTPResponse` 不再於驗證後附加追蹤 head
 
 `src/deception/api/pipeline.py` 提供 `make_pipeline_handler()` 與 `create_app()`。管理者明確注入已建立的協調器、runtime、合成資料工具設定／快照，以及可信的 `assessment_provider`。provider 可以是同步或非同步 callable，負責取得接收層已完成來源認證的判定；工具不會從訪客 header 或 JSON 自行取得可信 verdict。
 
-`AttackAssessment` 的完整欄位、請求指紋、時效、來源認證責任及 provider 範例見 [可信攻擊判定與 provider](attack-assessment.md)。
+安全檢查結果需要填哪些資料，以及 provider（負責拿取安全檢查結果的函式）怎麼寫，見 [安全檢查結果與接法](attack-assessment.md)。文件會用例子說明如何確認結果來自自己的檢查工具，而且對應目前這筆請求。
 
 ```python
 from deception.api.pipeline import create_app

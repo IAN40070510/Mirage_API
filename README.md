@@ -2,61 +2,61 @@
 
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 
-Mirage_API 接收外部系統的可信攻擊判定，依目標服務契約、領域規則與合成資料生成誘餌回應，通過驗證後以 FastAPI 回送。核心流程共用；各領域的業務資訊、資料型別、來源與弱點情境各自維護。
+Mirage_API 用來回應被判定為攻擊的 API 請求。它會依目標服務規定的回應格式和業務規則，使用虛構資料產生假回應，檢查通過後透過 FastAPI 送回。是否為攻擊由外部安全檢查工具判斷，Mirage_API 負責後面的回應流程。
 
-目前內建領域為 `ecommerce`。電商設定與資料集中在 [domains/ecommerce](domains/ecommerce/README.md)，商品處理程式位於 `src/deception/domains/ecommerce/`。新增領域須提供資料供應器、情境處理器、契約、驗證器及文件，並由受信任程式明確註冊。測試另以非電商工單驗證共用流程，尚未提供正式工單領域包。
+目前可以直接使用的業務類別是電商，設定名稱為 `ecommerce`。電商設定與資料集中在 [domains/ecommerce](domains/ecommerce/README.md)，商品處理程式位於 `src/deception/domains/ecommerce/`。其他業務也能沿用共用流程，但需要補上自己的資料處理程式、情境規則、API 規格、驗證方式及文件，再由部署程式把它們接進共用流程。測試已用工單案例確認這種接法可行，尚未提供可直接部署的工單版本。
 
 各工具的輸入、輸出、用法、失敗處理、驗證與授權見 [工具文件索引](docs/README.md)。
 
 ## 系統架構
 
-整體流程是：接收 API 請求與外部攻擊判定，依目標服務的規格、虛構資料及情境生成假回應，通過驗證後回送。任務協調器負責串起各工具，讓這次回應使用同一份服務身份、資料與規則。
+整體流程是：收到 API 請求和外部工具的安全檢查結果，找到這個服務適用的規格，再用虛構資料產生假回應。任務協調器負責安排各工具的工作，讓這次回應從頭到尾使用同一個服務的資料與規則。
 
 ### 整體流程
 
 ```mermaid
 flowchart TB
     request["HTTP API 請求"] --> ingress["FastAPI 請求入口"]
-    ingress --> orchestrator["任務協調器<br/>識別平台並安排工具調用"]
-    assessment["外部攻擊判定<br/>由可信 provider 注入"] --> orchestrator
+    ingress --> orchestrator["任務協調器<br/>確認目標服務並安排各工具工作"]
+    assessment["外部安全檢查結果<br/>由你的接收程式提供"] --> orchestrator
 
-    subgraph tools["工具調用層"]
-        profile["平台規格工具"]
-        data["領域合成資料工具"]
-        scenario["情境選擇工具"]
+    subgraph tools["先取得回應需要的資料"]
+        profile["平台規格工具<br/>讀取 API 與回應格式"]
+        data["合成資料工具<br/>提供要使用的虛構資料"]
+        scenario["情境選擇工具<br/>依規則決定怎麼回應"]
     end
 
     orchestrator --> profile
     orchestrator --> data
     orchestrator --> scenario
-    profile --> context["生成上下文<br/>本次使用的規格、事實與情境"]
+    profile --> context["整理這次生成要用的資料"]
     data --> context
     scenario --> context
-    context --> generate["內容生成器"]
-    model["本機模型／Ollama"] <--> orchestrator
+    context --> generate["內容生成器<br/>填寫允許生成的欄位"]
+    model["本機 AI 模型<br/>透過 Ollama 使用"] <--> orchestrator
     model <--> generate
-    generate --> compose["回應組合器"]
-    compose --> validate{"契約驗證通過？"}
-    validate -->|通過| render["HTTP 回送器<br/>完成標頭並重驗最終回應"]
-    render --> response["誘餌 HTTP 回應"]
-    validate -->|允許修正的內容錯誤| recover["有限修正／同分支備援"]
+    generate --> compose["回應組合器<br/>組成完整回應"]
+    compose --> validate{"回應是否符合 API 規格？"}
+    validate -->|通過| render["HTTP 回送器<br/>完成標頭並再次檢查"]
+    render --> response["送回假的 API 回應"]
+    validate -->|允許修正的內容錯誤| recover["修正或使用備用內容"]
     recover -->|重新生成| generate
     recover -->|固定欄位備援| compose
 
-    domain["所選領域包<br/>契約、資料規則與 OWASP 情境"] -.-> tools
+    domain["所選業務類別的設定<br/>API 規格、資料規則與弱點情境"] -.-> tools
 ```
 
-1. **接收與識別**：入口保留原始請求，協調器核對可信判定及目標服務，找到適用的 API 規格。
-2. **準備與生成**：規格、合成資料與情境共同決定回應內容；模型只填入允許生成的欄位，實體 ID 等固定事實由資料工具提供。
-3. **驗證與回送**：組合完整回應並驗證契約；允許的內容錯誤可有限修正或使用同分支備援，最後由 HTTP 回送器重驗再送出。
+1. **接收與識別**：保留原始請求，確認安全檢查結果對應的是這筆請求，再找出目標服務及它的 API 規格。
+2. **準備與生成**：根據規格、虛構資料和情境規則決定要回什麼。模型只能填寫事先允許的欄位；商品 ID 等需要保持一致的資料由資料工具提供。
+3. **驗證與回送**：組合完整回應並檢查是否符合規格。允許修正的內容錯誤，可以在次數限制內重試，或改用預先設定的備援內容；最後再檢查一次才送出。
 
-其中「可信攻擊判定」是外部偵測系統提供、與同一筆請求綁定的判斷。完整欄位、來源認證責任、provider 範例與失敗行為見 [可信攻擊判定說明](docs/attack-assessment.md)。
+這裡的「可信攻擊判定」，就是外部工具交來的一份安全檢查結果，說明哪筆請求被判斷為攻擊。你要先確認結果確實來自允許的檢查工具，再由自己的程式交給 Mirage_API。這段取回結果的程式叫 `assessment_provider`，文件中簡稱 provider。每個欄位的意思、接法範例及出錯時的處理方式，見 [可信攻擊判定說明](docs/attack-assessment.md)。
 
 圖中呈現元件分工；修正、備援或最終驗證失敗時會停止，不回送未驗證候選。快取、期限、模型不可用及其他錯誤分支詳見 [詳細架構與執行邊界](docs/architecture.md)。
 
 ### 領域包如何接入
 
-共用核心處理請求、模型調用、回應組合與驗證；領域包提供自己的契約、虛構資料、業務規則與弱點情境。管理者先在 `configs/app.yaml` 選領域，例如 `ecommerce`，系統再載入對應資產與已註冊的處理器。
+「領域」就是業務類別，例如電商；「領域包」就是這個類別需要的設定、規格和資料。共用流程負責接收請求、使用模型、組合及檢查回應。你先在 `configs/app.yaml` 選擇類別，例如 `ecommerce`，系統再讀取它的資料夾，使用已接好的處理程式。
 
 | 放置位置 | 負責內容 |
 | --- | --- |
@@ -67,7 +67,7 @@ flowchart TB
 
 OWASP 分類是設計弱點情境的依據。管理者在啟動時選定已實作的情境，領域處理器套用相應的虛構資料與回應規則；目前不會依每個訪客請求自動判定 OWASP 類別或切換弱點。
 
-目前提供本地設定與可信判定供應器介面；跨環境流量代理接入、遠端判定來源認證及集中設定服務仍待實作。隔離展示使用模擬攻擊判定，合成資料仍為唯讀快照；購買扣款及庫存更新尚未提供。
+目前可以用本地設定檔選擇規則，也可以接上自己的安全檢查結果接收程式。把不同環境的流量導入、確認遠端檢查工具的身分，以及集中管理設定的服務，仍要另外實作。展示模式使用程式產生的模擬檢查結果；虛構資料目前只能讀取，尚無購買扣款或更新庫存的功能。
 
 ## 快速使用
 

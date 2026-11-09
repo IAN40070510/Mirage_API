@@ -1,6 +1,6 @@
 # 工具說明文件索引
 
-此索引按目前實作提供獨立入口。每份說明記錄功能、輸入輸出、設定與使用方式、驗證及授權；共用細節可交叉參閱，不能把規劃中的功能當成可用 API。
+想知道某個工具做什麼、需要哪些資料、怎麼使用，可以從下面的表格找到說明。各份文件也會交代設定方式、檢查方法、授權，以及哪些部分還沒有實作。
 
 首次閱讀可先看 [README 架構總覽](../README.md#系統架構)；部署組裝、快取及錯誤分支詳見 [詳細架構與執行邊界](architecture.md)。
 
@@ -12,7 +12,7 @@
 | 領域載入與註冊 | `src/deception/domains/assets.py`、`registry.py` | [領域選擇、資產與擴充介面](domains.md) |
 | OWASP 分類與弱點目錄 | `src/deception/security/` | [版本化分類、領域映射與模擬邊界](owasp-design.md) |
 | HTTP 請求入口 | `src/deception/api/` | [入口、標準化與 handler](ingress.md) |
-| 可信攻擊判定與 provider | `src/deception/scenarios/models.py`、`src/deception/api/pipeline.py` | [判定用途、資料格式、來源認證與整合方式](attack-assessment.md) |
+| 安全檢查結果（可信攻擊判定）與接收程式 | `src/deception/scenarios/models.py`、`src/deception/api/pipeline.py` | [欄位意思、由誰提供、怎麼接收與出錯處理](attack-assessment.md) |
 | 平台識別 | `src/deception/discovery/` | [部署綁定與操作識別](identifier.md) |
 | 任務協調器 | `src/deception/core/orchestrator.py` | [控制流程、受控工具及內部結果](orchestration.md) |
 | Profile 工具 | `src/deception/profile_builder/` | [固定來源建置與查詢](profiles.md) |
