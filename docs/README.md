@@ -12,6 +12,7 @@
 | 領域載入與註冊 | `src/deception/domains/assets.py`、`registry.py` | [領域選擇、資產與擴充介面](domains.md) |
 | OWASP 分類與弱點目錄 | `src/deception/security/` | [版本化分類、領域映射與模擬邊界](owasp-design.md) |
 | HTTP 請求入口 | `src/deception/api/` | [入口、標準化與 handler](ingress.md) |
+| 可信攻擊判定與 provider | `src/deception/scenarios/models.py`、`src/deception/api/pipeline.py` | [判定用途、資料格式、來源認證與整合方式](attack-assessment.md) |
 | 平台識別 | `src/deception/discovery/` | [部署綁定與操作識別](identifier.md) |
 | 任務協調器 | `src/deception/core/orchestrator.py` | [控制流程、受控工具及內部結果](orchestration.md) |
 | Profile 工具 | `src/deception/profile_builder/` | [固定來源建置與查詢](profiles.md) |

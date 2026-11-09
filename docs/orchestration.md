@@ -38,6 +38,8 @@ flowchart LR
 
 外部系統負責攻擊判定及來源認證。`AttackAssessment` 的來源 ID 白名單只限制可接受的來源標籤；接收層須先完成服務身份驗證，不能把訪客提供的 `trusted: true` 或 header 當作認證。任務協調與內容生成沒有新增公開 verdict 接收 API。
 
+判定欄位、請求關聯、有效期限及可信 provider 的接法見 [可信攻擊判定說明](attack-assessment.md)。
+
 生成政策由伺服器載入，明列允許的目標位置及 schema。請求內容與模型輸出都是待核對資料；模型不能選用另一個部署、run、契約或任意檔案／網路工具。錯誤時保持不可產生已驗證候選的結果，不由模型自行宣告通過。模型呼叫、工具嘗試及修正都受總預算與整體期限限制。
 
 本機工具規劃與結構化生成分別呼叫模型。Ollama 官方支援 [tool calling](https://docs.ollama.com/capabilities/tool-calling) 及 [JSON Schema structured outputs](https://docs.ollama.com/capabilities/structured-outputs)；實際可用性仍依鎖定的伺服器、adapter 與模型實測。程式的必經檢查不依賴模型是否遵守工具選擇指令。

@@ -16,6 +16,7 @@ GUIDES = {
     "synthetic_data": ("src/deception/synthetic", "docs/synthetic.md"),
     "ecommerce_data": ("src/deception/domains/ecommerce/synthetic", "domains/ecommerce/docs/synthetic.md"),
     "scenarios": ("src/deception/scenarios", "docs/scenarios.md"),
+    "attack_assessment": ("src/deception/scenarios/models.py", "docs/attack-assessment.md"),
     "generation": ("src/deception/generation", "docs/generation.md"),
     "composition": ("src/deception/core/composer.py", "docs/composer.md"),
     "contract_validation": ("mirage_validator/gate.py", "docs/gate.md"),
