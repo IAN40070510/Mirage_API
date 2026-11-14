@@ -15,7 +15,7 @@ from pydantic import Field, field_validator
 
 from deception.core import ResponseComposer
 from deception.core.orchestrator import DeceptionOrchestrator
-from deception.core.recovery import RecoveryPolicy, RecoveryTool
+from deception.core.recovery import REQUEST_ENTITY_ID_TOKEN, RecoveryPolicy, RecoveryTool
 from deception.discovery import BindingConfig, DeploymentBinding, PlatformIdentifier, RuntimeContext
 from deception.generation import ContentCache, ContentGenerator
 from .generation_demo import _bytes, _policies, _specification
@@ -47,7 +47,7 @@ class DemoConfig(SyntheticModel):
     run_id: str = Field(default="isolated-demo", pattern=SLUG)
     weakness_scenario: str | None = Field(default=None, pattern=SLUG)
     fallback_description: str = Field(default="This is a reviewed synthetic demonstration product.", min_length=10, max_length=120)
-    fallback_missing_message: str = Field(default="The requested synthetic demonstration product does not exist.", min_length=10, max_length=120)
+    fallback_missing_message: str = Field(default="Entity with requested id {request_entity_id} was not found.", min_length=10, max_length=120)
 
     @field_validator("origin")
     @classmethod
@@ -108,7 +108,13 @@ def _recovery_policy(config, scenarios, generator) -> RecoveryPolicy:
     for rule in generator.policy.rules:
         selector = rule.model_dump(mode="json", exclude={"rule_id", "fields", "protected_pointers"})
         field = rule.fields[0].field_id
-        value = config.fallback_description if rule.outcome_id == "found" else config.fallback_missing_message
+        if rule.outcome_id == "found":
+            value = config.fallback_description
+        else:
+            value = config.fallback_missing_message.rstrip(".")
+            if REQUEST_ENTITY_ID_TOKEN not in value:
+                value += f" (requested id: {REQUEST_ENTITY_ID_TOKEN})"
+            value += "."
         rules.append({**selector, "rule_id": "reviewed-" + rule.outcome_id, "generation_rule_id": rule.rule_id,
                       "generation_policy_sha256": generator.policy_sha256,
                       "scenario_policy_sha256": scenarios.policy_sha256, "values": {field: value}})

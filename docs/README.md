@@ -9,6 +9,8 @@
 | 工具／介面 | 程式位置 | 說明文件 |
 | --- | --- | --- |
 | 共用模型與資料交換 | `src/deception/common/` | [嚴格型別、隔離範圍與通用資料投影](common-data.md) |
+| 唯讀 Synthetic World Runtime | `src/deception/world/` | [WorldScope、Snapshot、CAS 與 ResponseAdmission](world-runtime.md) |
+| 實作進度追蹤 | `docs/implementation-progress.md` | [目前完成項目、驗證紀錄與下一步](implementation-progress.md) |
 | 領域載入與註冊 | `src/deception/domains/assets.py`、`registry.py` | [領域選擇、資產與擴充介面](domains.md) |
 | OWASP 分類與弱點目錄 | `src/deception/security/` | [版本化分類、領域映射與模擬邊界](owasp-design.md) |
 | HTTP 請求入口 | `src/deception/api/` | [入口、標準化與 handler](ingress.md) |

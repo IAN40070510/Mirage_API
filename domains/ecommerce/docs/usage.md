@@ -26,7 +26,7 @@ seed: 20261109
 product_count: 2
 run_id: isolated-demo
 fallback_description: This is a reviewed synthetic demonstration product.
-fallback_missing_message: The requested synthetic demonstration product does not exist.
+fallback_missing_message: Entity with requested id {request_entity_id} was not found.
 ```
 
 | 欄位 | 用途與限制 |
@@ -59,7 +59,7 @@ curl.exe -i http://127.0.0.1:8000/api/products/prod-synthetic-missing -H 'X-Requ
 curl.exe --path-as-is -i 'http://127.0.0.1:8000/api/products/%27%20OR%201%3D1--' -H 'X-Request-ID: sqli-path'
 ```
 
-存在商品應為 200、不存在商品為 404。同一商品的 ID、名稱與完整 body 應穩定；不同 request ID 仍須各自重新驗證最後封套。攻擊文字只作普通輸入，不成為可執行工具。
+存在商品應為 200、不存在商品為 404。同一商品的 ID、名稱與完整 body 應穩定；404 的 message 會綁定當次請求商品 ID，並對路徑輸入使用 URL encoding，避免原始攻擊文字直接回顯。不同 request ID 仍須各自重新驗證最後封套。攻擊文字只作普通輸入，不成為可執行工具。
 
 未審查 query、未知操作或方法應停止，不臆造成功購買。交易寫入未支援，因此下單、扣款、退款、更新庫存等測試要求明確拒絕。服務診斷不是已通過商品契約的候選。
 

@@ -170,7 +170,27 @@ flowchart TB
 3. **投影與生成**：由受審查且版本化的 `Projection Contract` 決定預設欄位、query／field 規則、nullable、關聯選擇與不可生成欄位。只有需要生成的欄位才呼叫 LLM；LLM 只能透過少量、受限的領域工具讀取本次最小上下文並輸出白名單欄位，不能直接讀寫 `WorldStore` 或 `SyntheticWorld`，也不能決定身份、status、關聯或時間。
 4. **驗證與回送**：組合世界的權威資料與固定／受限生成欄位，先通過領域語意驗證，再通過 API 契約驗證。允許的內容錯誤可在限制內修正或使用同分支備援；狀態變更由協調器以 request ID、冪等規則及版本 CAS 控制，最後再次檢查同一份候選才送出。
 
-`WorldScope`、`WorldSnapshot`、`SyntheticWorld`、`WorldStore`、`WorldDomain` 與 session 世界流程目前是 Mirage_API 的架構設計方向；現有資料供應器與合成快照仍是既有相容流程，尚未宣稱已提供完整的持久 session 世界實作。
+### 各節點白話說明
+
+| 圖中節點 | 白話功能 | 目前實作狀態 |
+| --- | --- | --- |
+| `HTTP API 請求` | 攻擊者送進來的原始 HTTP 請求，先保留原始 bytes，不先改寫。 | 已有入口；完整可信邊界仍待整合驗證 |
+| `可信請求入口` | 確認請求、可信攻擊判定與路由身份確實是同一筆交易。 | 已有 pipeline；Protocol v1.1 Conformance 尚未完成 |
+| `Session Resolver` | 把可信 session 對到正確的合成世界；不接受 Client 自選 `world_id`。 | 架構已定義，持久化 Resolver 待接入 |
+| `WorldScope` | 像資料夾的完整地址，決定環境、部署、Session 與 World 世代的隔離範圍。 | 已提供嚴格型別 |
+| `WorldStore` | 像保管箱，負責保存、載入、版本與 CAS；不懂商品規則。 | 已提供單程序唯讀原型；共享持久化尚未完成 |
+| `SyntheticWorld` | 這個 Session 看到的合成商品、變體、選項與狀態集合。 | 既有電商快照可用；完整共用 Runtime 持續實作中 |
+| `WorldDomain` | 像領域裁判，檢查商品關聯、時間、狀態與事件是否合理。 | 電商規則已有；跨領域介面仍待整合 |
+| `Reviewed Projection Contract` | 說明哪個 API operation 可以輸出哪些欄位，以及哪些欄位不能生成。 | 已有 Profile／Gate；差異核准證據待正式 Registry |
+| `API Projection` | 把世界資料排成目標 API 看得懂的回應骨架。 | 既有 Composer／Validator 可用 |
+| `LLM 受限能力` | 只補白名單中允許生成的內容，不得碰身份、狀態、關聯、時間或 Store。 | 已有受限生成流程 |
+| `回應組合器` | 把權威欄位和允許生成欄位合成候選回應，並固定序列化。 | 已有 Composer |
+| `業務語意與 API 契約驗證` | 先檢查資料關係，再檢查 HTTP status、headers、body 是否符合契約。 | 已有 Domain／Gate 驗證 |
+| `有限修正或同分支備援` | 只在同一請求與同一契約範圍內修正，不用備援掩蓋身份或安全錯誤。 | 已有 Recovery 流程 |
+| `HTTP 回送器` | 送出最後一次驗證過的同一份 bytes；不把傳輸完成誤稱為 Client 已收到。 | 已有 Renderer；Admission／多 Instance 邊界待接入 |
+| `Audit` | 留下版本、摘要與決策證據，避免保存 token、憑證或完整敏感內容。 | 事件欄位已定義，持久化格式待完成 |
+
+`WorldScope`、`WorldSnapshot`、`WorldStore` 與 ResponseAdmission 的第一個唯讀原型位於 `src/deception/world/`；它目前提供嚴格 scope、Snapshot hash、CAS 與單程序准入控制。電商 404 的 `message` 會綁定當次請求商品 ID，並使用 URL encoding 防止攻擊樣式輸入直接回顯。現有電商資料供應器仍是相容流程，完整持久 session 世界、共享 Store、Fault Matrix 與多 Instance Conformance 尚未完成。
 
 目前設計先採唯讀世界階段：GET 類查詢不得因回應而改變商品、變體或其他實體狀態。後續若加入 `WorldEvent`，必須由協調器建立交易範圍，由 `WorldStore` 以 `expected_version` 原子驗證、套用及保存；HTTP 回送與狀態提交不是同一個原子交易，因此狀態變更需另有 request ID、冪等執行結果與可重放規則。
 

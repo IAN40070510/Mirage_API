@@ -3,11 +3,14 @@
 import copy
 import json
 from typing import Literal
+from urllib.parse import quote, unquote
 
 from pydantic import Field, JsonValue, model_validator
 
 from deception.generation.models import digest
 from deception.common.models import SLUG, SyntheticModel
+
+REQUEST_ENTITY_ID_TOKEN = "{request_entity_id}"
 
 
 class FallbackRule(SyntheticModel):
@@ -92,11 +95,31 @@ class RecoveryTool:
         fallback = self.select_fallback(plan, context, rule.rule_id)
         if fallback is None:
             return None
-        values = copy.deepcopy(fallback.values)
+        values = self._bind_request_entity_id(copy.deepcopy(fallback.values), context)
         result = generator.apply(plan, rule, schemas, values)
         return result, {"source": "fallback", "fallback_rule_id": fallback.rule_id,
                         "policy_sha256": self.policy_sha256, "content_sha256": digest(values),
                         "field_ids": sorted(values), "cache_hit": False}
+
+    @staticmethod
+    def _bind_request_entity_id(values, context):
+        """只將核准 token 綁定到已驗證的商品 ID，並 URL encode 防止回顯可執行輸入。"""
+        entity_id = context.domain_context.get("product_id")
+        if not isinstance(entity_id, str) or not entity_id:
+            raise ValueError("Request-bound fallback requires a verified product ID")
+        encoded_id = quote(unquote(entity_id), safe="")
+
+        def bind(value):
+            """遞迴替換核准字串 token，不解讀其他模板語法或新增欄位。"""
+            if isinstance(value, str):
+                return value.replace(REQUEST_ENTITY_ID_TOKEN, encoded_id)
+            if isinstance(value, list):
+                return [bind(item) for item in value]
+            if isinstance(value, dict):
+                return {key: bind(item) for key, item in value.items()}
+            return value
+
+        return bind(values)
 
     @staticmethod
     def can_repair_gate(result) -> bool:

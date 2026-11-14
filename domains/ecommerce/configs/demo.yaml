@@ -11,4 +11,4 @@ seed: 20261109
 product_count: 2
 run_id: isolated-demo
 fallback_description: This is a reviewed synthetic demonstration product.
-fallback_missing_message: The requested synthetic demonstration product does not exist.
+fallback_missing_message: Entity with requested id {request_entity_id} was not found.

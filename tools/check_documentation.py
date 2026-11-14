@@ -30,6 +30,7 @@ GUIDES = {
     "http_verification": ("tools/verify_ecommerce_api.py", "docs/verification.md"),
     "container_packaging": ("Dockerfile", "docs/docker.md"),
     "common_data": ("src/deception/common", "docs/common-data.md"),
+    "world_runtime": ("src/deception/world", "docs/world-runtime.md"),
     "domains": ("src/deception/domains", "docs/domains.md"),
     "security_catalog": ("src/deception/security", "docs/owasp-design.md"),
     "domain_verification": ("tools/verify_domain_api.py", "docs/verification.md"),
