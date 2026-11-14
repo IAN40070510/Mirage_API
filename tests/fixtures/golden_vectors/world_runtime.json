@@ -1,0 +1,83 @@
+{
+  "canonical_state": {
+    "product_id": "prod_synthetic_001",
+    "status": "published"
+  },
+  "canonical_state_sha256": "da6de35c1d4952b5fab51d7d1da1015ee22316f6f25479f03e51bfac4d11228f",
+  "response_sources": [
+    {
+      "kind": "snapshot",
+      "read_admission_id": "read-vector-1",
+      "world_generation_id": "generation-vector-1",
+      "state_version": 1,
+      "state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "kind": "security_error",
+      "template_id": "safe-unavailable",
+      "contract_revision": "1"
+    }
+  ],
+  "response_admission": {
+    "admission_id": "admission-vector-1",
+    "request_binding_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "world_generation_id": "generation-vector-1",
+    "grant_revision": 10,
+    "projection_registry_revision": 7,
+    "candidate_ref": "candidate-vector-1",
+    "candidate_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "immutable_body_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "semantic_headers_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+    "authorization_revision": "trusted-auth-1",
+    "authorization_deadline": 2000000000,
+    "transmission_deadline": 2000000100,
+    "source": {
+      "kind": "snapshot",
+      "read_admission_id": "read-vector-1",
+      "world_generation_id": "generation-vector-1",
+      "state_version": 1,
+      "state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "projection_evidence": {
+      "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "compatibility_profile": {
+        "profile_id": "vector-profile",
+        "profile_version": "1",
+        "profile_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+        "platform_id": "test",
+        "platform_version": "1",
+        "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "world_schema_version": "1",
+        "domain_adapter_version": "1"
+      },
+      "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+      "official_schema_valid": true,
+      "effective_projection_valid": true
+    }
+  },
+  "http_errors": [
+    {
+      "name": "pipeline_unavailable",
+      "status": 503,
+      "body": {
+        "code": "pipeline_unavailable",
+        "request_id": "request-vector-1"
+      }
+    },
+    {
+      "name": "pipeline_not_applicable",
+      "status": 409,
+      "body": {
+        "code": "pipeline_not_applicable",
+        "request_id": "request-vector-1"
+      }
+    }
+  ],
+  "admission_order": [
+    "grant",
+    "claim",
+    "cutover",
+    "send_authorization"
+  ]
+}

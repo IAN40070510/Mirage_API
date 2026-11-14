@@ -33,7 +33,7 @@ Mirage_API 用來回應被判定為攻擊的 API 請求。它的目標不是只�
 | `idempotency_key` | 確保同一業務操作重試不重複提交 |
 | `state_version` | 防止並行請求覆寫世界狀態 |
 
-Gateway 負責驗證上游安全判定並簽發 `TrustedSessionContext v1`；Mirage 驗證簽章、受眾、期限、請求綁定並消費 `jti`。JWS v1 只支援 Compact Serialization、`alg=Ed25519`、`typ=mirage-trusted-session+jwt` 與固定 `protocol_version`，`kid` 必填且只能從可信 issuer 的固定金鑰集合選取；禁止 `none`、未知演算法、遠端金鑰 URL、協定自動降級及依 JWS Header 任意載入金鑰。`iss`、`aud`、`iat`、`nbf`、`exp`、`jti`、環境／部署／session 綁定、assessment 摘要及 request fingerprint 必填；有效期與最大 clock skew 由部署政策固定，建議分別不超過 60 秒與 30 秒。金鑰輪替須保留驗證重疊期，撤銷立即拒絕；JWS 不取代 TLS，payload 不放 token、API key、憑證或私有資料。Gateway 與 Mirage 必須以 Golden Vectors 實測簽發、驗證及負向互通；尚未完成前不得宣稱 Runtime 符合 Protocol v1.1。
+Gateway 負責驗證上游安全判定並簽發 `TrustedSessionContext v1`；Mirage 透過 `TrustedSessionVerifier` 驗證簽章、受眾、期限、請求綁定並消費 `jti`。JWS v1 只支援 Compact Serialization、`alg=Ed25519`、`typ=mirage-trusted-session+jwt` 與固定 `protocol_version`，`kid` 必填且只能從可信 issuer 的固定金鑰集合選取；禁止 `none`、未知演算法、遠端金鑰 URL、協定自動降級及依 JWS Header 任意載入金鑰。`iss`、`aud`、`iat`、`nbf`、`exp`、`jti`、環境／部署／session 綁定、assessment 摘要及 request fingerprint 必填；有效期與最大 clock skew 由部署政策固定，建議分別不超過 60 秒與 30 秒。金鑰輪替須保留驗證重疊期，撤銷立即拒絕；JWS 不取代 TLS，payload 不放 token、API key、憑證或私有資料。Gateway 與 Mirage 必須以 Golden Vectors 實測簽發、驗證及負向互通；尚未完成前不得宣稱 Runtime 符合 Protocol v1.1。
 
 `jti` Replay 與 `idempotency_key` 使用兩個獨立狀態機：Replay 唯一鍵為 issuer／audience／`jti`，只允許一次成功消費；idempotency key 綁定 `WorldScope`、operation 與操作摘要，相同內容可重用已提交結果，不同內容必須拒絕。合法重試使用新的 JWS／`jti`，但保留同一業務 idempotency key；Gateway 不消費 `jti`，不得與 Mirage 重複消費同一授權。
 
@@ -94,6 +94,8 @@ ResponseSource = SnapshotSource | CommitSource | SecurityErrorSource
 `SnapshotSource` 綁定 `read_admission_id`、`world_generation_id`、`state_version` 與 `state_hash`；`CommitSource` 綁定 `operation_result_digest`、`committed_state_version` 與 `committed_state_hash`；`SecurityErrorSource` 只允許使用核准的固定安全錯誤模板，不代表 SyntheticWorld 或 Medusa 商品資料。`ReadAdmission` 不提供發送權，不能取代 `ResponseAdmission`。
 
 Admission 必須綁定不可變的 `candidate_ref`、候選序列化版本、candidate／body／semantic header hashes、request binding、Generation、授權 revision、authorization deadline 與 transmission deadline。Candidate 在所有合法 Claim、恢復查詢及重新授權期限內必須可讀；不存在、跨 scope 或 hash 不符時拒絕，不得由 LLM 重新生成替代。
+
+Grant 前必須把 `projection_contract_hash`、來源規格摘要與 Compatibility Profile 摘要送到 `ProjectionRegistry`。只有 Registry 回傳 `AUTHORIZED`，且其 `registry_revision` 被保存進 `ResponseAdmission`，才可建立 Grant；未知、撤銷、版本不符或 Registry 無法確認時一律不建立准入。這就像門口驗票：沒有目前有效的票，後面的 Claim 和 HTTP 發送都沒有資格開始。
 
 ### Generation Cutover、Watermark 與安全錯誤
 
@@ -178,19 +180,23 @@ flowchart TB
 | `可信請求入口` | 確認請求、可信攻擊判定與路由身份確實是同一筆交易。 | 已有 pipeline；Protocol v1.1 Conformance 尚未完成 |
 | `Session Resolver` | 把可信 session 對到正確的合成世界；不接受 Client 自選 `world_id`。 | 架構已定義，持久化 Resolver 待接入 |
 | `WorldScope` | 像資料夾的完整地址，決定環境、部署、Session 與 World 世代的隔離範圍。 | 已提供嚴格型別 |
-| `WorldStore` | 像保管箱，負責保存、載入、版本與 CAS；不懂商品規則。 | 已提供單程序唯讀原型；共享持久化尚未完成 |
+| `WorldStore` | 像保管箱，負責保存、載入、版本與 CAS；不懂商品規則。 | 有單程序原型與 PostgreSQL 交易實作；完整 Conformance 尚未完成 |
+| `CandidateStore` | 像回應候選的保管箱，依完整 scope 和 hash 取回原始 bytes；有效准入仍引用時不能被 GC 清掉。 | 有程序內與 PostgreSQL 實作；完整 Conformance 尚未完成 |
 | `SyntheticWorld` | 這個 Session 看到的合成商品、變體、選項與狀態集合。 | 既有電商快照可用；完整共用 Runtime 持續實作中 |
 | `WorldDomain` | 像領域裁判，檢查商品關聯、時間、狀態與事件是否合理。 | 電商規則已有；跨領域介面仍待整合 |
-| `Reviewed Projection Contract` | 說明哪個 API operation 可以輸出哪些欄位，以及哪些欄位不能生成。 | 已有 Profile／Gate；差異核准證據待正式 Registry |
+| `Reviewed Projection Contract` | 說明哪個 API operation 可以輸出哪些欄位，以及哪些欄位不能生成。 | 已有 Profile／Gate 與差異核准證據型別 |
+| `Projection Registry` | 像契約門禁名冊，確認來源規格、Profile、Contract 都是目前核准且未撤銷的版本。 | 已接入 Admission Grant；完整 Registry Conformance 尚未完成 |
 | `API Projection` | 把世界資料排成目標 API 看得懂的回應骨架。 | 既有 Composer／Validator 可用 |
 | `LLM 受限能力` | 只補白名單中允許生成的內容，不得碰身份、狀態、關聯、時間或 Store。 | 已有受限生成流程 |
 | `回應組合器` | 把權威欄位和允許生成欄位合成候選回應，並固定序列化。 | 已有 Composer |
 | `業務語意與 API 契約驗證` | 先檢查資料關係，再檢查 HTTP status、headers、body 是否符合契約。 | 已有 Domain／Gate 驗證 |
 | `有限修正或同分支備援` | 只在同一請求與同一契約範圍內修正，不用備援掩蓋身份或安全錯誤。 | 已有 Recovery 流程 |
-| `HTTP 回送器` | 送出最後一次驗證過的同一份 bytes；不把傳輸完成誤稱為 Client 已收到。 | 已有 Renderer；Admission／多 Instance 邊界待接入 |
+| `HTTP 回送器` | 送出最後一次驗證過的同一份 bytes；不把傳輸完成誤稱為 Client 已收到。 | 已有 Renderer；PostgreSQL Admission 已可供多 Instance 驗證 |
 | `Audit` | 留下版本、摘要與決策證據，避免保存 token、憑證或完整敏感內容。 | 事件欄位已定義，持久化格式待完成 |
+| `Golden Vectors／Fault Matrix` | 用固定輸入與故障情境檢查不同 Instance 是否得到相同安全結果。 | 已有 World、Admission Registry、HTTP 錯誤、Replay 與 Clock／Crash／Emergency 測試；JWS 與完整 Protocol conformance 尚未完成 |
+| `ReplayStore` | 像一次性票券登記簿，確認同一 issuer／audience／jti 只能被消費一次。 | 已接入 Trusted Session 驗證邊界；完整多 Instance Conformance 尚未完成 |
 
-`WorldScope`、`WorldSnapshot`、`WorldStore` 與 ResponseAdmission 的第一個唯讀原型位於 `src/deception/world/`；它目前提供嚴格 scope、Snapshot hash、CAS 與單程序准入控制。電商 404 的 `message` 會綁定當次請求商品 ID，並使用 URL encoding 防止攻擊樣式輸入直接回顯。現有電商資料供應器仍是相容流程，完整持久 session 世界、共享 Store、Fault Matrix 與多 Instance Conformance 尚未完成。
+`WorldScope`、`WorldSnapshot`、`WorldStore`、`CandidateStore`、`ReplayStore`、`ProjectionEvidence` 與 ResponseAdmission 的唯讀 Runtime 位於 `src/deception/world/`；它目前提供嚴格 scope、Snapshot／Candidate hash、CAS、JTI 一次性消費、可區分的 Store 故障結果、Projection 差異核准證據、PostgreSQL 持久化、Grant 前 Registry 授權與跨 Instance Admission 原型。Replay 只有在可信 claims 已完成簽章／期限驗證後才能消費；完整 JWS 整合與 Conformance 尚未完成。
 
 目前設計先採唯讀世界階段：GET 類查詢不得因回應而改變商品、變體或其他實體狀態。後續若加入 `WorldEvent`，必須由協調器建立交易範圍，由 `WorldStore` 以 `expected_version` 原子驗證、套用及保存；HTTP 回送與狀態提交不是同一個原子交易，因此狀態變更需另有 request ID、冪等執行結果與可重放規則。
 

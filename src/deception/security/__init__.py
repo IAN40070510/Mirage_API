@@ -1,5 +1,33 @@
-"""共用安全分類與領域弱點情境目錄；不執行真實弱點或任意外部輸入。"""
+"""共用安全分類與 Trusted Session；延後載入需要重型 API 驗證依賴的目錄。"""
 
-from .catalog import CategoryReference, ScenarioCatalog, SecurityTaxonomy, WeaknessScenario, load_catalog
+__all__ = [
+    "CategoryReference",
+    "ScenarioCatalog",
+    "SecurityTaxonomy",
+    "TrustedKeyRegistry",
+    "TrustedSessionClaims",
+    "TrustedSessionError",
+    "TrustedSessionHeader",
+    "TrustedSessionVerifier",
+    "WeaknessScenario",
+    "load_catalog",
+]
 
-__all__ = ["CategoryReference", "ScenarioCatalog", "SecurityTaxonomy", "WeaknessScenario", "load_catalog"]
+
+def __getattr__(name: str):
+    """依請求延後載入安全 API，讓純 JWS 驗證不依賴 OpenAPI 工具鏈。"""
+    if name in {"CategoryReference", "ScenarioCatalog", "SecurityTaxonomy", "WeaknessScenario", "load_catalog"}:
+        from . import catalog
+
+        return getattr(catalog, name)
+    if name in {
+        "TrustedKeyRegistry",
+        "TrustedSessionClaims",
+        "TrustedSessionError",
+        "TrustedSessionHeader",
+        "TrustedSessionVerifier",
+    }:
+        from . import trusted_session
+
+        return getattr(trusted_session, name)
+    raise AttributeError(name)

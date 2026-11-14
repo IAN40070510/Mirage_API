@@ -7,7 +7,8 @@ from enum import StrEnum
 from threading import RLock
 from uuid import uuid4
 
-from .models import ResponseAdmission, ResponseSource
+from .models import ProjectionEvidence, ResponseAdmission, ResponseSource
+from .projection_registry import ProjectionAuthorizationResult, ProjectionRegistryProtocol
 
 
 class AdmissionState(StrEnum):
@@ -42,6 +43,8 @@ class _Record:
     admission: ResponseAdmission
     state: AdmissionState
     claim_owner: str | None = None
+    claim_revision: int | None = None
+    send_authorization_revision: int | None = None
 
 
 class AdmissionControl:
@@ -74,16 +77,30 @@ class AdmissionControl:
         authorization_deadline: int,
         transmission_deadline: int,
         source: ResponseSource,
+        projection_evidence: ProjectionEvidence,
+        projection_registry: ProjectionRegistryProtocol,
     ) -> ResponseAdmission | None:
-        """在 Generation 尚可發新准入時建立不可變 Grant，否則拒絕。"""
+        """驗證投影 Registry 後，在 Generation 尚可發新准入時建立 Grant。"""
         with self._lock:
             if world_generation_id in self._sealed:
+                return None
+            authorization = projection_registry.authorize(
+                projection_contract_hash=projection_contract_hash,
+                source_spec_sha256=projection_evidence.source_spec_sha256,
+                compatibility_profile_sha256=projection_evidence.compatibility_profile.profile_sha256,
+            )
+            if (
+                authorization.result is not ProjectionAuthorizationResult.AUTHORIZED
+                or authorization.authorization is None
+                or projection_evidence.projection_contract_hash != projection_contract_hash
+            ):
                 return None
             admission = ResponseAdmission(
                 admission_id=uuid4().hex,
                 request_binding_digest=request_binding_digest,
                 world_generation_id=world_generation_id,
                 grant_revision=self._next_revision(),
+                projection_registry_revision=authorization.authorization.registry_revision,
                 candidate_ref=candidate_ref,
                 candidate_hash=candidate_hash,
                 immutable_body_hash=immutable_body_hash,
@@ -93,6 +110,7 @@ class AdmissionControl:
                 authorization_deadline=authorization_deadline,
                 transmission_deadline=transmission_deadline,
                 source=source,
+                projection_evidence=projection_evidence,
             )
             self._records[admission.admission_id] = _Record(admission, AdmissionState.GRANTED)
             return admission
@@ -125,7 +143,7 @@ class AdmissionControl:
                 return AdmissionOperationResult.EXPIRED
             record.state = AdmissionState.CLAIMED
             record.claim_owner = owner
-            self._next_revision()
+            record.claim_revision = self._next_revision()
             return AdmissionOperationResult.SUCCESS
 
     def authorize_send(self, admission_id: str, *, now: int, revoked: bool = False) -> AdmissionOperationResult:
@@ -138,7 +156,7 @@ class AdmissionControl:
                 record.state = AdmissionState.EXPIRED if not revoked else AdmissionState.ABANDONED
                 return AdmissionOperationResult.REJECTED
             record.state = AdmissionState.SEND_AUTHORIZED
-            self._next_revision()
+            record.send_authorization_revision = self._next_revision()
             return AdmissionOperationResult.SUCCESS
 
     def state(self, admission_id: str) -> AdmissionState | None:
@@ -146,3 +164,36 @@ class AdmissionControl:
         with self._lock:
             record = self._records.get(admission_id)
             return None if record is None else record.state
+
+    def event_revision(self, admission_id: str, event: str) -> int | None:
+        """讀取准入事件在共同控制序列中的 revision，供順序驗證與稽核。"""
+        with self._lock:
+            record = self._records.get(admission_id)
+            if record is None:
+                return None
+            if event == "grant":
+                return record.admission.grant_revision
+            if event == "claim":
+                return record.claim_revision
+            if event == "cutover":
+                return self._cutover_revisions.get(record.admission.world_generation_id)
+            if event == "send_authorization":
+                return record.send_authorization_revision
+            raise ValueError(f"unsupported admission event: {event}")
+
+    def active_candidate_refs(self, *, now: int) -> frozenset[str]:
+        """列出期限內仍可能被 Claim 或發送使用的 Candidate 引用。"""
+        with self._lock:
+            active: set[str] = set()
+            for record in self._records.values():
+                if record.state is AdmissionState.GRANTED:
+                    deadline = record.admission.authorization_deadline
+                else:
+                    deadline = record.admission.transmission_deadline
+                if record.state in {
+                    AdmissionState.GRANTED,
+                    AdmissionState.CLAIMED,
+                    AdmissionState.SEND_AUTHORIZED,
+                } and now < deadline:
+                    active.add(record.admission.candidate_ref)
+            return frozenset(active)

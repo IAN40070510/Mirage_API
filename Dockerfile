@@ -39,6 +39,7 @@ RUN python -m pip install --no-cache-dir --no-index --find-links=/wheels mirage-
 COPY --chown=10001:10001 configs/ ./configs/
 COPY --chown=10001:10001 domains/ ./domains/
 COPY --chown=10001:10001 inputs/security_taxonomies/ ./inputs/security_taxonomies/
+COPY --chown=10001:10001 migrations/ ./migrations/
 COPY --chown=10001:10001 tools/ ./tools/
 COPY --chown=10001:10001 docs/ ./docs/
 COPY --chown=10001:10001 README.md ./README.md

@@ -34,6 +34,7 @@ class WorldSnapshot(SyntheticModel):
 
     scope: WorldScope
     version: int = Field(ge=1)
+    expires_at: int | None = Field(default=None, ge=1)
     state: dict[str, JsonValue]
     state_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
 
@@ -45,9 +46,22 @@ class WorldSnapshot(SyntheticModel):
         return self
 
     @classmethod
-    def create(cls, scope: WorldScope, state: dict[str, JsonValue], *, version: int = 1) -> "WorldSnapshot":
+    def create(
+        cls,
+        scope: WorldScope,
+        state: dict[str, JsonValue],
+        *,
+        version: int = 1,
+        expires_at: int | None = None,
+    ) -> "WorldSnapshot":
         """建立含正確完整性雜湊的唯讀快照。"""
-        return cls(scope=scope, version=version, state=state, state_hash=canonical_state_hash(state))
+        return cls(
+            scope=scope,
+            version=version,
+            expires_at=expires_at,
+            state=state,
+            state_hash=canonical_state_hash(state),
+        )
 
 
 class SnapshotSource(SyntheticModel):
@@ -84,6 +98,58 @@ ResponseSource = Annotated[
 ]
 
 
+class ProjectionCompatibilityProfile(SyntheticModel):
+    """保存官方規格、世界結構與領域適配器之間的相容性證據。"""
+
+    profile_id: str = Field(min_length=1, max_length=128)
+    profile_version: str = Field(min_length=1, max_length=64)
+    profile_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    platform_id: str = Field(min_length=1, max_length=128)
+    platform_version: str = Field(min_length=1, max_length=128)
+    source_spec_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    world_schema_version: str = Field(min_length=1, max_length=64)
+    domain_adapter_version: str = Field(min_length=1, max_length=64)
+
+
+class DeviationApproval(SyntheticModel):
+    """證明有效投影與官方規格差異已由受信任流程核准。"""
+
+    approval_id: str = Field(min_length=1, max_length=128)
+    approval_revision: str = Field(min_length=1, max_length=128)
+    source_spec_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    projection_contract_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    approved_profile_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reason: str = Field(min_length=1, max_length=512)
+
+
+class ProjectionEvidence(SyntheticModel):
+    """固定官方 Schema、有效投影與差異核准的驗證結果。"""
+
+    source_spec_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    compatibility_profile: ProjectionCompatibilityProfile
+    projection_contract_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    official_schema_valid: bool
+    effective_projection_valid: bool
+    deviation_approval: DeviationApproval | None = None
+
+    @model_validator(mode="after")
+    def verify_projection_evidence(self) -> "ProjectionEvidence":
+        """拒絕缺少來源一致性或差異核准的投影證據。"""
+        if self.compatibility_profile.source_spec_sha256 != self.source_spec_sha256:
+            raise ValueError("projection source spec does not match compatibility profile")
+        if self.official_schema_valid is False and self.effective_projection_valid:
+            approval = self.deviation_approval
+            if approval is None:
+                raise ValueError("effective projection requires deviation approval")
+            if approval.source_spec_sha256 != self.source_spec_sha256:
+                raise ValueError("deviation approval source spec does not match")
+            if approval.projection_contract_hash != self.projection_contract_hash:
+                raise ValueError("deviation approval contract does not match")
+            if approval.approved_profile_sha256 != self.compatibility_profile.profile_sha256:
+                raise ValueError("deviation approval profile does not match")
+        return self
+
+
 class ResponseAdmission(SyntheticModel):
     """保存一次性回應准入的不可變內容與單一控制序列證據。"""
 
@@ -93,6 +159,7 @@ class ResponseAdmission(SyntheticModel):
     request_binding_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     world_generation_id: str = Field(min_length=1, max_length=128)
     grant_revision: int = Field(ge=1)
+    projection_registry_revision: int = Field(ge=1)
     candidate_ref: str = Field(min_length=1, max_length=256)
     candidate_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     immutable_body_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -102,6 +169,7 @@ class ResponseAdmission(SyntheticModel):
     authorization_deadline: int = Field(ge=1)
     transmission_deadline: int = Field(ge=1)
     source: ResponseSource
+    projection_evidence: ProjectionEvidence
 
     @model_validator(mode="after")
     def verify_deadlines(self) -> "ResponseAdmission":
