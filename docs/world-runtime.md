@@ -29,6 +29,7 @@
 - `PostgresCandidateStore`：以共享資料庫保存 Candidate，並以 PostgreSQL 交易執行跨 Instance GC。
 - `ReplayStore`：以 issuer／audience／jti 保存一次性授權消費狀態。
 - `PostgresReplayStore`：以 PostgreSQL primary key 和交易提供跨 Instance Replay 防護。
+- `TrustedSessionAssessmentProvider`：從唯一 `X-Trusted-Session` header 驗證請求綁定，並轉成既有 malicious assessment。
 - `tests/fixtures/golden_vectors/world_runtime.json`：固定 canonical state hash、ResponseSource 與 Admission 順序。
 
 ## 使用範例

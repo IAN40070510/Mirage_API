@@ -1,13 +1,14 @@
 """F 的確定性選擇器：只評估固定條件，沒有網路、eval、LLM 或狀態寫入。"""
 
-import hashlib
 import hmac
+import hashlib
 import json
 import secrets
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from deception.api.ingress import NormalizedRequest
+from deception.api.fingerprint import fingerprint_request
 from deception.discovery.models import IdentificationResult
 from deception.profile_builder.builder import read_yaml
 from deception.profile_builder.models import OperationContext
@@ -32,15 +33,6 @@ def _encoded(value) -> bytes:
 def _digest(value) -> str:
     """摘要只作身份／完整性記錄，不代替外部來源認證。"""
     return hashlib.sha256(_encoded(value)).hexdigest()
-
-
-def fingerprint_request(request: NormalizedRequest) -> str:
-    """關聯 A 的完整請求快照；保存摘要，不將 body 或憑證加入追溯輸出。"""
-    return _digest({"request_id": request.request_id, "method": request.method,
-                    "raw_url": request.raw_url, "path": request.path,
-                    "raw_path": request.raw_path.hex(), "query_string": request.query_string.hex(),
-                    "query": request.query, "headers": request.headers,
-                    "body_sha256": hashlib.sha256(request.body).hexdigest()})
 
 
 def load_policy(path: Path, *, domain: str | None = None,

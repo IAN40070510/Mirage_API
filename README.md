@@ -33,7 +33,7 @@ Mirage_API 用來回應被判定為攻擊的 API 請求。它的目標不是只�
 | `idempotency_key` | 確保同一業務操作重試不重複提交 |
 | `state_version` | 防止並行請求覆寫世界狀態 |
 
-Gateway 負責驗證上游安全判定並簽發 `TrustedSessionContext v1`；Mirage 透過 `TrustedSessionVerifier` 驗證簽章、受眾、期限、請求綁定並消費 `jti`。JWS v1 只支援 Compact Serialization、`alg=Ed25519`、`typ=mirage-trusted-session+jwt` 與固定 `protocol_version`，`kid` 必填且只能從可信 issuer 的固定金鑰集合選取；禁止 `none`、未知演算法、遠端金鑰 URL、協定自動降級及依 JWS Header 任意載入金鑰。`iss`、`aud`、`iat`、`nbf`、`exp`、`jti`、環境／部署／session 綁定、assessment 摘要及 request fingerprint 必填；有效期與最大 clock skew 由部署政策固定，建議分別不超過 60 秒與 30 秒。金鑰輪替須保留驗證重疊期，撤銷立即拒絕；JWS 不取代 TLS，payload 不放 token、API key、憑證或私有資料。Gateway 與 Mirage 必須以 Golden Vectors 實測簽發、驗證及負向互通；尚未完成前不得宣稱 Runtime 符合 Protocol v1.1。
+Gateway 負責驗證上游安全判定並簽發 `TrustedSessionContext v1`；Mirage 透過 `TrustedSessionAssessmentProvider` 從 `X-Trusted-Session` 讀取唯一 JWS，先以現有 request fingerprint 綁定原始 HTTP 請求，再交由 `TrustedSessionVerifier` 驗證簽章、受眾、期限、環境／部署身份並消費 `jti`，最後轉成既有 `AttackAssessment` 進入 C。JWS v1 只支援 Compact Serialization、`alg=Ed25519`、`typ=mirage-trusted-session+jwt` 與固定 `protocol_version`，`kid` 必填且只能從可信 issuer 的固定金鑰集合選取；禁止 `none`、未知演算法、遠端金鑰 URL、協定自動降級及依 JWS Header 任意載入金鑰。`X-Trusted-Session` 不納入自身 fingerprint，`Authorization` 只納入受控摘要；缺少或重複 header、請求綁定不符、環境／部署不符及 Replay 都拒絕。`iss`、`aud`、`iat`、`nbf`、`exp`、`jti`、環境／部署／session 綁定、assessment 摘要及 request fingerprint 必填；有效期與最大 clock skew 由部署政策固定，建議分別不超過 60 秒與 30 秒。金鑰輪替須保留驗證重疊期，撤銷立即拒絕；JWS 不取代 TLS，payload 不放 token、API key、憑證或私有資料。Gateway 與 Mirage 必須以 Golden Vectors 實測簽發、驗證及負向互通；尚未完成前不得宣稱 Runtime 符合 Protocol v1.1。
 
 `jti` Replay 與 `idempotency_key` 使用兩個獨立狀態機：Replay 唯一鍵為 issuer／audience／`jti`，只允許一次成功消費；idempotency key 綁定 `WorldScope`、operation 與操作摘要，相同內容可重用已提交結果，不同內容必須拒絕。合法重試使用新的 JWS／`jti`，但保留同一業務 idempotency key；Gateway 不消費 `jti`，不得與 Mirage 重複消費同一授權。
 
@@ -193,10 +193,11 @@ flowchart TB
 | `有限修正或同分支備援` | 只在同一請求與同一契約範圍內修正，不用備援掩蓋身份或安全錯誤。 | 已有 Recovery 流程 |
 | `HTTP 回送器` | 送出最後一次驗證過的同一份 bytes；不把傳輸完成誤稱為 Client 已收到。 | 已有 Renderer；PostgreSQL Admission 已可供多 Instance 驗證 |
 | `Audit` | 留下版本、摘要與決策證據，避免保存 token、憑證或完整敏感內容。 | 事件欄位已定義，持久化格式待完成 |
-| `Golden Vectors／Fault Matrix` | 用固定輸入與故障情境檢查不同 Instance 是否得到相同安全結果。 | 已有 World、Admission Registry、HTTP 錯誤、Replay 與 Clock／Crash／Emergency 測試；JWS 與完整 Protocol conformance 尚未完成 |
-| `ReplayStore` | 像一次性票券登記簿，確認同一 issuer／audience／jti 只能被消費一次。 | 已接入 Trusted Session 驗證邊界；完整多 Instance Conformance 尚未完成 |
+| `TrustedSessionAssessmentProvider` | 像入口驗票員，從唯一 JWS 建立與原始 HTTP 請求綁定的 malicious 判定，不接受訪客欄位自稱。 | 已接入既有 assessment pipeline；正式 Gateway 設定與跨 Instance Conformance 尚未完成 |
+| `Golden Vectors／Fault Matrix` | 用固定輸入與故障情境檢查不同 Instance 是否得到相同安全結果。 | 已有 World、Admission Registry、HTTP 錯誤、Replay、JWS 與 Clock／Crash／Emergency 測試；完整 Protocol conformance 尚未完成 |
+| `ReplayStore` | 像一次性票券登記簿，確認同一 issuer／audience／jti 只能被消費一次。 | 已接入 Trusted Session ingress；完整多 Instance Conformance 尚未完成 |
 
-`WorldScope`、`WorldSnapshot`、`WorldStore`、`CandidateStore`、`ReplayStore`、`ProjectionEvidence` 與 ResponseAdmission 的唯讀 Runtime 位於 `src/deception/world/`；它目前提供嚴格 scope、Snapshot／Candidate hash、CAS、JTI 一次性消費、可區分的 Store 故障結果、Projection 差異核准證據、PostgreSQL 持久化、Grant 前 Registry 授權與跨 Instance Admission 原型。Replay 只有在可信 claims 已完成簽章／期限驗證後才能消費；完整 JWS 整合與 Conformance 尚未完成。
+`WorldScope`、`WorldSnapshot`、`WorldStore`、`CandidateStore`、`ReplayStore`、`ProjectionEvidence` 與 ResponseAdmission 的唯讀 Runtime 位於 `src/deception/world/`；`TrustedSessionVerifier` 與 `TrustedSessionAssessmentProvider` 位於 `src/deception/security/`，前者只驗證固定 JWS 與 Replay，後者負責把驗證結果交給既有 C pipeline。Runtime 目前提供嚴格 scope、Snapshot／Candidate hash、CAS、JTI 一次性消費、可區分的 Store 故障結果、Projection 差異核准證據、PostgreSQL 持久化、Grant 前 Registry 授權與跨 Instance Admission 原型；完整 Gateway 設定與 Protocol Conformance 尚未完成。
 
 目前設計先採唯讀世界階段：GET 類查詢不得因回應而改變商品、變體或其他實體狀態。後續若加入 `WorldEvent`，必須由協調器建立交易範圍，由 `WorldStore` 以 `expected_version` 原子驗證、套用及保存；HTTP 回送與狀態提交不是同一個原子交易，因此狀態變更需另有 request ID、冪等執行結果與可重放規則。
 

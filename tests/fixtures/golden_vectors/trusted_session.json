@@ -1,0 +1,38 @@
+{
+  "name": "trusted-session-v1-valid",
+  "now": 1000,
+  "request": {
+    "request_id": "trusted-vector-1",
+    "method": "GET",
+    "raw_url": "https://shop.test/store/products/prod-1?fields=id",
+    "path": "/store/products/prod-1",
+    "raw_path_hex": "2f73746f72652f70726f64756374732f70726f642d31",
+    "query_string_hex": "6669656c64733d6964",
+    "query": [["fields", "id"]],
+    "headers": [["host", "shop.test"], ["x-request-id", "trusted-vector-1"]],
+    "body": ""
+  },
+  "public_key_hex": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+  "header": {
+    "alg": "Ed25519",
+    "kid": "gateway-1",
+    "protocol_version": "1.1",
+    "typ": "mirage-trusted-session+jwt"
+  },
+  "claims": {
+    "assessment_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+    "assessment_id": "assessment-vector-1",
+    "aud": "mirage",
+    "deployment_id": "deploy-1",
+    "environment_id": "env-1",
+    "exp": 1060,
+    "iat": 1000,
+    "iss": "gateway",
+    "jti": "jti-vector-1",
+    "nbf": 1000,
+    "request_fingerprint": "a7e46fc29bd9ae1aeb3511ba08097ac6bdaed9d7bdee5873779d1457e3f99040",
+    "session_epoch": 1,
+    "session_id": "session-1"
+  },
+  "signature": "sbmiNXYgxGvHMf8mqEbKm-8Sv2atYWtxUQ6l0ONl484WNaBqArhGqSasm-tVZE3Lu7pX8aqLRE0lFq6EBmF1Aw"
+}

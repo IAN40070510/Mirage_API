@@ -16,9 +16,9 @@
 | WorldStore 介面與結果分類 | 第一階段完成 | 已有 `WorldStore` Protocol、`WorldLoadResult` 與 found／expired／corrupted／unavailable 分類；目前仍是單程序實作。 |
 | PostgreSQL 共享 WorldStore | 實作完成，待環境驗證 | 已有 migration、交易式 Store 與 CAS；需在 PostgreSQL 環境執行 Conformance。 |
 | PostgreSQL Projection Registry | 已接入 Grant，待完整驗證 | Grant 會保存 Registry revision；共享核准／撤銷交易已驗證，完整 Registry Conformance 尚未完成。 |
-| Golden Vectors | 第二版部分完成，尚未完整通過 | 已建立 canonical state、ResponseSource、Admission Registry revision 與 HTTP 安全錯誤 fixture；JWS／完整錯誤碼向量仍待補齊。 |
+| Golden Vectors | 第二版部分完成，尚未完整通過 | 已建立 canonical state、ResponseSource、Admission Registry revision、HTTP 安全錯誤與固定 Ed25519 JWS fixture；完整錯誤碼及跨語言套件互通仍待補齊。 |
 | Candidate retention | PostgreSQL 實作完成，待遠端驗證 | 已有 scope／hash／期限、共享 Candidate table、Admission 有效引用查詢與受保護 GC。 |
-| Replay Store | PostgreSQL 實作完成，待遠端驗證 | 已有 issuer／audience／jti 唯一消費與 expiry GC；完整 JWS 入口尚未接入。 |
+| Replay Store | PostgreSQL 實作完成，待遠端驗證 | 已有 issuer／audience／jti 唯一消費與 expiry GC；Trusted Session ingress 已在 verifier 成功後消費。 |
 | Fault Matrix | 第二版部分完成，尚未完整通過 | 已加入 deadline equality、PostgreSQL 重啟後 Claim、Emergency Revocation 與 storage unavailable；Network／Replay／未知交易結果仍待補齊。 |
 | 多 Instance Conformance | 未通過 | 尚未驗證跨 Instance 的 Claim、Cutover、Watermark 與 Fail-Closed 行為。 |
 | WorldEvent 寫入 | 停用 | 在 Commit、Idempotency、Epoch／Lease 與 Rotation 驗收前保持停用。 |
@@ -124,7 +124,7 @@
 
 ## 下一步
 
-1. 將 `TrustedSessionVerifier` 接入實際可信 Gateway ingress，並完成 JWS／Replay 跨 Instance Golden Vectors；目前不宣稱 Protocol v1.1 已完成。
+1. 將固定 JWS vector 接到實際部署的 Gateway 設定，補 PostgreSQL Replay 的雙 Instance ingress 測試與跨語言互通；目前不宣稱 Protocol v1.1 已完成。
 2. 補上 Clock／Network／Crash recovery、Emergency Revocation 與未知交易結果測試。
 3. 完成 Registry 與 Admission 的完整多 Instance Conformance。
 4. 在上述證據完成前維持 `WorldEvent` 寫入停用。

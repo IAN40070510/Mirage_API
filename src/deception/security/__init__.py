@@ -9,6 +9,7 @@ __all__ = [
     "TrustedSessionError",
     "TrustedSessionHeader",
     "TrustedSessionVerifier",
+    "TrustedSessionAssessmentProvider",
     "WeaknessScenario",
     "load_catalog",
 ]
@@ -30,4 +31,8 @@ def __getattr__(name: str):
         from . import trusted_session
 
         return getattr(trusted_session, name)
+    if name == "TrustedSessionAssessmentProvider":
+        from .trusted_ingress import TrustedSessionAssessmentProvider
+
+        return TrustedSessionAssessmentProvider
     raise AttributeError(name)
