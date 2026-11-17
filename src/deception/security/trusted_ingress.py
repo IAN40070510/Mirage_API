@@ -4,15 +4,24 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime, timezone
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from deception.api.ingress import NormalizedRequest
 from deception.api.fingerprint import fingerprint_request
 
-from .trusted_session import TrustedSessionError, TrustedSessionVerifier
+from .trusted_session import TrustedSessionClaims, TrustedSessionError, TrustedSessionVerifier
 
 if TYPE_CHECKING:
     from deception.scenarios.models import AttackAssessment
+
+
+@dataclass(frozen=True)
+class VerifiedAssessment:
+    """同一請求驗證後的 claims 與判定；傳遞給 Runtime 時不再消費 JTI。"""
+
+    claims: TrustedSessionClaims
+    assessment: "AttackAssessment"
 
 
 class TrustedSessionAssessmentProvider:
@@ -67,22 +76,36 @@ class TrustedSessionAssessmentProvider:
 
     def __call__(self, request: NormalizedRequest) -> "AttackAssessment":
         """驗證請求中的唯一 JWS，核對部署身份後回傳既有 malicious 判定。"""
+        return self.verify_with_claims(request).assessment
+
+    def verify_with_claims(self, request: NormalizedRequest) -> VerifiedAssessment:
+        """只驗證並消費一次 JTI，回傳原始 claims 及接收端可使用的可信判定。
+
+        驗證與判定使用同一接收端 Unix 時刻；驗證成功後，供 F 使用的 observed_at
+        取 signed iat 與該時刻的較早者，使已核准 skew 內的授權可立即使用。
+        原始 claims 完整保留，expires_at 維持 signed exp，不延長到期或放寬一般 F。
+        """
         from deception.scenarios.models import AttackAssessment
 
         token = self._header(request)
+        current = self._current_time()
+        if current is None:
+            current = int(datetime.now(timezone.utc).timestamp())
         claims = self._verifier.verify(
             token,
             expected_issuer=self._expected_issuer,
             expected_audience=self._expected_audience,
             request_fingerprint=fingerprint_request(request),
-            now=self._current_time(),
+            environment_id=self._environment_id,
+            deployment_id=self._deployment_id,
+            now=current,
         )
         if (claims.environment_id, claims.deployment_id) != (
             self._environment_id,
             self._deployment_id,
         ):
             raise TrustedSessionError("trusted_session_context_mismatch")
-        return AttackAssessment(
+        assessment = AttackAssessment(
             assessment_id=claims.assessment_id,
             source_id=self._source_id,
             request_id=request.request_id,
@@ -93,9 +116,10 @@ class TrustedSessionAssessmentProvider:
             site_id=self._site_id,
             verdict="malicious",
             attack_types=list(self._attack_types),
-            observed_at=datetime.fromtimestamp(claims.iat, tz=timezone.utc),
+            observed_at=datetime.fromtimestamp(min(claims.iat, current), tz=timezone.utc),
             expires_at=datetime.fromtimestamp(claims.exp, tz=timezone.utc),
         )
+        return VerifiedAssessment(claims, assessment)
 
     def _current_time(self) -> int | None:
         """取得可注入的 Unix 時間，讓正式服務與固定向量使用同一時鐘語意。"""

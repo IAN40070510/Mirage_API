@@ -6,11 +6,13 @@ from copy import deepcopy
 from dataclasses import dataclass
 from enum import StrEnum
 from threading import RLock
-from typing import Protocol
+from typing import Protocol, Literal
+from uuid import UUID
 
 from pydantic import JsonValue
 
-from .models import WorldScope, WorldSnapshot
+from .models import WORLD_COMPATIBILITY_KEY, WorldScope, WorldSnapshot
+from .commit import CommitResult
 
 
 class WorldStoreError(RuntimeError):
@@ -19,6 +21,12 @@ class WorldStoreError(RuntimeError):
 
 class SnapshotCorruptionError(WorldStoreError):
     """表示保存的快照完整性驗證失敗。"""
+
+
+def require_unchanged_compatibility(current: WorldSnapshot, proposed: dict) -> None:
+    """一般事件或 CAS 不得新增、移除或替換世界政策；遷移必須另有受審查流程。"""
+    if current.state.get(WORLD_COMPATIBILITY_KEY) != proposed.get(WORLD_COMPATIBILITY_KEY):
+        raise WorldStoreError("world_compatibility_change_forbidden")
 
 
 class WorldStoreStatus(StrEnum):
@@ -40,6 +48,16 @@ class WorldLoadResult:
     snapshot: WorldSnapshot | None = None
 
 
+@dataclass(frozen=True)
+class CommitLookupResult:
+    """區分提交成功、拒絕、進行中、查無及無法確認，查詢不產生業務事件。"""
+
+    status: Literal["committed", "rejected", "pending", "not_found", "unverifiable"]
+    state_version: int | None = None
+    state_hash: str | None = None
+    commit_result: CommitResult | None = None
+
+
 class WorldStore(Protocol):
     """定義共享或程序內 WorldStore 必須提供的唯讀與 CAS 操作。"""
 
@@ -55,12 +73,21 @@ class WorldStore(Protocol):
     def load(self, scope: WorldScope) -> WorldSnapshot | None:
         """依完整 scope 載入快照，失敗時不回傳其他 scope 的資料。"""
 
+    def load_result(self, scope: WorldScope, *, authorized_scope: WorldScope | None = None,
+                    now: int | None = None) -> WorldLoadResult:
+        """區分找不到、過期、損毀及不可用，不以 None 代表全部失敗。"""
+
+    def get_commit_result(self, scope: WorldScope, commit_attempt_id: UUID, *,
+                          authorized_scope: WorldScope) -> CommitLookupResult:
+        """在重新確認的完整 scope 內查詢提交結果，查無不表示從未執行。"""
+
     def compare_and_swap(
         self,
         scope: WorldScope,
         *,
         expected_version: int,
         state: dict[str, JsonValue],
+        commit_attempt_id: UUID | None = None,
     ) -> WorldSnapshot:
         """以期望版本原子建立下一份快照。"""
 
@@ -73,6 +100,7 @@ class InMemoryWorldStore:
         self._lock = RLock()
         self._snapshots: dict[tuple[str, str, str, str], WorldSnapshot] = {}
         self._available = True
+        self._receipts: dict[tuple[tuple[str, str, str, str], UUID], CommitLookupResult] = {}
 
     @staticmethod
     def _key(scope: WorldScope) -> tuple[str, str, str, str]:
@@ -143,19 +171,42 @@ class InMemoryWorldStore:
         *,
         expected_version: int,
         state: dict[str, JsonValue],
+        commit_attempt_id: UUID | None = None,
     ) -> WorldSnapshot:
         """只有版本仍相等時建立下一快照，衝突就拒絕且不覆寫資料。"""
+        if commit_attempt_id is not None and (
+            not isinstance(commit_attempt_id, UUID) or commit_attempt_id.version != 4
+        ):
+            raise ValueError("commit_attempt_id must be UUIDv4")
         with self._lock:
             self._ensure_available()
             key = self._key(scope)
+            if commit_attempt_id is not None and (key, commit_attempt_id) in self._receipts:
+                raise WorldStoreError("commit_attempt_already_used")
             current = self._snapshots.get(key)
             if current is None:
                 raise WorldStoreError("world_not_found")
             if current.version != expected_version:
                 raise WorldStoreError("version_conflict")
-            updated = WorldSnapshot.create(scope, deepcopy(state), version=current.version + 1)
+            require_unchanged_compatibility(current, state)
+            updated = WorldSnapshot.create(scope, deepcopy(state), version=current.version + 1,
+                                           expires_at=current.expires_at)
             self._snapshots[key] = updated
+            if commit_attempt_id is not None:
+                self._receipts[(key, commit_attempt_id)] = CommitLookupResult(
+                    "committed", updated.version, updated.state_hash)
             return updated.model_copy(deep=True)
+
+    def get_commit_result(self, scope: WorldScope, commit_attempt_id: UUID, *,
+                          authorized_scope: WorldScope) -> CommitLookupResult:
+        """在原型鎖內唯讀取得該次提交，無權限或儲存不可用時回報無法確認。"""
+        if (scope != authorized_scope or not isinstance(commit_attempt_id, UUID)
+                or commit_attempt_id.version != 4):
+            return CommitLookupResult("unverifiable")
+        with self._lock:
+            if not self._available:
+                return CommitLookupResult("unverifiable")
+            return self._receipts.get((self._key(scope), commit_attempt_id), CommitLookupResult("not_found"))
 
     def _ensure_available(self) -> None:
         """在寫入操作前拒絕不可用的 Store，避免建立替代世界。"""

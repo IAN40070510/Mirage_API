@@ -41,6 +41,7 @@ COPY --chown=10001:10001 domains/ ./domains/
 COPY --chown=10001:10001 inputs/security_taxonomies/ ./inputs/security_taxonomies/
 COPY --chown=10001:10001 migrations/ ./migrations/
 COPY --chown=10001:10001 tools/ ./tools/
+COPY --chown=10001:10001 integrations/ ./integrations/
 COPY --chown=10001:10001 docs/ ./docs/
 COPY --chown=10001:10001 README.md ./README.md
 COPY --chown=10001:10001 LICENSE NOTICE ./

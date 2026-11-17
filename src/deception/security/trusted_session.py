@@ -6,6 +6,8 @@ import base64
 import binascii
 import json
 import re
+from contextlib import nullcontext
+from typing import ContextManager
 from datetime import datetime, timezone
 from typing import Literal, Mapping, Protocol
 
@@ -36,6 +38,14 @@ class ReplayConsumer(Protocol):
         ...
 
 
+class KeyRevocationRegistry(Protocol):
+    """定義共享撤銷控制邊界，公鑰查找本身仍由固定名冊負責。"""
+
+    def guard(self, issuer: str, kid: str) -> ContextManager[object | None]:
+        """持鎖直到驗證及 Replay 完成；有墓碑回傳物件，無墓碑才回 None。"""
+        ...
+
+
 class TrustedSessionHeader(SyntheticModel):
     """限制 JWS Header 只使用核准的 Ed25519 與固定型別。"""
 
@@ -58,6 +68,8 @@ class TrustedSessionClaims(SyntheticModel):
     deployment_id: str = Field(min_length=1, max_length=128)
     session_id: str = Field(min_length=1, max_length=128)
     session_epoch: int = Field(ge=0)
+    resource_id: str | None = Field(default=None, max_length=128)
+    access_mode: Literal["read_only", "inventory", "cart"] = "read_only"
     request_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
     assessment_id: str = Field(min_length=1, max_length=128)
     assessment_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -90,14 +102,16 @@ class TrustedSessionVerifier:
         *,
         keys: TrustedKeyRegistry,
         replay_store: ReplayConsumer,
+        key_revocations: KeyRevocationRegistry | None = None,
         max_clock_skew: int = 30,
         max_lifetime: int = 60,
     ) -> None:
-        """建立驗證器；Replay Store 必須由部署者注入共享持久化實作。"""
+        """建立驗證器；正式入口須注入共享 Replay 與金鑰撤銷，未提供撤銷僅保留原型相容。"""
         if max_clock_skew < 0 or max_lifetime < 1:
             raise ValueError("clock skew and lifetime policy are invalid")
         self._keys = keys
         self._replay_store = replay_store
+        self._key_revocations = key_revocations
         self._max_clock_skew = max_clock_skew
         self._max_lifetime = max_lifetime
 
@@ -108,9 +122,20 @@ class TrustedSessionVerifier:
         expected_issuer: str,
         expected_audience: str,
         request_fingerprint: str,
+        environment_id: str | None = None,
+        deployment_id: str | None = None,
         now: int | None = None,
     ) -> TrustedSessionClaims:
-        """驗證 Compact JWS、claims、期限、請求綁定並原子消費 Replay JTI。"""
+        """驗證 Compact JWS 並回傳可信 claims，成功時原子消費一次性 JTI。
+
+        issuer、audience、fingerprint 與可選部署身份須由可信呼叫端提供；
+        正式 HTTP provider 必須提供環境與部署。now 是 Unix 秒，省略取 UTC。
+        格式、身份、期限或簽章錯誤均於寫入 Replay 前拒絕；Replay 保存至
+        exp 加 clock skew。重放與過期拋出 TrustedSessionError，儲存錯誤向上
+        傳遞以停止輸出，呼叫端不得在結果未知時假設未消費而盲目重試。
+        撤銷 guard 在有效簽章後取得並持有至 Replay 結束；已完成驗證的在途
+        工作不因後來的 key 墓碑自動取消，仍須遵守世界與發送准入邊界。
+        """
         header_segment, payload_segment, signature_segment = self._split(token)
         try:
             header = TrustedSessionHeader.model_validate(self._decode_json(header_segment))
@@ -121,6 +146,11 @@ class TrustedSessionVerifier:
             raise TrustedSessionError("issuer_or_audience_mismatch")
         if claims.request_fingerprint != request_fingerprint:
             raise TrustedSessionError("request_fingerprint_mismatch")
+        if ((environment_id is not None and claims.environment_id != environment_id)
+                or (deployment_id is not None and claims.deployment_id != deployment_id)):
+            raise TrustedSessionError("trusted_session_context_mismatch")
+        if not claims.iat <= claims.nbf < claims.exp:
+            raise TrustedSessionError("trusted_session_invalid_time_order")
         current = int(datetime.now(timezone.utc).timestamp()) if now is None else now
         if claims.exp - claims.iat > self._max_lifetime:
             raise TrustedSessionError("trusted_session_lifetime_exceeded")
@@ -134,15 +164,20 @@ class TrustedSessionVerifier:
             self._keys.get(claims.iss, header.kid).verify(signature, signing_input)
         except InvalidSignature as exc:
             raise TrustedSessionError("invalid_trusted_session_signature") from exc
-        replay_result = self._replay_store.consume(
-            issuer=claims.iss,
-            audience=claims.aud,
-            jti=claims.jti,
-            expires_at=claims.exp,
-            now=current,
-        )
-        if replay_result is not ReplayConsumeResult.ACCEPTED:
-            raise TrustedSessionError(f"trusted_session_{replay_result.value}")
+        guard = (nullcontext(None) if self._key_revocations is None
+                 else self._key_revocations.guard(claims.iss, header.kid))
+        with guard as revoked:
+            if revoked is not None:
+                raise TrustedSessionError("trusted_key_revoked")
+            replay_result = self._replay_store.consume(
+                issuer=claims.iss,
+                audience=claims.aud,
+                jti=claims.jti,
+                expires_at=claims.exp + self._max_clock_skew,
+                now=current,
+            )
+            if replay_result is not ReplayConsumeResult.ACCEPTED:
+                raise TrustedSessionError(f"trusted_session_{replay_result.value}")
         return claims
 
     @staticmethod
@@ -164,7 +199,7 @@ class TrustedSessionVerifier:
     def _decode_json(cls, segment: str) -> dict[str, object]:
         """嚴格解碼 Base64URL JSON 物件，隱藏 parser 細節避免診斷洩漏。"""
         try:
-            value = json.loads(cls._decode_bytes(segment))
+            value = json.loads(cls._decode_bytes(segment), object_pairs_hook=cls._unique_object)
         except (ValueError, UnicodeDecodeError, binascii.Error) as exc:
             raise TrustedSessionError("invalid_jws_json") from exc
         if not isinstance(value, dict):
@@ -172,11 +207,24 @@ class TrustedSessionVerifier:
         return value
 
     @staticmethod
+    def _unique_object(pairs) -> dict[str, object]:
+        """拒絕重複 JSON 欄位，避免 Gateway 與 Mirage 採用不同解析結果。"""
+        result = {}
+        for name, value in pairs:
+            if name in result:
+                raise TrustedSessionError("duplicate_jws_json_field")
+            result[name] = value
+        return result
+
+    @staticmethod
     def _decode_bytes(segment: str) -> bytes:
         """只接受不含 padding 的 Base64URL 字元，拒絕模糊解碼。"""
         if not re.fullmatch(r"[A-Za-z0-9_-]+", segment):
             raise TrustedSessionError("invalid_base64url")
         try:
-            return base64.urlsafe_b64decode(segment + "=" * (-len(segment) % 4))
+            decoded = base64.urlsafe_b64decode(segment + "=" * (-len(segment) % 4))
+            if base64.urlsafe_b64encode(decoded).decode("ascii").rstrip("=") != segment:
+                raise TrustedSessionError("noncanonical_base64url")
+            return decoded
         except (ValueError, binascii.Error) as exc:
             raise TrustedSessionError("invalid_base64url") from exc

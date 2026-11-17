@@ -10,3 +10,11 @@ model_digest: '77a78066847b2002fd602955667bd26857eb2cb751c6ed2e975c21b4a826b0a5'
 planner_mode: structured_actions
 temperature: 0.0
 max_output_tokens: 1024
+# 短欄位的候選配方；同一固定模型，不聲稱已量測效能或調整 thinking。
+tasks:
+  planner:
+    max_output_tokens: 256
+  generation:
+    max_output_tokens: 256
+  repair:
+    max_output_tokens: 512

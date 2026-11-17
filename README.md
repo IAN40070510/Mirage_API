@@ -8,6 +8,47 @@ Mirage_API 用來回應被判定為攻擊的 API 請求。它的目標不是只�
 
 各工具的輸入、輸出、用法、失敗處理、驗證與授權見 [工具文件索引](docs/README.md)。
 
+首次使用可直接執行：
+
+```sh
+git clone https://github.com/IAN40070510/Mirage_API.git
+cd Mirage_API
+docker compose up --build -d --wait --wait-timeout 180
+```
+
+開啟 `http://127.0.0.1:8000/demo/info` 取得商品 ID，再呼叫 `/api/products/{id}`。預設備援模式不需要模型或 MSDSS；[安裝與第一次使用](docs/getting-started.md)包含 Python 啟動、API 呼叫、驗證、資料保存與故障排除。
+
+本版 Mirage 模組實作與隔離驗收已完成。依目前確認範圍，MSDSS 正式接線、部署金鑰與對外網址設定留待整合階段，不作為 Mirage 模組驗收的阻塞條件；staging 維持未切換。
+
+2026-11-18 程式與隔離驗收基線為 **1221 passed、7 個明列 opt-in skipped**，逐一核對全部 1228 個測試身份與未變更的來源；容器四項與還原一項另在本輪 ARM64 通過，Medusa 身份／實際 Gateway 的最近兩項實測保留原日期。Windows 執行 pytest、Gateway 與 Mirage 子程序，SSH Ubuntu 執行隔離 PostgreSQL 及 ARM64 映像。暫存測試資源已清理，正式部署設定／導流尚未啟用；完整結果、限制與後續所需輸入見[進度](docs/implementation-progress.md)及[證據矩陣](docs/conformance-evidence.md)。
+
+目前另有需明確啟用的合成業務服務：先建立訪客購物車、增減商品，再下合成訂單、預留合成庫存與取消回補，詳見[購物車](docs/carts.md)與[庫存交易](docs/inventory.md)。訪客持有伺服器產生的 cart.id／order.id 即可延續該資源狀態；不要求帳號或新 Cookie。這些 ID 是存取憑證，不能寫入公開日誌。匿名商品查詢使用固定唯讀合成資料，IP＋UA＋短期限只輔助分組，不授予庫存寫入權。
+
+| 節點 | 白話功能與邊界 |
+| --- | --- |
+| Gateway dispatcher | 接收已核准的安全判定，取得可信身份或資源綁定，簽發綁住原始請求的一次性授權。 |
+| [可信簽章金鑰撤銷](docs/key-revocation.md) | 以共享墓碑停用舊 issuer／kid，讓執行中的新版入口也拒絕；新公鑰仍須由部署者先配置。 |
+| Medusa／匿名／資源身份供應器 | 驗證登入身份；匿名查詢只分組；購物車與訂單則查核伺服器登錄的資源 ID。IP 與 UA 不是可信個人身份。 |
+| Mirage trusted HTTP 服務 | 獨立程序驗章、防重放，重新核對資源與 Session／epoch／路徑，再解析世界與讀取准入。已驗證授權在核准時差內可立即判定，原始簽章與到期時間保留；不回退真實後端。 |
+| [入口拒絕稽核](docs/ingress-audit.md) | 不必先有世界就能保存拒絕階段；只記固定分類與部署，不保存 Token、資源憑證或原始攻擊內容。 |
+| [請求與驗證結果 Audit](docs/request-audit.md) | 保存請求／可信上下文摘要與基底版本，再原子連到最後通過的候選與准入；未知停止不假稱業務已回滾。 |
+| Medusa 原生路由適配器 | 把七個 `/store` 操作轉成合成購物車事件，直接回覆原路徑；不重新導向 `/synthetic`。 |
+| 原生資源時間檢查 | 防止購物車與訂單的更新時間倒退；讀寫都拒絕不合法的保存時間，不延長身份授權或世界期限。 |
+| Medusa 回應投影與契約 | 將內部整數分轉成原生金額，去除控制欄位，分別核對固定官方來源與匿名訂單有效投影。 |
+| 合成購物車與庫存 | 加入購物車不占庫存，下單才扣合成庫存；取消只回補一次。所有價格、訂單與庫存均留在合成世界。 |
+| PostgreSQL World Runtime | 一起保存快照、版本、冪等結果、事件、收據與資源映射，避免重試重複扣庫存。 |
+| [共用事件提交結果](docs/commit-results.md) | 區分新提交、既有成功、衝突、拒絕及無法確認；失聯時只讀查原 attempt，不盲目重寫。 |
+| 世界相容性政策 | 隨快照保存引擎版本、來源與精確允許的投影；契約更新時核對舊世界能否沿用，不相容時停止，不偷偷重建。 |
+| [Profile 撤銷名冊](docs/profile-revocation.md) | 永久停用一整份投影，防止新契約或重啟把它復活；一般模式保留既有准入，緊急模式另擋尚未起送的回應。 |
+| Renderer 與 Transmission | 驗證最終 HTTP 候選，領取一次發送權並記錄完成或部分失敗；完成不代表客戶端已收到。 |
+| [固定安全錯誤 Renderer](docs/security-errors.md) | 必要來源故障時只回內建拒絕模板，送出前核對原請求與精確封套，不讀私人世界或回退商店。 |
+
+本機 Windows 執行程式、pytest、Gateway 測試及獨立 Mirage 子程序；SSH Ubuntu 提供隔離 PostgreSQL 與 Medusa。測試不等於遠端 staging 已部署；跨 MSDSS 模組修改須另外取得使用者決定。驗證進度以[最新總覽](docs/implementation-progress.md)為準，歷史紀錄保留當時結果。
+
+使用者已要求擴充 Medusa `/store` 映射。首組原生購物車、品項增刪改、完成及訂單查詢已接到同一合成引擎，原生回應不包含內部 CAS／hash 欄位；來源、金額轉換、匿名有效投影與支援範圍見[原生映射說明](docs/medusa-carts.md)。這項能力須另外明確啟用，尚未切換 staging，也不代表整套 Store／付款配送 API 都已支援。
+
+Gateway 的部署組裝器位於 Mirage 的 `integrations/msdss/gateway_bootstrap.py`：把固定身份服務、匿名分組及資源 ID 綁定接到既有 dispatcher，秘密由分開的檔案提供，預設維持 observe-only。外部 Gateway lifespan 的五行注入點已經使用者核准，套用至本機與 SSH 原始碼；未啟用設定、安裝依賴或切換 staging。依賴差異與啟用邊界見[部署組裝說明](docs/gateway-bootstrap.md)。
+
 ## 系統架構
 
 ### Architecture Baseline v1.1
@@ -174,11 +215,22 @@ flowchart TB
 
 ### 各節點白話說明
 
+跨語言驗證分成三個節點。Node.js 用公開測試 seed 對固定請求的授權簽章；
+Python 入口確認簽章對應收到的請求，若 body 改變就拒絕；
+PostgreSQL 則讓兩個入口共用一次性授權紀錄，同一張授權只能成功使用一次。
+跨語言測試與雙入口競爭測試各自執行，結果見 [進度紀錄](docs/implementation-progress.md)。
+
+本次 Trusted Session 接線另提供 [部署與驗證說明](docs/trusted-session.md)：
+`TrustedDeploymentSettings` 像部署設定表，把核准身份、公鑰與 PostgreSQL 接到入口；
+`TrustedSessionDispatcher` 像 Gateway 的簽發員，只替核准的欺敵決策簽章，並送出同一份 HTTP 請求。
+發送器保存在 `integrations/msdss/`，目前僅完成本機原始碼，尚未安裝到遠端 Gateway。
+入口會先核對環境／部署才耗用一次性授權，Replay 保留至有效期加 clock skew，避免寬限期間重放。
+
 | 圖中節點 | 白話功能 | 目前實作狀態 |
 | --- | --- | --- |
 | `HTTP API 請求` | 攻擊者送進來的原始 HTTP 請求，先保留原始 bytes，不先改寫。 | 已有入口；完整可信邊界仍待整合驗證 |
 | `可信請求入口` | 確認請求、可信攻擊判定與路由身份確實是同一筆交易。 | 已有 pipeline；Protocol v1.1 Conformance 尚未完成 |
-| `Session Resolver` | 把可信 session 對到正確的合成世界；不接受 Client 自選 `world_id`。 | 架構已定義，持久化 Resolver 待接入 |
+| `Session Resolver` | 把可信 session 對到正確的合成世界；不接受 Client 自選 `world_id`。 | 已接共享 PostgreSQL 的唯一 binding、epoch、期限與 Watermark；正式身份設定另由部署者提供 |
 | `WorldScope` | 像資料夾的完整地址，決定環境、部署、Session 與 World 世代的隔離範圍。 | 已提供嚴格型別 |
 | `WorldStore` | 像保管箱，負責保存、載入、版本與 CAS；不懂商品規則。 | 有單程序原型與 PostgreSQL 交易實作；完整 Conformance 尚未完成 |
 | `CandidateStore` | 像回應候選的保管箱，依完整 scope 和 hash 取回原始 bytes；有效准入仍引用時不能被 GC 清掉。 | 有程序內與 PostgreSQL 實作；完整 Conformance 尚未完成 |
@@ -192,14 +244,14 @@ flowchart TB
 | `業務語意與 API 契約驗證` | 先檢查資料關係，再檢查 HTTP status、headers、body 是否符合契約。 | 已有 Domain／Gate 驗證 |
 | `有限修正或同分支備援` | 只在同一請求與同一契約範圍內修正，不用備援掩蓋身份或安全錯誤。 | 已有 Recovery 流程 |
 | `HTTP 回送器` | 送出最後一次驗證過的同一份 bytes；不把傳輸完成誤稱為 Client 已收到。 | 已有 Renderer；PostgreSQL Admission 已可供多 Instance 驗證 |
-| `Audit` | 留下版本、摘要與決策證據，避免保存 token、憑證或完整敏感內容。 | 事件欄位已定義，持久化格式待完成 |
+| `Audit` | 留下版本、摘要與決策證據，避免保存 token、憑證或完整敏感內容。 | 已新增請求摘要、基底版本及原子 Grant／驗證結果關聯；主工作區接線驗收見進度，集中管理與保留政策另行 |
 | `TrustedSessionAssessmentProvider` | 像入口驗票員，從唯一 JWS 建立與原始 HTTP 請求綁定的 malicious 判定，不接受訪客欄位自稱。 | 已接入既有 assessment pipeline；正式 Gateway 設定與跨 Instance Conformance 尚未完成 |
 | `Golden Vectors／Fault Matrix` | 用固定輸入與故障情境檢查不同 Instance 是否得到相同安全結果。 | 已有 World、Admission Registry、HTTP 錯誤、Replay、JWS 與 Clock／Crash／Emergency 測試；完整 Protocol conformance 尚未完成 |
 | `ReplayStore` | 像一次性票券登記簿，確認同一 issuer／audience／jti 只能被消費一次。 | 已接入 Trusted Session ingress；完整多 Instance Conformance 尚未完成 |
 
-`WorldScope`、`WorldSnapshot`、`WorldStore`、`CandidateStore`、`ReplayStore`、`ProjectionEvidence` 與 ResponseAdmission 的唯讀 Runtime 位於 `src/deception/world/`；`TrustedSessionVerifier` 與 `TrustedSessionAssessmentProvider` 位於 `src/deception/security/`，前者只驗證固定 JWS 與 Replay，後者負責把驗證結果交給既有 C pipeline。Runtime 目前提供嚴格 scope、Snapshot／Candidate hash、CAS、JTI 一次性消費、可區分的 Store 故障結果、Projection 差異核准證據、PostgreSQL 持久化、Grant 前 Registry 授權與跨 Instance Admission 原型；完整 Gateway 設定與 Protocol Conformance 尚未完成。
+`WorldScope`、`WorldSnapshot`、`WorldStore`、`CandidateStore`、`ReplayStore`、`ProjectionEvidence` 與 ResponseAdmission 的 Runtime 位於 `src/deception/world/`；`TrustedSessionVerifier` 與 `TrustedSessionAssessmentProvider` 位於 `src/deception/security/`，前者驗證固定 JWS、部署入口的共享 key 墓碑及 Replay，後者把驗證結果交給既有 C pipeline。Runtime 目前提供嚴格 scope、Snapshot／Candidate hash、CAS、JTI 一次性消費、可區分的 Store 故障結果、Projection 差異核准證據、PostgreSQL 持久化、Grant 前 Registry 授權與跨 Instance Admission；完整 Gateway 設定與 Protocol Conformance 尚未完成。
 
-目前設計先採唯讀世界階段：GET 類查詢不得因回應而改變商品、變體或其他實體狀態。後續若加入 `WorldEvent`，必須由協調器建立交易範圍，由 `WorldStore` 以 `expected_version` 原子驗證、套用及保存；HTTP 回送與狀態提交不是同一個原子交易，因此狀態變更需另有 request ID、冪等執行結果與可重放規則。
+GET 類查詢不得因回應而改變商品、變體或其他實體狀態。明確啟用的合成業務介面已使用 `WorldEvent`，以 `expected_version` 在同一資料庫交易驗證、套用及保存；HTTP 回送與狀態提交不是同一個原子交易，因此狀態變更另有 request ID、冪等執行結果與提交結果查詢。一般展示服務仍不自動開啟業務寫入。
 
 核心安全不變條件如下：
 
@@ -232,6 +284,8 @@ Mirage_API 與外部整合的正式邊界由下列五項契約組成：
 `WorldSnapshot` 必須是同一版本的不可變邏輯快照。商品、變體、選項與圖片等關聯不得從不同版本讀取；底層若使用多表或分散式儲存，必須使用交易快照、版本化讀取或其他經驗證的 Snapshot Isolation。
 
 `WorldStore` 的最小提交結果需區分 `committed`、`already_committed`、`conflict`、`rejected` 與 `unverifiable`。結果至少包含 status、committed version／state hash、result digest、idempotency key 與明確 failure code；`unverifiable` 必須提供受同一 `WorldScope` 授權的不可猜測 `commit_attempt_id`，由唯讀 `get_commit_result()` 查詢，不得只用 `retryable` 布林值。寫入逾時不得一律 retry，因為未知結果可能已經提交；`GET` 不產生業務狀態變更事件，但 session／world 首次建立可留下獨立的 `world_initialized` 紀錄。
+
+目前事件寫入的共用介面為 `EventWorldStore.commit_event()`，以 `CommitResult` 提供上述五類結果；`get_event_result()` 在重新核對當前 binding、scope、命令及保存摘要後回完整結果，既有 `get_commit_result()` 保留低階收據查詢。庫存與購物車事件使用同一交易核心；低階 Snapshot CAS、領域相容 DTO 及購物車首次初始化維持既有介面。摘要編碼、未知結果處理與能力邊界見[共用事件說明](docs/commit-results.md)，實際驗收狀態見[進度](docs/implementation-progress.md)。
 
 `WorldStore.load()` 也必須區分 `world_found`、`session_not_found`、`expired`、`scope_mismatch`、`corrupted` 與 `storage_unavailable`。只有 Session Resolver 明確授權建立新世界時才能建立 World；Store 不可因故障自動建立替代世界。`scope_mismatch` 的詳細原因只進入受控 Audit，對外使用一致的 fail-closed 結果，不洩漏世界是否存在。
 
@@ -276,6 +330,10 @@ L1／L2 的最低機器驗收包含：
 - 多 Instance 下 Grant／Claim／Cutover／Send Authorization、Session 隔離、Watermark 與 Fail-Closed 的 Conformance Suite。
 
 缺少任一證據時，實作狀態只能標示為 `Protocol v1.1 design baseline` 或 `not yet conformant`；單元測試、文件審查或單 Instance 測試不得替代上述三項驗證。
+
+目前已有 Python／Node 的請求摘要、驗章及精確傳輸 hash 核對，另有 16 組准入與投影向量：白話是確認「這份回應來自哪次快照或已提交操作、差異由誰核准、期限與世代是否相符」在兩種語言間維持一致。Node 固定向量核對器不作正式授權；完整測試範圍與未完成項目見[證據對照](docs/conformance-evidence.md)。
+
+多程序競爭另以兩個真正獨立 worker 同時操作共享 PostgreSQL：確認一次性授權不會被領兩次、同一訪客不會建立兩個世界。worker 全部退出後，由另一個控制器查回共享結果；本機 Windows 執行程序，SSH Ubuntu 提供一次性資料庫，詳見[世界 Runtime 驗收](docs/world-runtime.md)。
 
 Baseline v1.1 另要求下列安全與整合測試：
 
@@ -331,7 +389,7 @@ Baseline v1.1 另要求下列安全與整合測試：
 
 OWASP 分類是設計弱點情境的依據。管理者在啟動時選定已實作的情境，領域處理器套用相應的虛構資料與回應規則；目前不會依每個訪客請求自動判定 OWASP 類別或切換弱點。
 
-目前可以用本地設定檔選擇規則，也可以接上自己的安全檢查結果接收程式。把不同環境的流量導入、確認遠端檢查工具的身分，以及集中管理設定的服務，仍要另外實作。展示模式使用程式產生的模擬檢查結果；虛構資料目前只能讀取，尚無購買扣款或更新庫存的功能；session 世界的交易事件與重啟恢復策略仍待實作。
+目前可以用本地設定檔選擇規則，也可以接上自己的安全檢查結果接收程式。展示模式使用程式產生的模擬檢查結果，商品路由維持唯讀；獨立可信業務入口須明確啟用，另提供合成購物車、訂單、庫存事件與共享 PostgreSQL 恢復，不執行真實扣款。Gateway 身份與簽章組裝已有隔離驗收，正式環境的流量政策、身份／秘密設定及集中管理服務仍須另行整合，不能由展示模式推定已部署。
 
 ## 快速使用
 
@@ -346,7 +404,7 @@ docker compose exec mirage python tools/verify_domain_api.py --domain ecommerce 
 
 預設使用固定文字備援，無需啟動模型。完整 input、呼叫範例、模型模式、持久化與部署方式見 [Docker 說明](docs/docker.md)；商品 API 範例及驗證矩陣見 [電商使用說明](domains/ecommerce/docs/usage.md)。容器預設只發布本機連接埠。
 
-目前工作環境沒有 Docker 引擎；Dockerfile、Compose 與封裝流程已提供，容器實際建置／啟動仍需在具備 Docker 的環境執行。原生 HTTP 驗證與單元測試不能替代容器測試。
+本機 Windows 沒有 Docker 引擎；已在 SSH Ubuntu 的隔離環境建置 ARM64 映像，驗證非 root／唯讀容器及可信 HTTP 合成交易，見[進度紀錄](docs/implementation-progress.md)。此隔離驗收不代表已執行正式 Compose 部署或切換 staging。
 
 ## 領域選擇與資料夾
 
@@ -451,7 +509,7 @@ $env:PYTHONPATH = "$PWD/src"
 
 HTTP 驗證器執行 16 個一般及攻擊特徵請求，檢查 `200 → 404 → 200`、不同商品隔離、提示與標頭注入、未支援寫入及快照不變；預設報告為 `generated/domains/ecommerce/verification/http-api.json`。單元測試另覆蓋兩個弱點模擬、錯誤設定拒絕，以及非電商工單完整協調、生成、契約驗證與回送。歷史本機 Foundation 模型證據與限制見 [電商驗證紀錄](domains/ecommerce/docs/verification.md)。
 
-目前合成資料為唯讀快照，購買、扣款、庫存更新與完整 session 世界交易隔離尚未提供。WorldStore／WorldDomain 的 session 世界、CAS 提交、Projection Contract 與按需 LLM 流程仍待落實；遠端可信判定來源認證、各部署的代理接入、集中設定服務及真實部署對照也仍待實作。平台版本、來源核准狀態與稽核紀錄全部留在 [電商領域文件](domains/ecommerce/README.md)。
+一般展示服務使用唯讀快照；可信服務可明確啟用合成購物車、訂單與庫存更新，已提供持久化 Session 世界、CAS、冪等與事件交易。`/synthetic` 契約不代表完整 Medusa Store API 相容，也未提供真實購買、扣款、稅費、配送或退款。各部署的正式代理設定、集中設定服務、真實資料銜接與完整 Protocol 符合性仍須另外驗收。平台版本、來源核准狀態與稽核紀錄留在 [電商領域文件](domains/ecommerce/README.md)。
 
 其他入口、驗證 API input 及故障處理見 [HTTP 入口](docs/ingress.md)、[平台識別](docs/identifier.md) 及 [契約驗證](docs/gate.md)。所有具名函式、測試與輔助程式都須有功能 docstring，並由文件檢查確認。
 
@@ -465,7 +523,7 @@ HTTP 驗證器執行 16 個一般及攻擊特徵請求，檢查 `200 → 404 →
 | --- | --- | --- | --- |
 | 採用 | [FastAPI](https://github.com/fastapi/fastapi/blob/master/LICENSE) | MIT | 驗證 API、HTTP 請求入口原始入口及可選完整 HTTP app |
 | 採用 | [Uvicorn](https://github.com/Kludex/uvicorn/blob/main/LICENSE.md) | BSD-3-Clause | FastAPI 的 ASGI 執行服務 |
-| 測試採用 | [pytest](https://github.com/pytest-dev/pytest/blob/8.4.2/LICENSE)／[HTTPX](https://github.com/encode/httpx/blob/0.28.1/LICENSE.md) | MIT／BSD-3-Clause | 單元、整合測試與測試 HTTP client |
+| 測試／執行期採用 | [pytest](https://github.com/pytest-dev/pytest/blob/8.4.2/LICENSE)／[HTTPX](https://github.com/encode/httpx/blob/0.28.1/LICENSE.md) | MIT／BSD-3-Clause | pytest 用於測試；HTTPX 也用於可信 dispatcher 與身份查詢 |
 | 採用分類資料 | [OWASP API Security](https://github.com/OWASP/API-Security/blob/master/LICENSE)／[OWASP Top 10](https://github.com/OWASP/Top10/blob/master/LICENSE) | CC-BY-SA-4.0 | 分類 ID／名稱及本專案中文翻譯；出處、修改與共享條款見 [分類文件](docs/owasp-design.md)，未引入漏洞執行程式 |
 | 採用既有間接依賴 | [Starlette](https://github.com/Kludex/starlette/blob/main/LICENSE.md) | BSD-3-Clause | FastAPI 的 ASGI 基礎；HTTP 回送器原始 bytes／headers 回送，未新增套件 |
 | 採用 | [Pydantic](https://github.com/pydantic/pydantic/blob/main/LICENSE) | MIT | 嚴格輸入／輸出模型與情境選擇工具白名單政策 |
@@ -484,6 +542,76 @@ HTTP 驗證器執行 16 個一般及攻擊特徵請求，檢查 `200 → 404 →
 | 參考資料 | [WooCommerce REST API 文件](https://developer.woocommerce.com/docs/apis/rest-api/v3/products/)／[外掛授權標示](https://github.com/woocommerce/woocommerce/blob/trunk/plugins/woocommerce/readme.txt) | 文件、程式碼與範例權利須分開核對；外掛標示 GPLv3+ | 僅參考 API 行為，未複製其程式碼。閱讀 GPL 專案文件不會使獨立實作自動受 GPL 約束；若複製程式碼或大量文件，須另評估 |
 | 採用規格子集 | [Medusa Store API 文件](https://docs.medusajs.com/api/store)／[固定版本授權](licenses/Medusa-MIT.txt) | 非企業版來源採 MIT；上游企業版路徑另有條款 | 兩份規格子集保留上游版權與 MIT 全文，修改及來源見 NOTICE；正式部署尚未對照 |
 
-`pyproject.toml` 還列有 `uvicorn`、`PyYAML`、`werkzeug`、`Faker==40.44.0`，測試 extra 有 `pytest`、`httpx`；它們及**間接依賴**（例如 Faker 安裝帶入的 `tzdata`）也須按實際解析出的版本納入第三方清單。合成資料工具只使用 Faker 的公開 API，不複製其原始碼或資料。Polyfactory 與 hypothesis-jsonschema 僅是評估過、未安裝的候選。上表不是完整 SBOM；本專案 Apache-2.0 授權與各第三方材料的授權範圍分開記錄。
+`pyproject.toml` 還列有 `uvicorn`、`PyYAML`、`werkzeug`、`Faker==40.44.0` 與執行期 `httpx`，測試 extra 為 `pytest`；它們及**間接依賴**（例如 Faker 安裝帶入的 `tzdata`）也須按實際解析出的版本納入第三方清單。合成資料工具只使用 Faker 的公開 API，不複製其原始碼或資料。Polyfactory 與 hypothesis-jsonschema 僅是評估過、未安裝的候選。上表不是完整 SBOM；本專案 Apache-2.0 授權與各第三方材料的授權範圍分開記錄。
 
 內部執行與提供軟體、容器、模型或規格給他人，所涉義務可能不同。分發時依實際包含元件保存 MIT／BSD／Apache 等授權與版權聲明；Apache-2.0 元件若帶 `NOTICE`，按條款保留適用內容並標示修改。README 簡表不能替代授權檔與 NOTICE。另核對模型權重的使用／商用／再散布條款，以及下載或打包的 API 規格、範例、文件的個別權利。不要把「依賴某個 LGPL／GPL 程式」直接等同整個獨立專案必須改用該授權；若未來引入其程式碼或連結／分發該元件，按**具體版本、整合方式與分發形式**評估並履行義務。
+
+### Gateway 與獨立 Mirage 程序的 HTTPS 驗收
+
+MSDSS proxy 根據分類與決策政策選擇 dispatcher。可信 middleware 把 SessionBinding 放到單一請求的 ASGI state。dispatcher 核對環境及部署，再對最後送出的 HTTP 請求簽章。獨立 Uvicorn 接收程序以 Mirage 正規化與驗章元件核對收到的 bytes。測試涵蓋訪客自填身份及缺少綁定，重跑方式見 [Trusted Session 文件](docs/trusted-session.md)。
+
+### Gateway 與完整商品回應的驗收
+
+Gateway 使用伺服器提供的合成 SessionBinding 簽發 JWS。Mirage 的可信判定 provider 核對簽章及請求後，把一次性 JTI 寫入共享 PostgreSQL。電商 pipeline 再依序識別平台、取得合成商品、驗證回應契約並送出商品。第二個 Mirage 程序在相同 HTTPS 位址接手後，資料庫仍保有已使用的 JTI，因此原請求重送會收到固定 503；Gateway 重新簽發後可再次取得商品。詳見 [驗收設定](docs/trusted-session.md)。
+
+### Replay 寫入故障驗收的執行位置
+
+| 位置 | 節點與工作 |
+| --- | --- |
+| 本機 Windows（Mirage_API 工作區） | pytest 使用 HTTP TestClient 把合成簽章請求交給 Mirage。驗章器確認授權後，Replay Store 嘗試登記一次 JTI；若資料庫操作失敗，HTTP 入口回傳固定 503，商品協調器不會收到請求。 |
+| SSH 伺服器（Ubuntu） | 一次性 PostgreSQL 16 容器保存測試紀錄。資料庫透過 SSH 隧道供本機連線，寫入逾時由資料庫的 statement_timeout 觸發。 |
+| 提交結果未知的注入點（本機） | PostgreSQL 實際完成提交後，測試層遮蔽成功結果。另一條連線讀回該 JTI，新的 Store 也將同一 JTI 判為重放。 |
+
+重跑方式與故障範圍見 [Trusted Session 驗證說明](docs/trusted-session.md)。
+
+### World 初始化結果未知時如何恢復
+
+| 執行位置 | 節點與功能 |
+| --- | --- |
+| 本機 Windows | PostgresWorldStore 以已授權的完整 WorldScope 建立快照。送出 COMMIT 後若失去結果，先關閉該連線，再用新連線查同一個 World。 |
+| SSH 伺服器 Ubuntu | 隔離 PostgreSQL 16 保存快照。若交易已提交，新連線能讀到已保存的版本與狀態；若未提交，連線關閉後未提交的資料不會留下。 |
+| 本機 Windows | 恢復查詢驗證 scope、到期時間及快照 hash。查無有效快照時回報初始化結果無法確認，停止建立。 |
+
+測試用 SSH 隧道連線，只傳送 migration、SQL 與合成資料。故障注入及結果比對在本機執行。詳見 [World Runtime](docs/world-runtime.md)。
+
+### 提交成功後 HTTP 傳輸中斷
+
+| 執行位置 | 節點與功能 |
+| --- | --- |
+| 本機 Windows | 呼叫端在 CAS 前配置並保存一次性 UUIDv4。驗收用 HTTP 服務在提交後只送出部分本文，以實際 loopback 連線驗證接收端能辨識中斷。 |
+| SSH 伺服器 Ubuntu | 一次性 PostgreSQL 16 在同一交易保存新快照與提交收據。收據記錄該次版本與 hash；重複 attempt ID 會使整筆更新回滾。 |
+| 本機 Windows | 恢復端以重新授權的完整 WorldScope 與原 ID 唯讀查收據。即使世界之後更新，仍查到原提交版本。 |
+
+本項驗收使用合成 CAS 操作，部署端的業務寫入與對外恢復 API 仍待整合。重跑方式見 [World Runtime](docs/world-runtime.md)。
+
+### Registry 撤銷與 Grant 同時發生
+
+| 位置與節點 | 白話功能 |
+| --- | --- |
+| 本機 Windows 的 Admission 控制器 | 先鎖定世代，再用同一交易核對契約、來源與 Profile。符合核准條件才保存 Grant 與 Registry revision。 |
+| SSH 伺服器 Ubuntu 的 PostgreSQL 16 | 同一契約列上，Grant 的共享鎖與撤銷的更新鎖互斥。先取得鎖的一方提交或回滾後，另一方才繼續。 |
+| 本機 Windows 的驗收程式 | 用兩條連線分別執行 Grant 與撤銷，以資料庫回報的鎖等待確認交易確實並行，再檢查持久化准入筆數與 revision。 |
+
+先 Grant 再撤銷會保留既有准入，撤銷後的新 Grant 被拒絕。先撤銷時，等待中的 Grant 讀到已撤銷狀態，不建立准入。[重跑方式](docs/world-runtime.md)
+
+### Generation 封存與准入的分工
+
+| 節點 | 工作 |
+| --- | --- |
+| Grant（Mirage） | 鎖住指定世代，核對尚未封存及契約仍有效，再保存一張帶有 revision 的准入。 |
+| Cutover（Mirage） | 在同一世代列上標記封存。先前核發的准入保留原期限；再次封存回傳原封存 revision。 |
+| Claim（Mirage） | 核對准入狀態與期限。期限前兩個領取者競爭時，只准一個成功；到期當刻仍未領取就過期。 |
+| 本機 Windows | pytest 執行獨立 Mirage 控制器、安排交易順序，並比對准入筆數、狀態與 revision。 |
+| SSH 伺服器 Ubuntu | 隔離 PostgreSQL 16 執行資料列鎖與交易。測試透過 SSH 隧道觀察哪條連線在等鎖。 |
+
+上述控制屬於 Mirage 的 World Runtime。MSDSS Gateway 負責上游可信請求，本次驗收從已建立的 Mirage 世代與已核准的契約開始。測試步驟見 [World Runtime 說明](docs/world-runtime.md)。
+
+### 緊急撤銷與發送授權的邊界
+
+| 節點與位置 | 功能 |
+| --- | --- |
+| 本機 Mirage 管理端 | 呼叫 emergency_revoke(generation)，將該世代撤銷到不可逆的 revision。這是內部管理介面，部署者需驗證管理權限。 |
+| SSH 主機的 PostgreSQL | Generation 列把緊急撤銷與 Send Authorization 排進同一控制序列，並把撤銷狀態保存給其他 Mirage Instance。 |
+| 本機 Mirage 發送控制 | 撤銷先提交時拒絕新發送授權；發送授權先提交時保留既有 SEND_AUTHORIZED 狀態。後續嘗試不會取得第二次授權。 |
+
+本次驗收核對持久化授權邊界。HTTP 在途中止、SEND_STARTED／SEND_COMPLETED 等傳輸事件尚待接入 Renderer。詳見 [World Runtime](docs/world-runtime.md)。

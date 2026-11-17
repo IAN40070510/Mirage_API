@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from deception.api.demo import DemoConfig, create_app, load_demo_config
+from deception.llm import PydanticAIBackend
 
 
 def test_demo_serves_consistent_fallback_and_records_its_true_source(tmp_path):
@@ -28,6 +29,7 @@ def test_demo_serves_consistent_fallback_and_records_its_true_source(tmp_path):
         assert first.content == repeated.content
         assert first.json()["product"]["id"] == first_id
         assert first.json()["product"]["title"] == info["products"][0]["title"]
+        assert first.json()["product"]["description"] == "See the product details for more information."
         assert first.headers["content-length"] == str(len(first.content))
         after = client.get("/demo/info").json()
         assert after["dataset_sha256"] == info["dataset_sha256"]
@@ -36,6 +38,26 @@ def test_demo_serves_consistent_fallback_and_records_its_true_source(tmp_path):
     datasets = list(tmp_path.glob("*/dataset.json"))
     assert len(datasets) == 1
     assert json.loads(datasets[0].read_text(encoding="utf-8"))["products"][0]["id"] == first_id
+
+
+def test_local_demo_missing_product_uses_template_without_contacting_model(tmp_path, monkeypatch):
+    """local 展示的固定 404 不依賴模型服務，並正確標記模板來源與零模型請求。"""
+    calls = []
+
+    async def forbidden_ready(self, budget):
+        """阻止任何模型 metadata 或推論前置檢查，確保此案例完全走固定模板。"""
+        calls.append("model")
+        raise AssertionError("The template path must not contact a model")
+
+    monkeypatch.setattr(PydanticAIBackend, "check_ready", forbidden_ready)
+    app = create_app(DemoConfig(mode="local"), output_root=tmp_path)
+    with TestClient(app, base_url="http://127.0.0.1:8000") as client:
+        response = client.get("/api/products/prod-missing", headers={"X-Request-ID": "template-404"})
+        info = client.get("/demo/info").json()
+    assert response.status_code == 404 and "prod-missing" in response.json()["message"]
+    assert info["recent_results"][-1]["generation_source"] == "template"
+    assert info["recent_results"][-1]["usage"]["model_requests"] == 0
+    assert calls == []
 
 
 def test_demo_missing_id_is_encoded_before_authoritative_404_echo(tmp_path):

@@ -8,9 +8,10 @@ from typing import Literal
 
 from pydantic import Field, JsonValue
 
-from deception.generation import GenerationContext, GenerationIntent
+from deception.generation import ContentLifecycle, GenerationContext, GenerationIntent
 from deception.generation.models import digest
 from deception.generation.schema import field_schema
+from deception.generation.pointers import get
 from deception.llm import BudgetExceeded, RunBudget
 from deception.scenarios import fingerprint_request
 from deception.scenarios.models import ScenarioIssue
@@ -57,7 +58,7 @@ class DeceptionOrchestrator:
             raise ValueError("Recovery and scenario domains must match")
 
     async def run(self, request, assessment, *, runtime, generation_config, dataset=None,
-                  now=None, allow_unreviewed=False) -> PipelineResult:
+                  now=None, allow_unreviewed=False, content_lifecycle: ContentLifecycle | None = None) -> PipelineResult:
         """執行一個獨立 run，共用預算、固定請求及快照，絕不重用其他請求的 gate pass。"""
         budget = RunBudget(self.generator.policy.limits)
         recovery = self.recovery
@@ -75,6 +76,9 @@ class DeceptionOrchestrator:
         try:
             if not self.generator.policy.enabled:
                 return PipelineResult(decision="not_applicable", trace=trace)
+            if content_lifecycle is not None:
+                # 封存呼叫端物件，避免其他請求更新共享的模型實例而改變本次內容身份。
+                content_lifecycle = ContentLifecycle.model_validate(content_lifecycle.model_dump(mode="json"))
             async with asyncio.timeout(budget.remaining()):
                 identified = self.identifier.identify_request(request, context=runtime)
                 if identified.decision != "identified" or identified.identity is None:
@@ -103,11 +107,13 @@ class DeceptionOrchestrator:
                     scenario_decision_id=decision.trace["decision_id"], scenario_policy_sha256=self.scenarios.policy_sha256,
                     generation_policy_sha256=self.generator.policy_sha256, data_namespace=decision.trace["data_namespace"],
                     state_sha256=decision.trace["state_sha256"], domain_context=prepared.domain_context,
-                    model_identity=model_identity)
+                    model_identity=model_identity, content_lifecycle=content_lifecycle)
                 base_plan = decision.composition_plan
                 rule = self.generator.select_rule(base_plan, context)
                 schemas = {f.field_id: field_schema(profile, base_plan, f.target_pointer) for f in rule.fields}
                 facts = self.data_provider.facts(data, base_plan)
+                if rule.fact_keys is not None:
+                    facts = {key: facts[key] for key in rule.fact_keys}
 
                 def checked_scenario():
                     """在修正、發布或備援前後重查同一請求、F 期限與資料事實，不延長信任期限。"""
@@ -128,7 +134,7 @@ class DeceptionOrchestrator:
                         raise _Stop("context_changed", "回送前判定已到期")
                     return deadline
 
-                def fallback_result(failure_stage, repairs=0):
+                def fallback_result(failure_stage, repairs=0, source="fallback"):
                     """僅在身份與資料仍有效時套用同分支固定欄位，再經 H/I；備援不污染 G 快取。"""
                     checked_scenario()
                     try:
@@ -136,6 +142,7 @@ class DeceptionOrchestrator:
                         if recovered is None:
                             raise _Stop("generation_rejected", "生成或規劃失敗且沒有適用的已配置備援", "reject")
                         fallback_plan, recovery_trace = recovered
+                        recovery_trace["source"] = source
                         candidate = self.composer.compose(fallback_plan, dataset=self.data_provider.composition_data(data),
                                                           allow_unreviewed=allow_unreviewed)
                     except (_Stop, BudgetExceeded):
@@ -148,11 +155,57 @@ class DeceptionOrchestrator:
                         raise _Stop("fallback_not_passed", "備援未通過同一請求的 I 驗證",
                                     "reject" if result.decision == "reject" else "unverifiable")
                     checked_scenario()
+                    if context.content_lifecycle is not None:
+                        # 世界中首次實際採用的核准文字也必須穩定；不寫入舊的模型配方快取。
+                        _, _, _, key = self.generator.cache_binding(base_plan, context, profile, facts)
+                        values = {field.field_id: get(fallback_plan.body, field.target_pointer) for field in rule.fields}
+                        provenance = dict(source=source, model={"provider": "not_used", "execution_mode": source},
+                                          policy_sha256=self.generator.policy_sha256,
+                                          recovery_policy_sha256=recovery.policy_sha256,
+                                          prompt_version=self.generator.policy.prompt_version,
+                                          state_sha256=context.state_sha256, data_namespace=context.data_namespace)
+                        entry = self.generator.cache.publish_entry(key, values, provenance)
+                        if entry["values"] != values:
+                            winning = self.generator.apply(base_plan, rule, schemas, entry["values"])
+                            candidate = self.composer.compose(winning, dataset=self.data_provider.composition_data(data),
+                                                              allow_unreviewed=allow_unreviewed)
+                            result = verify_candidate(candidate, self.gate, request.raw_url)
+                            if result.decision != "pass" or result.valid is not True:
+                                raise _Stop("cache_candidate_rejected", "固定內容競爭勝出值未通過本次驗證")
+                        recovery_trace.update(content_sha256=digest(entry["values"]), content_lifecycle=True,
+                                              provenance=entry["provenance"], cache_hit=entry["values"] != values)
+                        checked_scenario()
                     trace.update(context_id=context.context_id, scenario=decision.trace, model=model_identity,
                                  generation=recovery_trace, recovery={**recovery_trace, "failure_stage": failure_stage},
                                  repairs=repairs, usage=budget.audit(), candidate_sha256=digest(candidate.to_dict()),
                                  release_deadline_monotonic=release_deadline())
                     return PipelineResult(decision="validated", candidate=candidate, gate_result=result, trace=trace)
+
+                # 只有可信世界身份可在模型前讀取持久內容；命中不代表重用本次 gate 通行結果。
+                try:
+                    cached = self.generator.cached(base_plan, context, profile, facts=facts, budget=budget)
+                except (BudgetExceeded, TimeoutError, asyncio.CancelledError):
+                    raise
+                except Exception:
+                    raise _Stop("cached_content_unverifiable", "已發布內容或其依賴無法核對") from None
+                if cached is not None:
+                    checked_scenario()
+                    candidate = self.composer.compose(cached.plan, dataset=self.data_provider.composition_data(data),
+                                                      allow_unreviewed=allow_unreviewed)
+                    result = verify_candidate(candidate, self.gate, request.raw_url)
+                    if result.decision != "pass" or result.valid is not True:
+                        raise _Stop("cache_candidate_rejected", "已發布內容未通過本次契約驗證")
+                    checked_scenario()
+                    trace.update(context_id=context.context_id, scenario=decision.trace,
+                                 model={"provider": "not_used", "execution_mode": "cache"},
+                                 generation=cached.trace, repairs=0, usage=budget.audit(),
+                                 candidate_sha256=digest(candidate.to_dict()),
+                                 release_deadline_monotonic=release_deadline())
+                    return PipelineResult(decision="validated", candidate=candidate, gate_result=result, trace=trace)
+                if rule.generation_mode == "reviewed_template":
+                    model_identity = {"provider": "not_used", "execution_mode": "template"}
+                    context.model_identity = model_identity
+                    return fallback_result("configured_template", source="template")
                 contract_view = {"operation_id": identity.operation_id, "method": base_plan.method,
                                  "path_template": base_plan.path, "status_code": base_plan.status_code,
                                  "media_type": base_plan.media_type, "fields": schemas}
@@ -171,15 +224,21 @@ class DeceptionOrchestrator:
                     """Read the already selected domain and scenario outcome. They cannot be changed."""
                     return json.dumps(scenario_view, ensure_ascii=False, sort_keys=True)
 
-                prompt = json.dumps(dict(task="Plan synthetic response content. Read relevant tools, then select every allowed field ID.",
+                prompt = json.dumps(dict(task="Plan synthetic response content using available observations. "
+                                         "Read additional tools only when needed, then select every allowed field ID exactly once. "
+                                         "Leave instructions empty unless additional guidance is necessary.",
                                          allowed_field_ids=[f.field_id for f in rule.fields],
                                          rule_instructions={f.field_id: f.instruction for f in rule.fields},
                                          domain=context.domain, outcome=context.outcome_id), ensure_ascii=False, sort_keys=True)
                 try:
                     model_identity = await self.generator.backend.check_ready(budget)
                     context.model_identity = model_identity
-                    intent = await self.generator.backend.plan(prompt, {"read_contract": read_contract, "read_facts": read_facts,
-                                                                        "read_scenario": read_scenario}, GenerationIntent, budget)
+                    if rule.planning_mode == "fixed_fields":
+                        # 欄位集合、事實、情境及 schema 都已由主機確定，無須再次推論同一選擇。
+                        intent = GenerationIntent(field_ids=[field.field_id for field in rule.fields], instructions="")
+                    else:
+                        intent = await self.generator.backend.plan(prompt, {"read_contract": read_contract, "read_facts": read_facts,
+                                                                            "read_scenario": read_scenario}, GenerationIntent, budget)
                     intent = GenerationIntent.model_validate(intent.model_dump())
                 except (BudgetExceeded, TimeoutError, asyncio.CancelledError):
                     raise
@@ -210,8 +269,16 @@ class DeceptionOrchestrator:
                         if await self.generator.backend.check_ready(budget) != model_identity:
                             raise _Stop("model_changed", "本機模型身份在生成期間改變")
                         stage = "cache_publication"
-                        winner = self.generator.cache.publish(generated.cache_key, generated.values)
+                        if generated.trace.get("content_lifecycle"):
+                            entry = self.generator.cache.publish_entry(generated.cache_key, generated.values,
+                                                                       generated.trace["provenance"])
+                            winner = entry["values"]
+                        else:
+                            entry = None
+                            winner = self.generator.cache.publish(generated.cache_key, generated.values)
                         actual_generation = {**generated.trace, "cache_winner": winner != generated.values}
+                        if entry is not None:
+                            actual_generation["provenance"] = entry["provenance"]
                         if winner != generated.values:
                             winning_plan = self.generator.apply(base_plan, rule, schemas, winner)
                             candidate = self.composer.compose(winning_plan, dataset=self.data_provider.composition_data(data),
@@ -227,12 +294,13 @@ class DeceptionOrchestrator:
                         return PipelineResult(decision="validated", candidate=candidate, gate_result=gate_result, trace=trace)
                     except (_Stop, BudgetExceeded, TimeoutError, asyncio.CancelledError):
                         raise
-                    except Exception:
+                    except Exception as exc:
                         if stage not in ("generation", "composition"):
                             raise _Stop("pipeline_unverifiable", "模型身份、資料或快取無法可靠完成最終核對") from None
                         if attempt >= self.generator.policy.limits.max_repairs:
                             return fallback_result(stage, repairs=attempt)
-                        feedback = recovery.repair_feedback([field.field_id for field in rule.fields])
+                        feedback = recovery.repair_feedback([field.field_id for field in rule.fields],
+                                                            error=exc if stage == "generation" else None)
                 raise _Stop("generation_rejected", "未取得可驗證的生成內容", "reject")
         except _Stop as exc:
             return PipelineResult(decision=exc.decision, gate_result=gate_result, trace={**trace, "usage": budget.audit()},

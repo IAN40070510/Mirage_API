@@ -30,6 +30,8 @@
 
 備援值必須完整對應本次內容生成器規則的欄位集合，經 `generator.apply()` 檢查原始 JSON 值及 schema，再放入既有模板位置。額外欄位、缺欄位、錯誤型別、與合成資料工具映射重疊的目標及不存在的模板位置都不能使用。
 
+純固定的備援值不要求商品上下文，因此工單等其他領域可在相同流程使用固定欄位。只有字串值實際包含 `{request_entity_id}` 時，才從已驗證的 `domain_context.product_id` 取得非空字串並 URL encode 後替換；巢狀清單與物件值同樣檢查。缺少或型別錯誤的 ID 仍拒絕，不直接回顯原始路徑，不解讀其他模板語法。
+
 `RecoveryPolicy` 預設停用備援。正式使用前，管理者需為自己的固定契約及每個允許結果建立政策；repo 的示意模板不能當成已核准的 Medusa／WooCommerce 商品契約。政策載入時的格式檢查也不代替本次回應組合與契約驗證。
 
 修正與備援工具不回傳 HTTP Response。成功結果仍是任務協調器的 `PipelineResult(decision="validated")`；失敗時沒有可對外使用的候選。由 [HTTP 回送工具](renderer.md) 決定最終傳輸標頭，再以實際請求重新驗證。
@@ -87,7 +89,7 @@ pipeline = DeceptionOrchestrator(
 | `select_fallback(plan, context, generation_rule_id)` | 精確選一條規則；停用或無匹配回 `None`，領域／scope 不符或歧義拋錯 |
 | `apply_fallback(generator, plan, context, rule, schemas)` | 經內容生成器的同一 `apply()` 驗證固定值；回傳 `(plan, trace)` 或 `None`，不發布快取 |
 | `can_repair_gate(result)` | 僅允許 `reject`／`valid: false` 且所有明確錯誤都位於 body 的契約驗證器結果 |
-| `repair_feedback(field_ids)` | 只以固定錯誤碼、指示及已核准欄位 ID 產生回饋 |
+| `repair_feedback(field_ids, error=None)` | `error` 為 keyword-only；只接受內容生成器的受控欄位驗證例外作詳細摘要，其他錯誤維持泛用回饋 |
 
 這些修正與備援工具方法提供政策選取與內容檢查；完整流程仍應由任務協調器管理，獨立呼叫 `apply_fallback()` 不代表已完成回應組合與契約驗證或請求期限核對。
 
@@ -114,9 +116,28 @@ pipeline = DeceptionOrchestrator(
 
 錯誤回饋只提供受控的驗證資訊，不將完整例外、原始請求 body、Cookie 或 Authorization 拼入模型提示。修正與備援工具不允許模型自行決定擴大欄位、換契約或宣告契約驗證器通過。
 
+內容生成器的局部 JSON Schema 驗證失敗時，以 `GeneratedFieldValidationError` 傳遞最多 16 筆 `FieldViolation`。每筆只含目前規則允許的 `field_id`、固定 `code`，以及適用時的有限數值 `limit` 或單一 JSON `expected_type`。字串長度、數值、陣列大小與物件屬性數限制提供契約中的實際上下限；型別提供固定 JSON 型別名稱。模式、格式、列舉、常數、必填屬性、額外屬性與唯一項目僅提供固定碼，不回填規則文字、列舉值、失敗值、巢狀屬性名稱或原始錯誤路徑。未知驗證限制使用 `schema` 碼。
+
+例如契約 `maxLength: 120` 遭違反時，第二次生成的 `validation_feedback` 字串會包含以下 JSON：
+
+```json
+{
+  "code": "allowed_content_rejected",
+  "allowed_field_ids": ["description"],
+  "violations": [{"field_id": "description", "code": "max_length", "limit": 120}],
+  "instruction": "Regenerate all allowed fields. Correct the listed constraints and satisfy the supplied schemas and field instructions. Keep authoritative facts, scenario and HTTP metadata unchanged."
+}
+```
+
+修正仍要求重生整條規則的所有允許欄位，不提供任意 JSON Patch。上例的 120 是契約限制；若 20–80 字元只寫在欄位提示，系統不會自行推導或宣稱量測出 `max_length: 80`。語意或提示長度要求仍須另行評估。
+
+provider 例外、框架 JSON／輸出模型解碼失敗，以及組合器或 gate 拒絕若沒有上述受控摘要，會得到空 `violations` 與固定修正指示。系統不解析它們的自由文字、不猜失敗欄位，也不把 gate 的 `path`／`code`／`reason` 當成可直接回填的局部 schema 證據。這些情況仍受原本進入修正的條件限制；HTTP metadata 或身份錯誤仍直接停止。
+
 內容生成器收到非空修正回饋時略過既有快取讀取，確實重新生成；不會為了修正重複使用剛失敗的值。生成內容的發布競爭仍依原流程核對，儲存或競爭候選不可信時直接停止。
 
-備援內容不發布到內容生成器的模型內容快取，避免一次模型故障讓管理者預設文字成為後續正常生成的永久勝出值。修正與備援工具不建立交易狀態、不修改合成資料工具快照，也不聲稱已完成扣款、退款或庫存變更。backend 與內容生成器快取的關閉仍由建立它們的應用程式負責。
+在未啟用 ContentLifecycle 的相容模式，備援內容不發布到模型配方快取。明確啟用可信世界模式時，首次通過 H/I 的核准備援或模板會發布到獨立的 `content_entries`，保存固定內容來源及政策證據；同一世界已採用的文字在模型恢復後仍保持，只有明確內容世代／依賴變更才更新。這避免對外先送備援、下一次又變模型文案的可觀察跳動，並不污染原 `content` 資料表或聲稱使用模型。詳見 [內容生命週期](generation.md#可信世界內容生命週期)。修正與備援工具不建立交易狀態、不修改合成資料工具快照，也不聲稱已完成扣款、退款或庫存變更。backend 與內容生成器快取仍由應用程式關閉。
+
+`GenerationRule.generation_mode: reviewed_template` 直接選用同一套啟用的 RecoveryPolicy 規則作核准固定內容，仍須核對領域、精確契約、outcome、F/G 政策摘要與完整欄位集合，再經 H/I/M。trace.source 為 template，沒有對模型失敗進行推論或冒稱模型成功；缺少適用規則時拒絕。相同世界先前已發布的內容優先於新的模板策略，避免策略切換無意覆寫既定內容。
 
 ## 驗證方式
 
@@ -128,6 +149,8 @@ pipeline = DeceptionOrchestrator(
 ```
 
 驗證重點包括無效生成後成功修正、次數耗盡後同分支備援、錯誤或歧義政策拒絕、404 維持 404、合成資料工具值不變、備援不污染模型快取，以及身份、到期、預算與取消不能繞過。可控模型測試用來確認控制流程；不代表所有真實模型、官方平台部署或業務交易已相容。
+
+回饋回歸另以真正 Agent 搭配 `FunctionModel` 驗證型別、過短與過長值的第二次生成收到正確限制，並檢查服務例外不洩漏診斷、schema 自由文字不回填、摘要筆數上限及欄位白名單。這些是離線流程證據，沒有新增真模型品質、token 成本或延遲測量。
 
 2026-11-09 已執行完整 `python -m pytest -q`：**546 項通過**，其中本次修正與備援工具/HTTP 回送器與 HTTP 接入新增 97 項測試案例。另已驗證停用的政策範本可解析，文件／函式註解檢查及 Python 語法編譯均通過。排程延遲不延長發布期限的回歸案例也包含於完整測試。
 

@@ -20,6 +20,7 @@
 | `data_namespace`、`state_sha256` | 已核對資料集的身份與完整快照摘要 |
 | `domain_context` | 情境選擇工具封存的領域選擇資料，電商目前包含 `product_id` |
 | `model_identity` | backend 核對的模型名稱、digest、執行模式、解碼設定、規劃模式及 runtime 版本；模型尚未可用而採明確修正與備援工具備援時標示 `provider: not_used`、`execution_mode: fallback` |
+| `content_lifecycle` | 可選的可信 WorldScope、entity_version、content_epoch；不同環境／部署拒絕，其他世界／Session 授權由組裝層核對 |
 
 `context_id` 屬性將完整 JSON 表示以固定排序及 SHA-256 摘要，回傳可追溯字串。因為包含請求身份，它不是跨請求實體內容的快取鍵；內容生成器另依穩定的資料、實體、政策、骨架及模型資訊建立鍵。
 
@@ -39,6 +40,10 @@ if result.decision == "validated":
 ```
 
 這些變數代表已按各工具文件建立的輸入與實例。`context_id` 只是追溯摘要，正式輸出仍須使用同一 `candidate` 與其契約驗證器結果，不得拿另一請求的 gate pass 代替。
+
+HTTP 整合可在 `deception.api.pipeline.create_app`／`make_pipeline_handler` 提供 `content_lifecycle_provider(request, verified_assessment)`，同步或非同步回傳 `ContentLifecycle`。handler 先取得並重驗判定；只有 malicious 且 request ID、fingerprint、環境／部署匹配時才呼叫此 provider，並共用 assessment_timeout_seconds 的剩餘期限，錯誤或逾期回固定 503。訪客的 world／session header 不會自動建立此物件。provider 必須以已驗證 Session 和本次有效 World read 解析內容版次；若無法確認世界期限、撤銷或版本就拋錯，不自行換 Session／Generation 重建。回傳物件的型別檢查本身不是授權或 ReadAdmission。
+
+未提供 provider 或直接呼叫 run 未傳 content_lifecycle 時，保留原本按完整快照與模型配方隔離的行為。啟用後同世界已定義的內容可在模型前重用，但依舊執行本次身份、資料、情境、欄位與最終契約檢查；配方與內容世代的區分見 [生成器](generation.md#可信世界內容生命週期)。
 
 ## 驗證與失敗處理
 

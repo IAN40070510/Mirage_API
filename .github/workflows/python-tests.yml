@@ -16,7 +16,23 @@ jobs:
   pytest:
     name: pytest (Python 3.12)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:17.6-alpine
+        env:
+          POSTGRES_DB: mirage_test
+          POSTGRES_USER: mirage
+          POSTGRES_PASSWORD: mirage_ci_only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mirage -d mirage_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      MIRAGE_POSTGRES_TEST_DSN: postgresql://mirage:mirage_ci_only@127.0.0.1:5432/mirage_test?connect_timeout=5
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -32,8 +48,24 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e '.[test]'
 
+      - name: Set up independent wire-vector checks
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Check documentation and function descriptions
+        run: python tools/check_documentation.py
+
       - name: Run complete pytest suite
-        run: python -m pytest -q
+        run: python -m pytest -q --junitxml=pytest-results.xml
+
+      - name: Save the test results, including explicit integration skips
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-test-results
+          path: pytest-results.xml
+          if-no-files-found: warn
 
       - name: Build Medusa Store/Auth profile from pinned contract
         run: |

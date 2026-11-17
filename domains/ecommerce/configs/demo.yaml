@@ -10,5 +10,5 @@ weakness_scenario: null
 seed: 20261109
 product_count: 2
 run_id: isolated-demo
-fallback_description: This is a reviewed synthetic demonstration product.
+fallback_description: See the product details for more information.
 fallback_missing_message: Entity with requested id {request_entity_id} was not found.

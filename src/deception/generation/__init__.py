@@ -2,8 +2,8 @@
 
 from .cache import ContentCache
 from .generator import ContentGenerator
-from .models import (GeneratedContent, GenerationContext, GenerationField, GenerationIntent,
+from .models import (ContentLifecycle, GeneratedContent, GenerationContext, GenerationField, GenerationIntent,
                      GenerationPolicy, GenerationRule)
 
-__all__ = ["ContentCache", "ContentGenerator", "GeneratedContent", "GenerationContext", "GenerationField",
+__all__ = ["ContentCache", "ContentGenerator", "ContentLifecycle", "GeneratedContent", "GenerationContext", "GenerationField",
            "GenerationIntent", "GenerationPolicy", "GenerationRule"]

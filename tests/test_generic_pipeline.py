@@ -4,6 +4,7 @@ import asyncio
 import copy
 import hashlib
 import json
+import pytest
 
 from deception.api.ingress import NormalizedRequest
 from deception.common.data import CompositionData
@@ -11,6 +12,7 @@ from deception.common.models import DatasetScope, SyntheticModel
 from deception.core import CompositionPlan, DataBinding, ResponseComposer
 from deception.core.orchestrator import DeceptionOrchestrator
 from deception.core.renderer import ResponseRenderer
+from deception.core.recovery import RecoveryPolicy, RecoveryTool
 from deception.discovery import BindingConfig, DeploymentBinding, PlatformIdentifier, RuntimeContext
 from deception.generation import ContentGenerator, GenerationPolicy
 from deception.generation.models import digest
@@ -87,8 +89,9 @@ class TicketHandler:
                              data_namespace="1" * 64, state_sha256=digest(data), reason_code="ticket_created")
 
 
-def test_noncommerce_domain_runs_full_generation_mapping_validation_and_rendering(tmp_path):
-    """非電商領域通過完整協調、模型生成、通用資料映射、契約驗證及最終回送。"""
+@pytest.mark.parametrize("use_fallback", [False, True])
+def test_noncommerce_domain_runs_full_generation_mapping_validation_and_rendering(tmp_path, use_fallback):
+    """非電商的模型生成或固定備援皆通過完整映射、契約驗證及回送，不要求商品 ID。"""
     response_schema = {"type": "object", "required": ["ticket"], "additionalProperties": False,
                        "properties": {"ticket": {"type": "object", "required": ["id", "state", "note"],
                                                   "additionalProperties": False, "properties": {
@@ -123,7 +126,8 @@ def test_noncommerce_domain_runs_full_generation_mapping_validation_and_renderin
                                    trusted_sources=["detector"], rules=[{**common, **runtime.model_dump(), "site_id": scope.site_id,
                                        "rule_id": "ticket-rule", "scenario_id": scope.scenario_id}],
                                    templates=[{"template_id": "ticket-created", "body": {"ticket": {"id": "", "state": "", "note": ""}}}])
-    backend, calls = function_backend(field_id="note", value="Your synthetic support ticket is open.")
+    note = "Your support ticket is open."
+    backend, calls = function_backend(field_id="note", value=0 if use_fallback else note)
     generation_policy = GenerationPolicy(domain="helpdesk", policy_id="ticket-content", policy_version="1", enabled=True,
                                          rules=[{**common, "rule_id": "ticket-note", "outcome_id": "created", "status_code": 201,
                                                  "protected_pointers": ["/ticket/id", "/ticket/state"], "fields": [
@@ -134,6 +138,13 @@ def test_noncommerce_domain_runs_full_generation_mapping_validation_and_renderin
         scenarios=ScenarioEngine(scenario_policy, domain="helpdesk", registry=DomainRegistry([TicketHandler()])),
         generator=generator, composer=ResponseComposer(output), gate=OfficialResponseGate(registry),
         data_provider=TicketProvider(scope))
+    if use_fallback:
+        pipeline.recovery = RecoveryTool(RecoveryPolicy(
+            domain="helpdesk", policy_id="ticket-fallback", policy_version="1", enabled=True,
+            rules=[{**common, "rule_id": "fixed-ticket-note", "generation_rule_id": "ticket-note",
+                    "generation_policy_sha256": generator.policy_sha256,
+                    "scenario_policy_sha256": pipeline.scenarios.policy_sha256,
+                    "outcome_id": "created", "status_code": 201, "values": {"note": note}}]))
     request = NormalizedRequest(request_id="ticket-run", method="POST", raw_url="https://shop.test/api/tickets/ticket-001",
                                 path="/api/tickets/ticket-001", raw_path=b"/api/tickets/ticket-001", query_string=b"", query=(),
                                 headers=(("host", "shop.test"),), body=b"{}")
@@ -142,6 +153,9 @@ def test_noncommerce_domain_runs_full_generation_mapping_validation_and_renderin
     assert result.decision == "validated", result
     rendered = ResponseRenderer(pipeline.gate).render(result, request)
     assert rendered.status_code == 201 and rendered.gate_result.valid is True
-    assert json.loads(rendered.body) == {"ticket": {"id": "ticket-001", "state": "open", "note": "Your synthetic support ticket is open."}}
+    assert json.loads(rendered.body) == {"ticket": {"id": "ticket-001", "state": "open", "note": note}}
+    if use_fallback:
+        assert result.trace["generation"]["source"] == "fallback"
+        assert result.trace["repairs"] == 1 and len(calls["generator"]) == 2
     assert result.trace["domain"] == "helpdesk" and calls["generator"]
     generator.cache.close()

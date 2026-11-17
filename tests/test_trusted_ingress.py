@@ -2,6 +2,8 @@
 
 import json
 import base64
+import shutil
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -52,18 +54,18 @@ def vector_request() -> NormalizedRequest:
     )
 
 
-def verifier() -> TrustedSessionVerifier:
-    """建立固定向量使用的公開金鑰與程序內 Replay 驗證器。"""
+def verifier(store=None) -> TrustedSessionVerifier:
+    """建立固定向量使用的公開金鑰與驗證器，預設使用程序內 Replay Store。"""
     return TrustedSessionVerifier(
         keys=TrustedKeyRegistry({("gateway", "gateway-1"): bytes.fromhex(VECTOR["public_key_hex"])}),
-        replay_store=ReplayStore(),
+        replay_store=ReplayStore() if store is None else store,
     )
 
 
-def provider() -> TrustedSessionAssessmentProvider:
+def provider(store=None) -> TrustedSessionAssessmentProvider:
     """建立固定向量使用的共享 Replay 驗證 provider。"""
     return TrustedSessionAssessmentProvider(
-        verifier(),
+        verifier(store),
         expected_issuer="gateway",
         expected_audience="mirage",
         environment_id="env-1",
@@ -86,6 +88,22 @@ def test_fixed_jws_vector_becomes_pipeline_assessment():
     assert assessment.request_fingerprint == fingerprint_request(request)
     assert assessment.verdict == "malicious"
     assert assessment.attack_types == ["trusted-session"]
+
+
+def test_node_signature_reaches_python_ingress():
+    """用 Node.js 簽發固定向量，驗證 Python 入口接受原始請求並拒絕已修改的內容。"""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is required for the cross-language signing vector")
+    script = Path(__file__).parent / "fixtures/golden_vectors/sign_trusted_vector.mjs"
+    signed = subprocess.run([node, str(script)], check=True, capture_output=True,
+                            text=True, timeout=10).stdout
+    request = vector_request()
+    request = replace(request, headers=(*request.headers[:-1], ("x-trusted-session", signed)))
+    adapter = provider()
+    with pytest.raises(TrustedSessionError, match="fingerprint_mismatch"):
+        adapter(replace(request, body=b"changed"))
+    assert adapter(request).assessment_id == VECTOR["claims"]["assessment_id"]
 
 
 @pytest.mark.parametrize("change", ["header", "duplicate", "context"])
@@ -125,6 +143,15 @@ def test_replayed_jws_is_rejected_by_provider():
     adapter(request)
     with pytest.raises(TrustedSessionError, match="replay"):
         adapter(request)
+
+
+@pytest.mark.parametrize("name", ["host", "authorization", "content-type", "content-length", "x-request-id"])
+def test_ambiguous_fingerprint_headers_are_rejected(name):
+    """重要標頭重複時，即使值相同也拒絕，避免 Gateway 與 ASGI 的解析歧義。"""
+    request = vector_request()
+    changed = replace(request, headers=(*request.headers, (name, "value"), (name.upper(), "value")))
+    with pytest.raises(ValueError, match="ambiguous"):
+        fingerprint_request(changed)
 
 
 def test_http_pipeline_consumes_verified_assessment_before_c():

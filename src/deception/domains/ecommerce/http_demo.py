@@ -31,7 +31,7 @@ from mirage_validator.request_matching import base_identity
 from deception.security import load_catalog
 from .weaknesses import configure_policies, configure_specification
 
-from deception.api.pipeline import make_pipeline_handler
+from deception.api.pipeline import AssessmentProvider, make_pipeline_handler
 from deception.api.app import create_app as create_ingress_app
 
 
@@ -46,7 +46,7 @@ class DemoConfig(SyntheticModel):
     product_count: int = Field(default=2, ge=2, le=10)
     run_id: str = Field(default="isolated-demo", pattern=SLUG)
     weakness_scenario: str | None = Field(default=None, pattern=SLUG)
-    fallback_description: str = Field(default="This is a reviewed synthetic demonstration product.", min_length=10, max_length=120)
+    fallback_description: str = Field(default="See the product details for more information.", min_length=10, max_length=120)
     fallback_missing_message: str = Field(default="Entity with requested id {request_entity_id} was not found.", min_length=10, max_length=120)
 
     @field_validator("origin")
@@ -83,7 +83,7 @@ class _ObservedPipeline:
         """沿用完整協調器，不保存訪客 body／headers／路徑或模型提示。"""
         result = await self.pipeline.run(request, assessment, **kwargs)
         generation = result.trace.get("generation", {})
-        source = ("fallback" if generation.get("source") == "fallback" else
+        source = (generation["source"] if generation.get("source") in ("fallback", "template") else
                   "cache" if generation.get("cache_hit") else "model") if result.decision == "validated" else None
         self.history.append({"request_id": request.request_id, "decision": result.decision,
                              "status_code": result.candidate.status_code if result.candidate else None,
@@ -106,7 +106,8 @@ def _recovery_policy(config, scenarios, generator) -> RecoveryPolicy:
     """只為本次合成契約建立同結果固定值，綁定情境與生成政策的完整摘要。"""
     rules = []
     for rule in generator.policy.rules:
-        selector = rule.model_dump(mode="json", exclude={"rule_id", "fields", "protected_pointers"})
+        selector = rule.model_dump(mode="json", exclude={"rule_id", "fields", "protected_pointers",
+                                                         "generation_mode", "planning_mode", "fact_keys"})
         field = rule.fields[0].field_id
         if rule.outcome_id == "found":
             value = config.fallback_description
@@ -123,11 +124,11 @@ def _recovery_policy(config, scenarios, generator) -> RecoveryPolicy:
 
 
 def create_app(config: DemoConfig | None = None, *, output_root: Path | None = None, config_path: Path | None = None,
-               weakness_catalog: Path | None = None) -> FastAPI:
+               weakness_catalog: Path | None = None, assessment_provider: AssessmentProvider | None = None, handler_factory=None) -> FastAPI:
     """建立可由 Docker 啟動的完整展示 app；輸入只有管理者設定，所有契約核准均限合成目錄。
 
     每次啟動建立獨立輸出目錄，保留固定種子資料與生成內容快取；不改 repo 的來源核准。
-    模擬判定將每個目標請求標為測試攻擊，只驗證處理流程，不提供實際攻擊偵測或來源認證。
+    未指定 provider 時使用模擬判定。部署程式可注入可信 provider，失敗由 pipeline 拒絕。
     """
     if config is None:
         config = load_demo_config(Path(os.environ.get("MIRAGE_DEMO_CONFIG") or config_path or "domains/ecommerce/configs/demo.yaml"))
@@ -166,6 +167,9 @@ def create_app(config: DemoConfig | None = None, *, output_root: Path | None = N
     configure_policies(scenario_policy, generation_policy, selected_weakness)
     scenario_policy = type(scenario_policy).model_validate(scenario_policy.model_dump(mode="json"))
     generation_policy = type(generation_policy).model_validate(generation_policy.model_dump(mode="json"))
+    for rule in generation_policy.rules:
+        if config.mode == "local" and rule.outcome_id == "missing":
+            rule.generation_mode = "reviewed_template"
     scenarios = ScenarioEngine(scenario_policy, domain=config.domain)
     registry = PlatformRegistry(directory.parent)
     binding = DeploymentBinding(**runtime.model_dump(), binding_id="isolated-demo", site_id=scope.site_id,
@@ -198,8 +202,13 @@ def create_app(config: DemoConfig | None = None, *, output_root: Path | None = N
                                 observed_at=now - timedelta(seconds=1), expires_at=now + timedelta(seconds=600))
 
     history = deque(maxlen=64)
-    handler = make_pipeline_handler(_ObservedPipeline(pipeline, history), runtime=runtime, generation_config=data_config,
-                                    dataset=dataset, assessment_provider=simulated_assessment)
+    observed_pipeline = _ObservedPipeline(pipeline, history)
+    if handler_factory is None:
+        handler = make_pipeline_handler(observed_pipeline, runtime=runtime, generation_config=data_config,
+                                        dataset=dataset, assessment_provider=simulated_assessment if assessment_provider is None else assessment_provider)
+    else:
+        handler = handler_factory(observed_pipeline, runtime, data_config, dataset)
+
 
     @asynccontextmanager
     async def lifespan(app):
@@ -221,10 +230,14 @@ def create_app(config: DemoConfig | None = None, *, output_root: Path | None = N
     @app.get("/demo/info", include_in_schema=False)
     async def information():
         """僅公開合成測試身份、商品資料及快照摘要，方便呼叫及一致性檢查。"""
-        return {"test_only": True, "assessment_mode": "simulated_malicious", "domain": config.domain, "mode": config.mode,
+        return {"test_only": True, "assessment_mode": "session_world" if handler_factory is not None else ("simulated_malicious" if assessment_provider is None else "injected_provider"), "domain": config.domain, "mode": config.mode,
                 "product_ids": [product.id for product in dataset.products], "product_path_template": "/api/products/{id}",
                 "products": [{"id": product.id, "title": product.title} for product in dataset.products],
-                "dataset_sha256": digest(dataset.model_dump(mode="json")), "transactions_supported": False,
+                "variants": [{"id": variant.id, "sku": variant.sku, "unit_price": variant.price.amount_minor}
+                             for variant in dataset.variants],
+                "dataset_sha256": digest(dataset.model_dump(mode="json")),
+                "transactions_supported": getattr(app.state, "transactions_supported", False),
+                "medusa_store_enabled": getattr(app.state, "medusa_store_enabled", False),
                 "recent_results": list(history),
                 "security_scenario": None if selected_weakness is None else {
                     "scenario_id": selected_weakness.scenario_id,

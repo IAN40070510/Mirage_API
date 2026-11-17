@@ -2,6 +2,7 @@
 
 from .admission import AdmissionControl, AdmissionOperationResult, AdmissionState
 from .candidate import CandidateLoadResult, CandidateRecord, CandidateStore, CandidateStoreStatus
+from .commit import CommitResult
 from .models import (
     CommitSource,
     DeviationApproval,
@@ -12,6 +13,7 @@ from .models import (
     SecurityErrorSource,
     SnapshotSource,
     WorldScope,
+    WorldCompatibility,
     WorldSnapshot,
 )
 from .postgres_admission import PostgresAdmissionControl
@@ -19,6 +21,7 @@ from .postgres_candidate import PostgresCandidateStore
 from .postgres_replay import PostgresReplayStore
 from .postgres_store import PostgresWorldStore
 from .projection_registry import (
+    ProfileRevocation,
     ProjectionAuthorization,
     ProjectionAuthorizationDecision,
     ProjectionAuthorizationResult,
@@ -29,6 +32,7 @@ from .projection_registry import (
 )
 from .replay import ReplayConsumeResult, ReplayKey, ReplayStore
 from .store import (
+    CommitLookupResult,
     InMemoryWorldStore,
     SnapshotCorruptionError,
     WorldLoadResult,
@@ -36,12 +40,17 @@ from .store import (
     WorldStoreError,
     WorldStoreStatus,
 )
+from .event_store import EventWorldStore, PostgresEventWorldStore
 
 __all__ = [
     "AdmissionControl",
     "AdmissionOperationResult",
     "AdmissionState",
     "CommitSource",
+    "CommitResult",
+    "EventWorldStore",
+    "PostgresEventWorldStore",
+    "CommitLookupResult",
     "CandidateLoadResult",
     "CandidateRecord",
     "CandidateStore",
@@ -70,6 +79,8 @@ __all__ = [
     "SnapshotCorruptionError",
     "SnapshotSource",
     "WorldScope",
+    "ProfileRevocation",
+    "WorldCompatibility",
     "WorldSnapshot",
     "WorldLoadResult",
     "WorldStore",

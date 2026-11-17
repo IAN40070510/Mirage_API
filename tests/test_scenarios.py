@@ -179,11 +179,11 @@ def test_benign_assessment_is_not_applicable(scenario_stack):
 
 
 @pytest.mark.parametrize("changes", [
-    {"method": "POST"}, {"body": b"changed"}, {"headers": (("host", "shop.test"), ("x-test", "changed"))},
+    {"method": "POST"}, {"body": b"changed"}, {"headers": (("host", "shop.test"), ("content-type", "application/json"))},
     {"raw_url": "https://shop.test/api/products/other"}, {"query_string": b"a=1&a=2"},
 ])
 def test_request_change_invalidates_prior_assessment(scenario_stack, changes):
-    """同 request_id 的資料遭替換時，舊判定不可沿用。"""
+    """同 request_id 的受綁定欄位遭替換時，舊判定不可沿用。"""
     stack = scenario_stack
     changed = replace(stack["request"], **changes)
     _, result = prepare(stack, request=changed, assessment=assessment_for(stack["request"]))

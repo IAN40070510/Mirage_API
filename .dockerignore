@@ -7,6 +7,11 @@
 .aws
 .codex
 .agents
+local-notes
+*.key
+*.pem
+*.p12
+*.pfx
 .venv
 venv
 node_modules

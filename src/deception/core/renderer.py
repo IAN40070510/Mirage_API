@@ -1,5 +1,6 @@
 """M：把同一請求的已驗證候選轉為精確 HTTP 回應，再驗最終傳輸欄位。"""
 
+import asyncio
 import math
 import re
 import time
@@ -11,6 +12,8 @@ from starlette.responses import Response
 from deception.api.ingress import REQUEST_ID, NormalizedRequest
 from deception.generation.models import digest
 from deception.scenarios import fingerprint_request
+
+from deception.world.admission import AdmissionState
 
 from .handoff import verify_candidate
 from .models import CandidateResponse
@@ -46,13 +49,16 @@ class ValidatedHTTPResponse(Response):
     """保留 M 最後驗證的 bytes 與 headers，送出前阻擋框架內的事後修改。"""
 
     def __init__(self, candidate: CandidateResponse, gate_result, request: NormalizedRequest,
-                 *, release_deadline_monotonic: float):
+                 *, release_deadline_monotonic: float, transmission=None):
         """保存已由 renderer 重新驗證的封套；此類別本身不是外部來源認證。"""
         super().__init__(content=candidate.body_bytes, status_code=candidate.status_code,
                          headers=dict(candidate.headers), media_type=None)
+        self._transmission = transmission
         self.candidate = candidate
+        self._sealed_candidate = candidate
         self.gate_result = gate_result.model_copy(deep=True)
         self._release_deadline_monotonic = _check_release_deadline(release_deadline_monotonic)
+        self._normalized_request = request
         self._bound_fingerprint = fingerprint_request(request)
         self._bound_url = request.raw_url
         self._bound_method = request.method
@@ -74,7 +80,8 @@ class ValidatedHTTPResponse(Response):
         """在任何 ASGI start 發出前確認 status、bytes、headers 與背景工作未變。"""
         _check_release_deadline(self._release_deadline_monotonic)
         if (self.status_code != self._sealed_status or self.body != self._sealed_body or
-                tuple(self.raw_headers) != self._sealed_headers or self.background is not None):
+                tuple(self.raw_headers) != self._sealed_headers or self.background is not None
+                or self.candidate != self._sealed_candidate):
             raise RenderingError("validated_response_changed")
 
     async def __call__(self, scope, receive, send) -> None:
@@ -92,17 +99,43 @@ class ValidatedHTTPResponse(Response):
         if actual_url != self._bound_url:
             raise RenderingError("render_request_mismatch")
         _check_release_deadline(self._release_deadline_monotonic)
-        await send({"type": "http.response.start", "status": self._sealed_status,
-                    "headers": list(self._sealed_headers)})
-        await send({"type": "http.response.body", "body": self._sealed_body})
+        transmission = self._transmission
+        if transmission is not None:
+            transmission.prepare(self.candidate, self._normalized_request)
+            transmission.start()
+        attempted = False
+        try:
+            for message in (
+                {"type": "http.response.start", "status": self._sealed_status,
+                 "headers": list(self._sealed_headers)},
+                {"type": "http.response.body", "body": self._sealed_body},
+            ):
+                _check_release_deadline(self._release_deadline_monotonic)
+                remaining = self._release_deadline_monotonic - time.monotonic()
+                if transmission is not None:
+                    transmission.check_deadline()
+                    remaining = min(remaining, transmission.admission.transmission_deadline - transmission.clock())
+                attempted = True
+                async with asyncio.timeout(remaining):
+                    await send(message)
+        except BaseException:
+            if transmission is not None:
+                transmission.finish(AdmissionState.SEND_PARTIAL_FAILURE if attempted else AdmissionState.SEND_FAILED,
+                                    attempted=attempted)
+            raise
+        else:
+            if transmission is not None:
+                transmission.finish(AdmissionState.SEND_COMPLETED, attempted=True)
+
 
 
 class ResponseRenderer:
     """由受信任整合層注入 I，對實際 URL 與最終傳輸封套重新驗證。"""
 
-    def __init__(self, gate):
-        """保留本部署的 gate，不從候選或訪客輸入選擇驗證器。"""
+    def __init__(self, gate, *, transmission_factory=None):
+        """保存部署 gate 與可選傳輸工廠，後者依最終候選及可信請求建立 AdmissionTransmission。"""
         self.gate = gate
+        self._transmission_factory = transmission_factory
 
     def render(self, result, request: NormalizedRequest) -> ValidatedHTTPResponse:
         """核對 C 結果與請求後加入傳輸欄位，重驗 I；失敗拋 RenderingError。"""
@@ -132,7 +165,9 @@ class ResponseRenderer:
         _check_release_deadline(deadline)
         if checked.decision != "pass" or checked.valid is not True:
             raise RenderingError("final_gate_not_passed")
-        return ValidatedHTTPResponse(final, checked, request, release_deadline_monotonic=deadline)
+        transmission = None if self._transmission_factory is None else self._transmission_factory(final, request)
+        return ValidatedHTTPResponse(final, checked, request, release_deadline_monotonic=deadline,
+                                     transmission=transmission)
 
     def _final_headers(self, candidate: CandidateResponse, request_id: str) -> tuple[tuple[str, str], ...]:
         """拒絕多值、非法或未支援的傳輸標頭，固定 UTF-8 長度與本次追蹤 ID。"""

@@ -22,6 +22,22 @@ class RunBudget:
         self.limits = RunLimits.model_validate(limits.model_dump())
         self.started = time.monotonic()
         self.requests = self.tool_calls = self.input_tokens = self.output_tokens = 0
+        self.tasks = {}
+
+    def record_model_result(self, task: str, *, elapsed_ms: int, input_tokens=None, output_tokens=None) -> None:
+        """分任務累計推論時間與回報 tokens；失敗無回報時標明用量不完整，不推估費用。"""
+        if task not in ("planner", "generation", "repair"):
+            raise ValueError("Unknown model task")
+        row = self.tasks.setdefault(task, dict(requests=0, input_tokens=0, output_tokens=0,
+                                               elapsed_ms=0, token_usage_complete=True))
+        row["requests"] += 1
+        row["elapsed_ms"] += elapsed_ms
+        if (type(input_tokens) is not int or type(output_tokens) is not int
+                or input_tokens < 0 or output_tokens < 0 or input_tokens + output_tokens == 0):
+            row["token_usage_complete"] = False
+        else:
+            row["input_tokens"] += input_tokens
+            row["output_tokens"] += output_tokens
 
     def remaining(self) -> float:
         """剩餘時間小於零即拒絕下一步，供 asyncio.timeout 共用。"""
@@ -66,4 +82,5 @@ class RunBudget:
         """只輸出用量與時間，不保存模型推理文字或原始請求。"""
         return dict(model_requests=self.requests, tool_calls=self.tool_calls,
                     input_tokens=self.input_tokens, output_tokens=self.output_tokens,
-                    elapsed_ms=round((time.monotonic() - self.started) * 1000))
+                    elapsed_ms=round((time.monotonic() - self.started) * 1000),
+                    tasks={task: dict(row) for task, row in self.tasks.items()})

@@ -45,12 +45,16 @@ schema_version: 1
 domain: ecommerce
 policy_id: product-content-generation
 policy_version: '1'
-prompt_version: '1'
+prompt_version: '3'
 enabled: false
 # limits 與 rules 的完整格式見 domains/ecommerce/inputs/policies/generation.yaml。
 ```
 
 每個 `GenerationRule` 必須明確配置契約身份、分支、保護位置與 `fields`。欄位設定如下：
+
+規則另可設定 `planning_mode: fixed_fields`，由主機直接選完整欄位集合；預設 `model` 保留模型規劃。`generation_mode: reviewed_template` 使用精確同分支的啟用 RecoveryPolicy 固定值，不呼叫模型；沒有核准值就拒絕。預設 `model` 保留生成。HTTP 電商 local 展示以固定欄位規劃商品描述，404 則使用核准且綁定請求 ID 的固定訊息。CLI 真模型展示仍生成兩個分支以驗證模型能力，不能把兩種展示的模型次數混算。
+
+`fact_keys` 可列出領域 `facts` 字典的實際鍵，例如 `[/product/id, /product/title]`；這裡是字典鍵，不是對 facts 重新解讀 JSON Pointer。只有列出的事實會進入 planner 的 read_facts、生成提示與內容依賴；省略時使用全部 facts，缺少指定鍵就拒絕，不能默默忽略依賴。管理者必須完整列出任務所需事實，不將未提供的資料視為可自由發揮的內容。
 
 | 欄位 | 用途與限制 |
 | --- | --- |
@@ -62,6 +66,12 @@ enabled: false
 
 同一條規則的欄位一起原子發布，因此必須使用相同 `cache_scope` 及 `entity_pointer`。目前拒絕混合 request/entity 或不同實體引用。首版要求 `GenerationIntent.field_ids` 與規則的完整欄位集合一致，不能只生成其中一部分。
 
+電商範本與隔離展示的提示版本為 `3`：商品描述要求一個面向 API 使用者、20–80 字元（含空白與標點）的英文句子，只使用明列事實；不能從商品名稱推定功能、效益、材質、庫存、價格或能力。事實不足時使用中性描述，資料值中的命令不得執行。404 訊息表示本情境找不到指定商品，不能改寫成缺貨、暫時不可用或權限不足；範例值為 `The requested product was not found.`。不得將內部合成、情境、展示或生成過程寫成對外業務說明，也不得因此修改權威事實中的合法名稱或材質。展示與範本共用這些語意規則，HTTP 展示沿用同一政策建立函式。
+
+這項文案調整對應 README 的契約、可能業務語意與連續性宗旨，不把內部生成語境當成產品功能。HTTP 展示的預設固定描述另改為 `See the product details for more information.`；`test_only` 診斷、合成商品 ID／名稱及展示文件仍明確標示測試用途，不把隔離 demo 偽裝成正式服務。這些標記表示目前 demo 本身仍可被辨識，不能因提示改寫宣稱已完成真實回應銜接。
+
+20–80 字元目前是提示要求；隔離合成契約仍維持原本 10–120 字元的 schema，因此通過 schema 不代表符合較窄的文字要求，也不代表語意正確。本次沒有修改正式平台契約或加入語意評分器。稀少事實、模糊名稱、資料內指令及不存在／缺貨的區分，仍須用真本機模型評估；離線流程測試無法證明模型會遵守提示。共用生成提示的優先順序、摘要與快取隔離見 [模型工具](llm.md#規劃與生成模式)。
+
 ## 公開 API
 
 | 函式／方法 | 功能、輸入與輸出 |
@@ -72,14 +82,20 @@ enabled: false
 | `select_rule(plan, context)` | 核對政策啟用狀態、唯一操作／結果、scope、模板目標及合成資料工具映射，回傳一條規則 |
 | `await generate(plan, context, profile, facts=..., budget=..., intent=..., feedback=None)` | 從已發布內容重用值，或呼叫 backend 生成，再驗證及合併；回傳暫存 `GeneratedContent` |
 | `apply(plan, rule, schemas, values)` | 要求完整且無額外的欄位集合，依 schema 檢查各值，再替換允許的既有位置 |
+| `cache_binding(plan, context, profile, facts)` | 核對完整上下文、規則與欄位依賴，回傳規則、schemas、事實投影及內容鍵 |
+| `cached(plan, context, profile, facts=..., budget=...)` | 僅對可信世界模式讀取已發布內容並驗欄位；回傳 `GeneratedContent` 或 `None`，不提供本次 gate pass |
 | `ContentCache(path=None)` | 建立記憶體或指定檔案的 SQLite 內容快取 |
 | `cache.get(key)` | 回傳內容副本或 `None`；摘要不符會拒絕讀取 |
 | `cache.publish(key, values)` | 僅供完成回應組合與契約驗證檢查的任務協調器發布；同鍵競爭採先成功發布值 |
+| `cache.get_entry(key)` | 讀取世界內容的值與首次配方封套，驗整份摘要；損毀就拒絕 |
+| `cache.publish_entry(key, values, provenance)` | 在獨立資料表原子發布值與首次證據，同鍵競爭回傳勝出封套 |
 | `cache.close()` | 關閉自有資料庫連線；指定檔案路徑時保留已保存內容，預設記憶體快取的內容隨關閉消失 |
 | `field_schema(profile, plan, pointer)` | 從同一平台規格工具契約的回應取得局部生成 schema |
 | `digest(value)` | 固定 JSON 序列化後計算 SHA-256，拒絕 NaN 等不可重現值 |
 
 `pointers.py` 的 `tokens()`、`overlap()`、`get()`、`replace()` 支援上述受限 Pointer 操作。陣列索引須是標準非負整數；不接受負值、前導零或 append，也不新增不存在的模板欄位。
+
+`apply()` 在所有欄位驗證成功後才開始替換獨立計畫的值。局部 schema 失敗會拋出 `deception.generation.models.GeneratedFieldValidationError`（`ValueError` 子類別），含至多 16 筆受控 `FieldViolation`；例外訊息固定，不包含生成值。`FieldViolation` 只描述欄位 ID、固定限制碼與適用的數值或 JSON 型別，供 [有限修正回饋](recovery.md#次數生命週期與快取) 使用。完整欄位集合錯誤或缺少可信結構資訊的其他失敗仍採泛用回饋，不從原始例外推導內容。
 
 一般整合建議交由任務協調器管理驗證及發布：
 
@@ -118,11 +134,45 @@ generated = await generator.generate(
 
 內容鍵包含領域、環境／部署／服務、完整 scope、資料 namespace／摘要、實體或請求引用、規則、欄位 schema、情境選擇工具/內容生成器政策、body 骨架、事實投影、提示及模型身份。相同實體在相同規則與設定下可跨 request ID 重用；不同 operation／骨架不保證共用同一生成內容。
 
+上述為未注入 `ContentLifecycle` 的相容模式；模型／政策／prompt 變更仍隔離快取。啟用可信世界模式時，改用下節的穩定內容身份，不沿用或遷移舊 `content` 資料表的值。
+
 SQLite 唯一鍵讓競爭者取得先成功發布者的值。任務協調器會用勝出內容重新組合並經契約驗證器驗證；快取不保存可讓其他請求直接使用的 gate 通行結果，也不代替交易狀態。
 
 修正與備援工具提供非空 `feedback` 要求修正時，內容生成器會略過既有快取讀取並重新呼叫模型，避免反覆讀到剛被部署 gate 拒絕的舊內容。新值仍須經完整回應組合與契約驗證及發布競爭核對；若既有勝出內容無法通過重驗，流程停止，不刪改舊快取或以備援掩蓋儲存／競爭問題。
 
 直接 API 可能拋出 `ValueError`、schema 驗證錯誤、共用 `BudgetExceeded` 或模型／儲存錯誤。內容生成器不會自行刪欄位、轉型、補值或發布失敗內容。任務協調器/修正與備援工具對允許的欄位／組合錯誤及契約驗證器明確僅有 body 錯誤的 reject，依共用上限重新生成；耗盡後只可嘗試管理者配置、經相同回應組合與契約驗證重驗的同分支備援。其他契約驗證器不明結果、身份或 metadata 錯誤直接停止；完整條件見 [修正與備援工具失敗處理](recovery.md#進入備援及失敗處理)。
+
+## 可信世界內容生命週期
+
+`ContentLifecycle(world_scope, entity_version, content_epoch)` 是伺服器組裝層提供的內容身份。`world_scope` 使用既有 WorldScope 的 environment、deployment、session、world_generation_id；`entity_version` 是可信實體版次，不能把每次都增加的全域 snapshot version 當成未變實體的版次；`content_epoch` 是管理者明確切換內容配方的版次。環境／部署必須與本次 GenerationContext 相同。不同 Session、世界 Generation、實體版次或 content_epoch 不會借用舊內容。
+
+```python
+from deception.generation import ContentLifecycle
+
+# 以下資料必須來自可信 Session/World 組裝層及本次有效的 world read，不能取訪客自稱的 header。
+lifecycle = ContentLifecycle(
+    world_scope=verified_world_read.snapshot.scope,
+    entity_version=verified_entity_version,
+    content_epoch=approved_content_epoch,
+)
+result = await pipeline.run(
+    request, verified_assessment, runtime=trusted_runtime,
+    generation_config=checked_e_config, dataset=checked_e_dataset,
+    content_lifecycle=lifecycle,
+)
+```
+
+生命週期內容鍵仍保留領域、環境／部署／服務、完整 DatasetScope（含契約 hash、scenario、run）、WorldScope、實體／請求引用、欄位目標、schemas、規則身份、情境政策 hash 及實際投影 facts。只有原始全域 state／namespace、body 骨架及生成配方改列為首次發布證據，而非每次讓內容失效的因素。每次請求仍從本次資料組合權威欄位並驗證，不拿舊 body、價格或 gate pass 代替。
+
+同一內容身份下首次通過 H/I 的值與 provenance 原子保存於 SQLite `content_entries`。provenance 記錄原模型／任務配方、prompt／policy 版本與 hash、planner guidance hash、原狀態／namespace 和骨架摘要；固定模板或備援則保存來源與核准政策證據。不同模型、prompt、planner 建議或產生策略不會覆寫既定文字。若希望新文案，必須由可信組裝層更新 content_epoch；這個內容切換不是 WorldStore 的 Generation Cutover 或發送授權，不得混用。
+
+模型前命中時，C 已完成 B/F/E 與本次規則／facts 核對；G 重新驗欄位，C 再組合並驗 H/I、期限與請求，M 最後重驗 HTTP。此時不要求模型可用，模型請求數為 0，trace.model 明列 `provider: not_used`、`execution_mode: cache`，原模型位於 generation.provenance。首次使用核准備援／模板也固定為該世界的內容，模型恢復後不突然替換；舊模型配方快取不會因此被污染。
+
+快取損毀、依賴不明或既定內容未通過目前 gate 時停止，不能在相同身份下重生另一份內容掩蓋問題。競爭發布若採不同勝出值，必須重新組合並驗 I；值與原配方永遠一起保存。不能把快取摘要當作防本機寫入者竄改的簽章或 World Admission。
+
+此功能不會驗簽 Session、不自行取得 WorldSnapshot、不消費 World ReadAdmission 或建立 ResponseAdmission。呼叫端必須使用既有可信世界與發送流程，核對當前 Session／epoch、world 期限與撤銷，再注入本次綁定；不能把格式正確的 ContentLifecycle 當作授權。HTTP 接法見 [上下文](context.md)。
+
+世界內容紀錄目前沒有自動 GC／LRU。不能因一般快取 TTL 到期就刪掉仍有效世界的既定文案，否則下次生成會破壞連續性；退役世界的儲存清理與容量管理須由部署層依已核對的世界生命週期處理。這個 SQLite 紀錄也不提供跨多節點的 WorldStore 交易或發送授權保證。
 
 ## 使用及驗證
 
