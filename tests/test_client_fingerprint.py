@@ -45,3 +45,26 @@ def test_preparing_fingerprint_keeps_original_wire_request_unchanged():
     before = (str(request.url), request.headers.raw, request.content)
     assert len(fingerprint_httpx_request(request, "request-1")) == 64
     assert (str(request.url), request.headers.raw, request.content) == before
+
+
+def test_httpx2_test_client_request_uses_the_same_wire_contract():
+    """新版 Starlette 使用相容的 httpx2 Request 時，仍依實際 bytes 計算同一摘要。"""
+    httpx2 = pytest.importorskip("httpx2")
+    values = dict(content=b'{"quantity": 2}', headers={"x-request-id": "request-1"})
+    original = httpx.Request("POST", "https://example.test/items?a=1&a=2", **values)
+    compatible = httpx2.Request("POST", "https://example.test/items?a=1&a=2", **values)
+    assert fingerprint_httpx_request(compatible, "request-1") == fingerprint_httpx_request(original, "request-1")
+
+
+def test_httpx2_streaming_request_is_rejected_without_consumption():
+    """兩種相容客戶端都必須先緩衝 body，不能以放寬類別檢查繞過串流限制。"""
+    httpx2 = pytest.importorskip("httpx2")
+    request = httpx2.Request("POST", "https://example.test/items", content=iter([b"synthetic"]))
+    with pytest.raises(ValueError, match="not_buffered"):
+        fingerprint_httpx_request(request, "request-1")
+
+
+def test_non_request_object_is_rejected_by_required_wire_fields():
+    """移除具體類別檢查後，缺少請求介面的物件仍須明確拒絕。"""
+    with pytest.raises(ValueError, match="invalid_fingerprint_request"):
+        fingerprint_httpx_request(object(), "request-1")

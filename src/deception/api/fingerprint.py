@@ -3,8 +3,6 @@
 import hashlib
 import json
 
-import httpx
-
 from .ingress import NormalizedRequest
 
 FINGERPRINT_HEADERS = frozenset({
@@ -13,26 +11,32 @@ FINGERPRINT_HEADERS = frozenset({
 })
 
 
-def fingerprint_httpx_request(outgoing: httpx.Request, request_id: str) -> str:
+def fingerprint_httpx_request(outgoing, request_id: str) -> str:
     """將已完成建構的 HTTPX 請求轉為 Mirage v1 摘要，不依賴外部 Gateway。
 
+    接受 HTTPX／httpx2 相容的已緩衝請求介面，不依套件的 Request 類別身份判定。
     必須先固定 URL、標頭及 body bytes，再將相同請求送出。此函式不讀取串流、
     不改寫請求、不簽發授權；空識別、未緩衝 body 或重複核准標頭會 ValueError。
     傳入的 request_id 仍須與服務端解析的識別一致，否則服務端驗章拒絕。
     """
-    if not isinstance(outgoing, httpx.Request) or not isinstance(request_id, str) or not request_id:
+    if not isinstance(request_id, str) or not request_id:
         raise ValueError("invalid_fingerprint_request")
     try:
         body = outgoing.content
-    except httpx.RequestNotRead as error:
+        if not isinstance(body, bytes):
+            raise ValueError("invalid_fingerprint_request")
+        request = NormalizedRequest(
+            request_id=request_id, method=outgoing.method, raw_url=str(outgoing.url),
+            path=outgoing.url.path, raw_path=outgoing.url.raw_path.partition(b"?")[0],
+            query_string=outgoing.url.query, query=tuple(outgoing.url.params.multi_items()),
+            headers=tuple((name.decode("latin-1"), value.decode("latin-1")) for name, value in outgoing.headers.raw),
+            body=body,
+        )
+    except AttributeError as error:
+        raise ValueError("invalid_fingerprint_request") from error
+    except RuntimeError as error:
+        # 兩個相容套件的 RequestNotRead 均繼承 RuntimeError；不讀取或修補串流。
         raise ValueError("request_body_not_buffered") from error
-    request = NormalizedRequest(
-        request_id=request_id, method=outgoing.method, raw_url=str(outgoing.url),
-        path=outgoing.url.path, raw_path=outgoing.url.raw_path.partition(b"?")[0],
-        query_string=outgoing.url.query, query=tuple(outgoing.url.params.multi_items()),
-        headers=tuple((name.decode("latin-1"), value.decode("latin-1")) for name, value in outgoing.headers.raw),
-        body=body,
-    )
     return fingerprint_request(request)
 
 

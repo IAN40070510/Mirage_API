@@ -4,7 +4,7 @@
 
 ### 獨立客戶端的請求摘要
 
-`deception.api.fingerprint.fingerprint_httpx_request(request, request_id)` 可供 Mirage 獨立客戶端使用，不需要 MSDSS。輸入為已固定 URL、標頭與 body bytes 的 HTTPX Request，輸出為 v1 SHA-256 摘要；不修改請求、不讀取串流，也不簽發或核准身份。空 request_id、未緩衝 body 或重複核准標頭皆 ValueError。請先建好相同 request，再簽發 JWS 並送出，簽後修改 body、URL 或受綁定標頭會被服務端拒絕。
+`deception.api.fingerprint.fingerprint_httpx_request(request, request_id)` 可供 Mirage 獨立客戶端使用，不需要 MSDSS。輸入為已固定 URL、標頭與 body bytes 的 HTTPX／httpx2 相容請求介面，輸出為 v1 SHA-256 摘要；不依具體 Request 類別身份判斷，不修改請求、不讀取串流，也不簽發或核准身份。空 request_id、未緩衝 body 或重複核准標頭皆 ValueError。請先建好相同 request，再簽發 JWS 並送出，簽後修改 body、URL 或受綁定標頭會被服務端拒絕。
 
 ```python
 import httpx
