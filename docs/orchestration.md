@@ -42,7 +42,11 @@ flowchart LR
 
 生成政策由伺服器載入，明列允許的目標位置及 schema。請求內容與模型輸出都是待核對資料；模型不能選用另一個部署、run、契約或任意檔案／網路工具。錯誤時保持不可產生已驗證候選的結果，不由模型自行宣告通過。模型呼叫、工具嘗試及修正都受總預算與整體期限限制。
 
-本機工具規劃與結構化生成分別呼叫模型。Ollama 官方支援 [tool calling](https://docs.ollama.com/capabilities/tool-calling) 及 [JSON Schema structured outputs](https://docs.ollama.com/capabilities/structured-outputs)；實際可用性仍依鎖定的伺服器、adapter 與模型實測。程式的必經檢查不依賴模型是否遵守工具選擇指令。
+模型規劃與結構化生成使用獨立模型呼叫；fixed_fields 不呼叫 planner，reviewed_template 不呼叫模型。Ollama 官方支援 [tool calling](https://docs.ollama.com/capabilities/tool-calling) 及 [JSON Schema structured outputs](https://docs.ollama.com/capabilities/structured-outputs)；實際可用性仍依鎖定的伺服器、adapter 與模型實測。程式的必經檢查不依賴模型是否遵守工具選擇指令。各任務配方與支援設定見 [模型工具](llm.md)。
+
+結構化規劃目前由主機在推論前讀取必需契約，再讓模型依既有觀察選擇其他讀取或完成；該讀取仍使用相同工具預算、結果大小限制與期限。這省去選擇唯一合法動作的一次推論，沒有省略情境／資料／H/I 檢查。生成提示另明確區分欄位規則、僅供參考的規劃建議與資料文字；電商提示版本 `3` 的語意要求與限制見 [內容生成工具](generation.md#設定)。
+
+明確注入可信 ContentLifecycle 的部署另有模型前重用路徑：本次 B/F/E 與規則／依賴核對後讀取同世界已發布欄位，重新 G/H/I 與 M，無須先讓模型可用或重跑 planner。配方只影響首次生成，不覆寫同內容世代已採用的描述；未注入時保留原完整快照／配方隔離行為。這項內容身份不取代 WorldStore、ReadAdmission 或 ResponseAdmission，部署接法見 [生成上下文](context.md)。
 
 ## 事實、生成內容與一致性
 
@@ -192,7 +196,7 @@ Python 呼叫端可從 `deception.llm.selection` 匯入函式，以 `await list_
 | [Requests](https://github.com/psf/requests) | 2.34.2 | Apache-2.0 | tiktoken 安裝帶入的 HTTP 依賴，隨包包含 NOTICE |
 | [SQLite](https://www.sqlite.org/copyright.html) | 3.45.3 | Public Domain | Python `sqlite3` 使用的引擎，保存已驗證內容；Python wrapper 另隨 Python 授權管理 |
 
-本輪沒有安裝 `ollama` Python SDK；本機服務由 Pydantic AI／相容 SDK 連接。Ollama runtime 是獨立程式，其 [MIT 授權](https://github.com/ollama/ollama/blob/main/LICENSE) 與安裝版本另行管理。既有測試用 HTTPX 0.28.1（BSD-3-Clause）仍與 HTTPX2 分開存在，不能把兩個 distribution 的版本或授權檔互換。
+本輪沒有安裝 `ollama` Python SDK；本機服務由 Pydantic AI／相容 SDK 連接。Ollama runtime 是獨立程式，其 [MIT 授權](https://github.com/ollama/ollama/blob/main/LICENSE) 與安裝版本另行管理。HTTPX 0.28.1（BSD-3-Clause）供測試、可信 dispatcher 與身份查詢使用，現已列為執行期依賴；仍與 HTTPX2 分開存在，不能把兩個 distribution 的版本或授權檔互換。
 
 Python 標準庫的 `asyncio`、`hashlib`、`json`、`pathlib` 等隨 Python 提供，依 Python 的 PSF 授權及隨附聲明管理。本表列出模型路徑的直接與主要間接套件，不是完整 SBOM；其餘遞迴依賴及實際打包內容仍須依安裝／發布版本核對。`logfire-api` 的 MIT 以本次 distribution metadata 及上游專案核對，該 distribution 沒有單獨附帶 LICENSE 檔。
 
@@ -226,6 +230,8 @@ Pydantic AI 及 Ollama 的 MIT 是程式碼授權，模型權重、tokenizer、�
 現有 `domains/ecommerce/configs/generation.yaml` 的舊契約 hash 與 `product-found` scope 不能直接套到目前固定來源及 `product-lookup` family。正式資料載入須核對本次平台規格工具與情境選擇工具 scope，不自動重標既有資料或提升 Medusa `approved`。
 
 ## 本次真本機模型展示證據（2026-11-08）
+
+以下保留當時提示版本與規劃流程的歷史實測，不能當成目前提示版本 `3` 或契約預讀最佳化的測量結果。本次最佳化只以離線模型驗證流程；實際品質、tokens 與延遲須另行量測。
 
 在 Ollama **0.17.1** 上，以 Pydantic AI **2.66.0**、`planner_mode: structured_actions`、temperature **0.0**、單次輸出上限 **1024 tokens**，完成下列兩次實際模型展示。兩份報告的 `success`、`real_model` 均為 true，且模型身份明確為 local／ollama。
 

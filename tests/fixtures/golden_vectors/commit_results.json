@@ -1,0 +1,1033 @@
+{
+  "fixture_version": 1,
+  "result_encoding_version": 1,
+  "purpose": "Fixed CommitResult interchange vectors; JSON safe integers and Unicode only, not a general cross-language SDK.",
+  "cases": [
+    {
+      "name": "committed-unicode",
+      "accepted": true,
+      "outcome": {
+        "scope": {
+          "environment_id": "vector",
+          "deployment_id": "isolated",
+          "session_id": "session-vector",
+          "world_generation_id": "generation-vector"
+        },
+        "operation": "counter.add",
+        "idempotency_key": "business-vector",
+        "commit_attempt_id": "12345678-1234-4234-9234-123456789abc",
+        "result_encoding_version": 1,
+        "committed_state_version": 2,
+        "committed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "observed_state_version": 2,
+        "observed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "result_digest": "982906509d38f67e96cbc17f549cba346452fe8ab2348b075f99bc6698155a4d",
+        "result": {
+          "message": "測試購物車 🛒",
+          "nested": {
+            "": "BMP",
+            "🛒": "astral",
+            "items": [
+              0,
+              1,
+              null,
+              true,
+              "\n"
+            ]
+          }
+        },
+        "failure_code": null,
+        "replayed": false,
+        "status": "committed"
+      },
+      "digest_preimage_utf8_hex": "7b22617474656d7074223a2231323334353637382d313233342d343233342d393233342d313233343536373839616263222c2268617368223a2261616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161222c22726573756c74223a7b226d657373616765223a225c75366532635c75386136365c75386366635c75373236395c7538656361205c75643833645c7564656432222c226e6573746564223a7b226974656d73223a5b302c312c6e756c6c2c747275652c225c6e225d2c225c7565303030223a22424d50222c225c75643833645c7564656432223a2261737472616c227d7d2c22737461747573223a22636f6d6d6974746564222c2276657273696f6e223a327d"
+    },
+    {
+      "name": "already-committed",
+      "accepted": true,
+      "outcome": {
+        "scope": {
+          "environment_id": "vector",
+          "deployment_id": "isolated",
+          "session_id": "session-vector",
+          "world_generation_id": "generation-vector"
+        },
+        "operation": "counter.add",
+        "idempotency_key": "business-vector",
+        "commit_attempt_id": "12345678-1234-4234-9234-123456789abc",
+        "result_encoding_version": 1,
+        "committed_state_version": 2,
+        "committed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "observed_state_version": 2,
+        "observed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "result_digest": "982906509d38f67e96cbc17f549cba346452fe8ab2348b075f99bc6698155a4d",
+        "result": {
+          "message": "測試購物車 🛒",
+          "nested": {
+            "": "BMP",
+            "🛒": "astral",
+            "items": [
+              0,
+              1,
+              null,
+              true,
+              "\n"
+            ]
+          }
+        },
+        "failure_code": null,
+        "replayed": true,
+        "status": "already_committed"
+      },
+      "digest_preimage_utf8_hex": "7b22617474656d7074223a2231323334353637382d313233342d343233342d393233342d313233343536373839616263222c2268617368223a2261616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161222c22726573756c74223a7b226d657373616765223a225c75366532635c75386136365c75386366635c75373236395c7538656361205c75643833645c7564656432222c226e6573746564223a7b226974656d73223a5b302c312c6e756c6c2c747275652c225c6e225d2c225c7565303030223a22424d50222c225c75643833645c7564656432223a2261737472616c227d7d2c22737461747573223a22636f6d6d6974746564222c2276657273696f6e223a327d"
+    },
+    {
+      "name": "saved-business-rejection",
+      "accepted": true,
+      "outcome": {
+        "scope": {
+          "environment_id": "vector",
+          "deployment_id": "isolated",
+          "session_id": "session-vector",
+          "world_generation_id": "generation-vector"
+        },
+        "operation": "counter.add",
+        "idempotency_key": "business-vector",
+        "commit_attempt_id": "12345678-1234-4234-9234-123456789abc",
+        "result_encoding_version": 1,
+        "committed_state_version": null,
+        "committed_state_hash": null,
+        "observed_state_version": 1,
+        "observed_state_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "result_digest": "05cab258d4a9b811cd509d61fd7047ceb5691e6502b2073fc3300fc992e9b33b",
+        "result": {
+          "code": "counter_limit",
+          "remaining": 0
+        },
+        "failure_code": "counter_limit",
+        "replayed": false,
+        "status": "rejected"
+      },
+      "digest_preimage_utf8_hex": "7b22617474656d7074223a2231323334353637382d313233342d343233342d393233342d313233343536373839616263222c2268617368223a2262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262222c22726573756c74223a7b22636f6465223a22636f756e7465725f6c696d6974222c2272656d61696e696e67223a307d2c22737461747573223a2272656a6563746564222c2276657273696f6e223a317d"
+    },
+    {
+      "name": "replayed-business-rejection",
+      "accepted": true,
+      "outcome": {
+        "scope": {
+          "environment_id": "vector",
+          "deployment_id": "isolated",
+          "session_id": "session-vector",
+          "world_generation_id": "generation-vector"
+        },
+        "operation": "counter.add",
+        "idempotency_key": "business-vector",
+        "commit_attempt_id": "12345678-1234-4234-9234-123456789abc",
+        "result_encoding_version": 1,
+        "committed_state_version": null,
+        "committed_state_hash": null,
+        "observed_state_version": 1,
+        "observed_state_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "result_digest": "05cab258d4a9b811cd509d61fd7047ceb5691e6502b2073fc3300fc992e9b33b",
+        "result": {
+          "code": "counter_limit",
+          "remaining": 0
+        },
+        "failure_code": "counter_limit",
+        "replayed": true,
+        "status": "rejected"
+      },
+      "digest_preimage_utf8_hex": "7b22617474656d7074223a2231323334353637382d313233342d343233342d393233342d313233343536373839616263222c2268617368223a2262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262222c22726573756c74223a7b22636f6465223a22636f756e7465725f6c696d6974222c2272656d61696e696e67223a307d2c22737461747573223a2272656a6563746564222c2276657273696f6e223a317d"
+    },
+    {
+      "name": "version-conflict",
+      "accepted": true,
+      "outcome": {
+        "scope": {
+          "environment_id": "vector",
+          "deployment_id": "isolated",
+          "session_id": "session-vector",
+          "world_generation_id": "generation-vector"
+        },
+        "operation": "counter.add",
+        "idempotency_key": "business-vector",
+        "commit_attempt_id": "12345678-1234-4234-9234-123456789abc",
+        "result_encoding_version": 1,
+        "committed_state_version": null,
+        "committed_state_hash": null,
+        "observed_state_version": null,
+        "observed_state_hash": null,
+        "result_digest": null,
+        "result": null,
+        "failure_code": "version_conflict",
+        "replayed": false,
+        "status": "conflict"
+      }
+    },
+    {
+      "name": "policy-rejection",
+      "accepted": true,
+      "outcome": {
+        "scope": {
+          "environment_id": "vector",
+          "deployment_id": "isolated",
+          "session_id": "session-vector",
+          "world_generation_id": "generation-vector"
+        },
+        "operation": "counter.add",
+        "idempotency_key": "business-vector",
+        "commit_attempt_id": "12345678-1234-4234-9234-123456789abc",
+        "result_encoding_version": 1,
+        "committed_state_version": null,
+        "committed_state_hash": null,
+        "observed_state_version": null,
+        "observed_state_hash": null,
+        "result_digest": null,
+        "result": null,
+        "failure_code": "world_write_not_authorized",
+        "replayed": false,
+        "status": "rejected"
+      }
+    },
+    {
+      "name": "commit-unverifiable",
+      "accepted": true,
+      "outcome": {
+        "scope": {
+          "environment_id": "vector",
+          "deployment_id": "isolated",
+          "session_id": "session-vector",
+          "world_generation_id": "generation-vector"
+        },
+        "operation": "counter.add",
+        "idempotency_key": "business-vector",
+        "commit_attempt_id": "12345678-1234-4234-9234-123456789abc",
+        "result_encoding_version": 1,
+        "committed_state_version": null,
+        "committed_state_hash": null,
+        "observed_state_version": null,
+        "observed_state_hash": null,
+        "result_digest": null,
+        "result": null,
+        "failure_code": "commit_unverifiable",
+        "replayed": false,
+        "status": "unverifiable"
+      }
+    },
+    {
+      "name": "missing-replay-flag",
+      "accepted": false,
+      "outcome": {
+        "scope": {
+          "environment_id": "vector",
+          "deployment_id": "isolated",
+          "session_id": "session-vector",
+          "world_generation_id": "generation-vector"
+        },
+        "operation": "counter.add",
+        "idempotency_key": "business-vector",
+        "commit_attempt_id": "12345678-1234-4234-9234-123456789abc",
+        "result_encoding_version": 1,
+        "committed_state_version": 2,
+        "committed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "observed_state_version": 2,
+        "observed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "result_digest": "982906509d38f67e96cbc17f549cba346452fe8ab2348b075f99bc6698155a4d",
+        "result": {
+          "message": "測試購物車 🛒",
+          "nested": {
+            "": "BMP",
+            "🛒": "astral",
+            "items": [
+              0,
+              1,
+              null,
+              true,
+              "\n"
+            ]
+          }
+        },
+        "failure_code": null,
+        "replayed": false,
+        "status": "already_committed"
+      }
+    },
+    {
+      "name": "unexpected-replay-flag",
+      "accepted": false,
+      "outcome": {
+        "scope": {
+          "environment_id": "vector",
+          "deployment_id": "isolated",
+          "session_id": "session-vector",
+          "world_generation_id": "generation-vector"
+        },
+        "operation": "counter.add",
+        "idempotency_key": "business-vector",
+        "commit_attempt_id": "12345678-1234-4234-9234-123456789abc",
+        "result_encoding_version": 1,
+        "committed_state_version": 2,
+        "committed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "observed_state_version": 2,
+        "observed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "result_digest": "982906509d38f67e96cbc17f549cba346452fe8ab2348b075f99bc6698155a4d",
+        "result": {
+          "message": "測試購物車 🛒",
+          "nested": {
+            "": "BMP",
+            "🛒": "astral",
+            "items": [
+              0,
+              1,
+              null,
+              true,
+              "\n"
+            ]
+          }
+        },
+        "failure_code": null,
+        "replayed": true,
+        "status": "committed"
+      }
+    },
+    {
+      "name": "success-with-failure",
+      "accepted": false,
+      "outcome": {
+        "scope": {
+          "environment_id": "vector",
+          "deployment_id": "isolated",
+          "session_id": "session-vector",
+          "world_generation_id": "generation-vector"
+        },
+        "operation": "counter.add",
+        "idempotency_key": "business-vector",
+        "commit_attempt_id": "12345678-1234-4234-9234-123456789abc",
+        "result_encoding_version": 1,
+        "committed_state_version": 2,
+        "committed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "observed_state_version": 2,
+        "observed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "result_digest": "982906509d38f67e96cbc17f549cba346452fe8ab2348b075f99bc6698155a4d",
+        "result": {
+          "message": "測試購物車 🛒",
+          "nested": {
+            "": "BMP",
+            "🛒": "astral",
+            "items": [
+              0,
+              1,
+              null,
+              true,
+              "\n"
+            ]
+          }
+        },
+        "failure_code": "not_success",
+        "replayed": false,
+        "status": "committed"
+      }
+    },
+    {
+      "name": "missing-committed-hash",
+      "accepted": false,
+      "outcome": {
+        "scope": {
+          "environment_id": "vector",
+          "deployment_id": "isolated",
+          "session_id": "session-vector",
+          "world_generation_id": "generation-vector"
+        },
+        "operation": "counter.add",
+        "idempotency_key": "business-vector",
+        "commit_attempt_id": "12345678-1234-4234-9234-123456789abc",
+        "result_encoding_version": 1,
+        "committed_state_version": 2,
+        "committed_state_hash": null,
+        "observed_state_version": 2,
+        "observed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "result_digest": "982906509d38f67e96cbc17f549cba346452fe8ab2348b075f99bc6698155a4d",
+        "result": {
+          "message": "測試購物車 🛒",
+          "nested": {
+            "": "BMP",
+            "🛒": "astral",
+            "items": [
+              0,
+              1,
+              null,
+              true,
+              "\n"
+            ]
+          }
+        },
+        "failure_code": null,
+        "replayed": false,
+        "status": "committed"
+      }
+    },
+    {
+      "name": "observed-version-mismatch",
+      "accepted": false,
+      "outcome": {
+        "scope": {
+          "environment_id": "vector",
+          "deployment_id": "isolated",
+          "session_id": "session-vector",
+          "world_generation_id": "generation-vector"
+        },
+        "operation": "counter.add",
+        "idempotency_key": "business-vector",
+        "commit_attempt_id": "12345678-1234-4234-9234-123456789abc",
+        "result_encoding_version": 1,
+        "committed_state_version": 2,
+        "committed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "observed_state_version": 3,
+        "observed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "result_digest": "982906509d38f67e96cbc17f549cba346452fe8ab2348b075f99bc6698155a4d",
+        "result": {
+          "message": "測試購物車 🛒",
+          "nested": {
+            "": "BMP",
+            "🛒": "astral",
+            "items": [
+              0,
+              1,
+              null,
+              true,
+              "\n"
+            ]
+          }
+        },
+        "failure_code": null,
+        "replayed": false,
+        "status": "committed"
+      }
+    },
+    {
+      "name": "tampered-digest",
+      "accepted": false,
+      "outcome": {
+        "scope": {
+          "environment_id": "vector",
+          "deployment_id": "isolated",
+          "session_id": "session-vector",
+          "world_generation_id": "generation-vector"
+        },
+        "operation": "counter.add",
+        "idempotency_key": "business-vector",
+        "commit_attempt_id": "12345678-1234-4234-9234-123456789abc",
+        "result_encoding_version": 1,
+        "committed_state_version": 2,
+        "committed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "observed_state_version": 2,
+        "observed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "result_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "result": {
+          "message": "測試購物車 🛒",
+          "nested": {
+            "": "BMP",
+            "🛒": "astral",
+            "items": [
+              0,
+              1,
+              null,
+              true,
+              "\n"
+            ]
+          }
+        },
+        "failure_code": null,
+        "replayed": false,
+        "status": "committed"
+      }
+    },
+    {
+      "name": "tampered-result",
+      "accepted": false,
+      "outcome": {
+        "scope": {
+          "environment_id": "vector",
+          "deployment_id": "isolated",
+          "session_id": "session-vector",
+          "world_generation_id": "generation-vector"
+        },
+        "operation": "counter.add",
+        "idempotency_key": "business-vector",
+        "commit_attempt_id": "12345678-1234-4234-9234-123456789abc",
+        "result_encoding_version": 1,
+        "committed_state_version": 2,
+        "committed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "observed_state_version": 2,
+        "observed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "result_digest": "982906509d38f67e96cbc17f549cba346452fe8ab2348b075f99bc6698155a4d",
+        "result": {
+          "value": "changed"
+        },
+        "failure_code": null,
+        "replayed": false,
+        "status": "committed"
+      }
+    },
+    {
+      "name": "missing-result",
+      "accepted": false,
+      "outcome": {
+        "scope": {
+          "environment_id": "vector",
+          "deployment_id": "isolated",
+          "session_id": "session-vector",
+          "world_generation_id": "generation-vector"
+        },
+        "operation": "counter.add",
+        "idempotency_key": "business-vector",
+        "commit_attempt_id": "12345678-1234-4234-9234-123456789abc",
+        "result_encoding_version": 1,
+        "committed_state_version": 2,
+        "committed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "observed_state_version": 2,
+        "observed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "result_digest": "982906509d38f67e96cbc17f549cba346452fe8ab2348b075f99bc6698155a4d",
+        "result": null,
+        "failure_code": null,
+        "replayed": false,
+        "status": "committed"
+      }
+    },
+    {
+      "name": "missing-digest",
+      "accepted": false,
+      "outcome": {
+        "scope": {
+          "environment_id": "vector",
+          "deployment_id": "isolated",
+          "session_id": "session-vector",
+          "world_generation_id": "generation-vector"
+        },
+        "operation": "counter.add",
+        "idempotency_key": "business-vector",
+        "commit_attempt_id": "12345678-1234-4234-9234-123456789abc",
+        "result_encoding_version": 1,
+        "committed_state_version": 2,
+        "committed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "observed_state_version": 2,
+        "observed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "result_digest": null,
+        "result": {
+          "message": "測試購物車 🛒",
+          "nested": {
+            "": "BMP",
+            "🛒": "astral",
+            "items": [
+              0,
+              1,
+              null,
+              true,
+              "\n"
+            ]
+          }
+        },
+        "failure_code": null,
+        "replayed": false,
+        "status": "committed"
+      }
+    },
+    {
+      "name": "boolean-encoding",
+      "accepted": false,
+      "outcome": {
+        "scope": {
+          "environment_id": "vector",
+          "deployment_id": "isolated",
+          "session_id": "session-vector",
+          "world_generation_id": "generation-vector"
+        },
+        "operation": "counter.add",
+        "idempotency_key": "business-vector",
+        "commit_attempt_id": "12345678-1234-4234-9234-123456789abc",
+        "result_encoding_version": true,
+        "committed_state_version": 2,
+        "committed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "observed_state_version": 2,
+        "observed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "result_digest": "982906509d38f67e96cbc17f549cba346452fe8ab2348b075f99bc6698155a4d",
+        "result": {
+          "message": "測試購物車 🛒",
+          "nested": {
+            "": "BMP",
+            "🛒": "astral",
+            "items": [
+              0,
+              1,
+              null,
+              true,
+              "\n"
+            ]
+          }
+        },
+        "failure_code": null,
+        "replayed": false,
+        "status": "committed"
+      }
+    },
+    {
+      "name": "unknown-encoding",
+      "accepted": false,
+      "outcome": {
+        "scope": {
+          "environment_id": "vector",
+          "deployment_id": "isolated",
+          "session_id": "session-vector",
+          "world_generation_id": "generation-vector"
+        },
+        "operation": "counter.add",
+        "idempotency_key": "business-vector",
+        "commit_attempt_id": "12345678-1234-4234-9234-123456789abc",
+        "result_encoding_version": 2,
+        "committed_state_version": 2,
+        "committed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "observed_state_version": 2,
+        "observed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "result_digest": "982906509d38f67e96cbc17f549cba346452fe8ab2348b075f99bc6698155a4d",
+        "result": {
+          "message": "測試購物車 🛒",
+          "nested": {
+            "": "BMP",
+            "🛒": "astral",
+            "items": [
+              0,
+              1,
+              null,
+              true,
+              "\n"
+            ]
+          }
+        },
+        "failure_code": null,
+        "replayed": false,
+        "status": "committed"
+      }
+    },
+    {
+      "name": "boolean-version",
+      "accepted": false,
+      "outcome": {
+        "scope": {
+          "environment_id": "vector",
+          "deployment_id": "isolated",
+          "session_id": "session-vector",
+          "world_generation_id": "generation-vector"
+        },
+        "operation": "counter.add",
+        "idempotency_key": "business-vector",
+        "commit_attempt_id": "12345678-1234-4234-9234-123456789abc",
+        "result_encoding_version": 1,
+        "committed_state_version": true,
+        "committed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "observed_state_version": 2,
+        "observed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "result_digest": "982906509d38f67e96cbc17f549cba346452fe8ab2348b075f99bc6698155a4d",
+        "result": {
+          "message": "測試購物車 🛒",
+          "nested": {
+            "": "BMP",
+            "🛒": "astral",
+            "items": [
+              0,
+              1,
+              null,
+              true,
+              "\n"
+            ]
+          }
+        },
+        "failure_code": null,
+        "replayed": false,
+        "status": "committed"
+      }
+    },
+    {
+      "name": "nonpositive-version",
+      "accepted": false,
+      "outcome": {
+        "scope": {
+          "environment_id": "vector",
+          "deployment_id": "isolated",
+          "session_id": "session-vector",
+          "world_generation_id": "generation-vector"
+        },
+        "operation": "counter.add",
+        "idempotency_key": "business-vector",
+        "commit_attempt_id": "12345678-1234-4234-9234-123456789abc",
+        "result_encoding_version": 1,
+        "committed_state_version": 0,
+        "committed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "observed_state_version": 2,
+        "observed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "result_digest": "982906509d38f67e96cbc17f549cba346452fe8ab2348b075f99bc6698155a4d",
+        "result": {
+          "message": "測試購物車 🛒",
+          "nested": {
+            "": "BMP",
+            "🛒": "astral",
+            "items": [
+              0,
+              1,
+              null,
+              true,
+              "\n"
+            ]
+          }
+        },
+        "failure_code": null,
+        "replayed": false,
+        "status": "committed"
+      }
+    },
+    {
+      "name": "invalid-state-hash",
+      "accepted": false,
+      "outcome": {
+        "scope": {
+          "environment_id": "vector",
+          "deployment_id": "isolated",
+          "session_id": "session-vector",
+          "world_generation_id": "generation-vector"
+        },
+        "operation": "counter.add",
+        "idempotency_key": "business-vector",
+        "commit_attempt_id": "12345678-1234-4234-9234-123456789abc",
+        "result_encoding_version": 1,
+        "committed_state_version": 2,
+        "committed_state_hash": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "observed_state_version": 2,
+        "observed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "result_digest": "982906509d38f67e96cbc17f549cba346452fe8ab2348b075f99bc6698155a4d",
+        "result": {
+          "message": "測試購物車 🛒",
+          "nested": {
+            "": "BMP",
+            "🛒": "astral",
+            "items": [
+              0,
+              1,
+              null,
+              true,
+              "\n"
+            ]
+          }
+        },
+        "failure_code": null,
+        "replayed": false,
+        "status": "committed"
+      }
+    },
+    {
+      "name": "uuid-version-one",
+      "accepted": false,
+      "outcome": {
+        "scope": {
+          "environment_id": "vector",
+          "deployment_id": "isolated",
+          "session_id": "session-vector",
+          "world_generation_id": "generation-vector"
+        },
+        "operation": "counter.add",
+        "idempotency_key": "business-vector",
+        "commit_attempt_id": "12345678-1234-1234-9234-123456789abc",
+        "result_encoding_version": 1,
+        "committed_state_version": 2,
+        "committed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "observed_state_version": 2,
+        "observed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "result_digest": "982906509d38f67e96cbc17f549cba346452fe8ab2348b075f99bc6698155a4d",
+        "result": {
+          "message": "測試購物車 🛒",
+          "nested": {
+            "": "BMP",
+            "🛒": "astral",
+            "items": [
+              0,
+              1,
+              null,
+              true,
+              "\n"
+            ]
+          }
+        },
+        "failure_code": null,
+        "replayed": false,
+        "status": "committed"
+      }
+    },
+    {
+      "name": "empty-business-key",
+      "accepted": false,
+      "outcome": {
+        "scope": {
+          "environment_id": "vector",
+          "deployment_id": "isolated",
+          "session_id": "session-vector",
+          "world_generation_id": "generation-vector"
+        },
+        "operation": "counter.add",
+        "idempotency_key": "",
+        "commit_attempt_id": "12345678-1234-4234-9234-123456789abc",
+        "result_encoding_version": 1,
+        "committed_state_version": 2,
+        "committed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "observed_state_version": 2,
+        "observed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "result_digest": "982906509d38f67e96cbc17f549cba346452fe8ab2348b075f99bc6698155a4d",
+        "result": {
+          "message": "測試購物車 🛒",
+          "nested": {
+            "": "BMP",
+            "🛒": "astral",
+            "items": [
+              0,
+              1,
+              null,
+              true,
+              "\n"
+            ]
+          }
+        },
+        "failure_code": null,
+        "replayed": false,
+        "status": "committed"
+      }
+    },
+    {
+      "name": "unknown-status",
+      "accepted": false,
+      "outcome": {
+        "scope": {
+          "environment_id": "vector",
+          "deployment_id": "isolated",
+          "session_id": "session-vector",
+          "world_generation_id": "generation-vector"
+        },
+        "operation": "counter.add",
+        "idempotency_key": "business-vector",
+        "commit_attempt_id": "12345678-1234-4234-9234-123456789abc",
+        "result_encoding_version": 1,
+        "committed_state_version": 2,
+        "committed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "observed_state_version": 2,
+        "observed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "result_digest": "982906509d38f67e96cbc17f549cba346452fe8ab2348b075f99bc6698155a4d",
+        "result": {
+          "message": "測試購物車 🛒",
+          "nested": {
+            "": "BMP",
+            "🛒": "astral",
+            "items": [
+              0,
+              1,
+              null,
+              true,
+              "\n"
+            ]
+          }
+        },
+        "failure_code": null,
+        "replayed": false,
+        "status": "retryable"
+      }
+    },
+    {
+      "name": "unverifiable-claims-commit",
+      "accepted": false,
+      "outcome": {
+        "scope": {
+          "environment_id": "vector",
+          "deployment_id": "isolated",
+          "session_id": "session-vector",
+          "world_generation_id": "generation-vector"
+        },
+        "operation": "counter.add",
+        "idempotency_key": "business-vector",
+        "commit_attempt_id": "12345678-1234-4234-9234-123456789abc",
+        "result_encoding_version": 1,
+        "committed_state_version": 2,
+        "committed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "observed_state_version": 2,
+        "observed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "result_digest": "982906509d38f67e96cbc17f549cba346452fe8ab2348b075f99bc6698155a4d",
+        "result": {
+          "message": "測試購物車 🛒",
+          "nested": {
+            "": "BMP",
+            "🛒": "astral",
+            "items": [
+              0,
+              1,
+              null,
+              true,
+              "\n"
+            ]
+          }
+        },
+        "failure_code": "commit_unverifiable",
+        "replayed": false,
+        "status": "unverifiable"
+      }
+    },
+    {
+      "name": "conflict-claims-result",
+      "accepted": false,
+      "outcome": {
+        "scope": {
+          "environment_id": "vector",
+          "deployment_id": "isolated",
+          "session_id": "session-vector",
+          "world_generation_id": "generation-vector"
+        },
+        "operation": "counter.add",
+        "idempotency_key": "business-vector",
+        "commit_attempt_id": "12345678-1234-4234-9234-123456789abc",
+        "result_encoding_version": 1,
+        "committed_state_version": null,
+        "committed_state_hash": null,
+        "observed_state_version": 2,
+        "observed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "result_digest": "982906509d38f67e96cbc17f549cba346452fe8ab2348b075f99bc6698155a4d",
+        "result": {
+          "message": "測試購物車 🛒",
+          "nested": {
+            "": "BMP",
+            "🛒": "astral",
+            "items": [
+              0,
+              1,
+              null,
+              true,
+              "\n"
+            ]
+          }
+        },
+        "failure_code": "version_conflict",
+        "replayed": false,
+        "status": "conflict"
+      }
+    },
+    {
+      "name": "extra-field",
+      "accepted": false,
+      "outcome": {
+        "scope": {
+          "environment_id": "vector",
+          "deployment_id": "isolated",
+          "session_id": "session-vector",
+          "world_generation_id": "generation-vector"
+        },
+        "operation": "counter.add",
+        "idempotency_key": "business-vector",
+        "commit_attempt_id": "12345678-1234-4234-9234-123456789abc",
+        "result_encoding_version": 1,
+        "committed_state_version": 2,
+        "committed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "observed_state_version": 2,
+        "observed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "result_digest": "982906509d38f67e96cbc17f549cba346452fe8ab2348b075f99bc6698155a4d",
+        "result": {
+          "message": "測試購物車 🛒",
+          "nested": {
+            "": "BMP",
+            "🛒": "astral",
+            "items": [
+              0,
+              1,
+              null,
+              true,
+              "\n"
+            ]
+          }
+        },
+        "failure_code": null,
+        "replayed": false,
+        "status": "committed",
+        "retryable": true
+      }
+    },
+    {
+      "name": "failure-without-code",
+      "accepted": false,
+      "outcome": {
+        "scope": {
+          "environment_id": "vector",
+          "deployment_id": "isolated",
+          "session_id": "session-vector",
+          "world_generation_id": "generation-vector"
+        },
+        "operation": "counter.add",
+        "idempotency_key": "business-vector",
+        "commit_attempt_id": "12345678-1234-4234-9234-123456789abc",
+        "result_encoding_version": 1,
+        "committed_state_version": null,
+        "committed_state_hash": null,
+        "observed_state_version": null,
+        "observed_state_hash": null,
+        "result_digest": null,
+        "result": null,
+        "failure_code": null,
+        "replayed": false,
+        "status": "conflict"
+      }
+    },
+    {
+      "name": "observed-hash-without-version",
+      "accepted": false,
+      "outcome": {
+        "scope": {
+          "environment_id": "vector",
+          "deployment_id": "isolated",
+          "session_id": "session-vector",
+          "world_generation_id": "generation-vector"
+        },
+        "operation": "counter.add",
+        "idempotency_key": "business-vector",
+        "commit_attempt_id": "12345678-1234-4234-9234-123456789abc",
+        "result_encoding_version": 1,
+        "committed_state_version": null,
+        "committed_state_hash": null,
+        "observed_state_version": null,
+        "observed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "result_digest": null,
+        "result": null,
+        "failure_code": "commit_unverifiable",
+        "replayed": false,
+        "status": "unverifiable"
+      }
+    },
+    {
+      "name": "saved-rejection-without-observation",
+      "accepted": false,
+      "outcome": {
+        "scope": {
+          "environment_id": "vector",
+          "deployment_id": "isolated",
+          "session_id": "session-vector",
+          "world_generation_id": "generation-vector"
+        },
+        "operation": "counter.add",
+        "idempotency_key": "business-vector",
+        "commit_attempt_id": "12345678-1234-4234-9234-123456789abc",
+        "result_encoding_version": 1,
+        "committed_state_version": null,
+        "committed_state_hash": null,
+        "observed_state_version": null,
+        "observed_state_hash": null,
+        "result_digest": "05cab258d4a9b811cd509d61fd7047ceb5691e6502b2073fc3300fc992e9b33b",
+        "result": {
+          "code": "counter_limit",
+          "remaining": 0
+        },
+        "failure_code": "counter_limit",
+        "replayed": false,
+        "status": "rejected"
+      }
+    }
+  ]
+}

@@ -2,6 +2,10 @@
 
 ## 功能與邊界
 
+pipeline 的固定 503／409 另由[安全錯誤 Renderer](security-errors.md)封存並核對完整原請求，可在授權 DB／World 不可用時獨立運作，不提供商品輸出或任意候選能力。
+
+ResponseAdmission 明確保存 `hash_encoding_version=1` 與 `candidate_serialization_version=1`；未知版本拒絕。來源、Profile、差異核准與投影證據皆不可原地修改；快照／提交來源的世代及投影契約 hash 必須和准入相符，有效投影未通過則不能建立准入。傳輸器在 Claim 前再次從模型資料驗證，避免未驗證的 model_copy 繞過版本與一致性檢查。讀取舊版 JSON 紀錄時缺省版本依既有固定 v1 語義解析，新寫入會明確包含兩個版本欄位；無須改 SQL schema。
+
 `src/deception/core/renderer.py` 把任務協調器的已驗證內部候選轉為真正的 FastAPI／Starlette Response。HTTP 回送器先完成本次 `X-Request-ID` 與精確 UTF-8 `Content-Length`，再將最終 status、headers、body 連同實際請求 URL 交給契約驗證器；只回送本次通過驗證的 bytes。
 
 這完成「內部候選 → 應用程式 HTTP 回應」的邊界，不會替部署核准來源，也不會把合成測試規格當成官方平台相容性證明。未審來源、錯誤網站／query、錯誤 operation 及未通過契約驗證器的內容仍無法回送。
@@ -93,6 +97,8 @@ handler 交還框架後，`ValidatedHTTPResponse.__call__()` 若發現驗證後�
 
 `assessment_timeout_seconds` 限制取得可信判定的等待時間，預設 15 秒，只接受有限數值 `0 < value <= 120`，不接受布林值。非同步 provider 等待逾期回固定 503，沒有可信判定就不執行任務協調器。
 
+另可注入 `content_lifecycle_provider(request, verified_assessment)`，回傳本次已核對世界的 ContentLifecycle，啟用模型前內容重用。它與判定 provider 共用上述期限；malicious 判定的請求／環境／部署關聯不符、型別錯誤、世界無法確認或逾期時只回固定診斷。此擴充點由伺服器設定，不解析訪客自稱的 world header，不取代既有世界 ReadAdmission、撤銷、期限或最終 ResponseAdmission／Renderer 驗證。接法與責任見 [上下文](context.md)。
+
 ## 生命週期與部署界線
 
 模型 backend、內容快取及其他工具由建立它們的部署程式管理關閉；HTTP 回送器不另外啟動模型、連線原商店或建立背景工作。修正與備援工具備援成功也必須走相同的 HTTP 回送器最終驗證流程。判定 provider 在任務協調器的 `RunBudget` 建立前執行，使用獨立的 `assessment_timeout_seconds`。同步 provider 必須避免阻塞事件迴圈；非同步 timeout 無法在任意同步函式中途強制中斷，外部服務整合仍應設定自己的連線與讀取期限。
@@ -121,3 +127,13 @@ HTTP 回送器保證的是應用程式交給 ASGI server 的 status、body bytes
 | Python 標準庫 | PSF 及隨附聲明 | 不可變資料、摘要、編碼與函式整合等支援 |
 
 啟動命令沿用既有 Uvicorn（BSD-3-Clause）；測試沿用 pytest（MIT）、HTTPX（BSD-3-Clause）及 Starlette TestClient。HTTP 回送器沒有新增套件，主要間接依賴及分發聲明見 [回應組合器套件表](composer.md#使用的套件與授權) 與 [任務協調與內容生成授權表](orchestration.md#套件模型與資料授權)。模型權重、來源規格與資料權利各自管理，回送工具不變更其授權或部署審查狀態。
+
+## Admission 與 ASGI 傳輸狀態
+
+ResponseRenderer 可由部署者注入 transmission_factory(final_candidate, request)。工廠在最終 gate 通過後建立 AdmissionTransmission；它持有既有准入、CandidateStore、完整 WorldScope 及控制器。任何 request、scope、候選 hash 或持久化准入不符時，在 Claim 前拒絕。Candidate 保存的 bytes 是 response_envelope(status, ordered_headers, body)，其有效期至少涵蓋 transmission_deadline。
+
+發送時依序持久化 Claim、Send Authorization、SEND_STARTED，才交付 ASGI start 與 body。完成兩次 ASGI send 後記錄 SEND_COMPLETED。尚未嘗試 send 的失敗記錄 SEND_FAILED，已嘗試 send 的錯誤、取消或逾時保守記錄 SEND_PARTIAL_FAILURE。若終態寫入結果未知，保持既有狀態並拒絕重新領取。SEND_STARTED 期間 Candidate 仍在有效引用保護集合。
+
+hash encoding v1 使用每欄 8-byte big-endian 長度前綴，固定封套版本、status、ordered headers 與 body 順序。headers 的 name 轉小寫，以 ASCII／Latin-1 編碼；body 使用精確 bytes。candidate_hash 是整份封套摘要，immutable_body_hash 與 semantic_headers_hash 分別保存 body 與全部受控最終標頭摘要。傳輸完成只代表 ASGI callback 完成。
+
+本機可執行 tests/test_renderer_admission.py。共享資料庫驗證由 tests/test_postgres_conformance.py 的 renderer_persists 案例執行，需隔離 DSN。本次沒有新增外部依賴；傳輸狀態與嚴格准入功能須由部署者明確注入，原本 renderer 呼叫方式仍可使用。

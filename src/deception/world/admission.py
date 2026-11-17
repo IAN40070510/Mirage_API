@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from threading import RLock
 from uuid import uuid4
@@ -42,9 +42,11 @@ class _Record:
 
     admission: ResponseAdmission
     state: AdmissionState
+    projection_registry: ProjectionRegistryProtocol
     claim_owner: str | None = None
     claim_revision: int | None = None
     send_authorization_revision: int | None = None
+    transmission_events: list[dict] = field(default_factory=list)
 
 
 class AdmissionControl:
@@ -54,6 +56,7 @@ class AdmissionControl:
         """建立空的准入控制器與未封存的 Generation 集合。"""
         self._lock = RLock()
         self._revision = 0
+        self._emergency_revisions: dict[str, int] = {}
         self._sealed: set[str] = set()
         self._cutover_revisions: dict[str, int] = {}
         self._records: dict[str, _Record] = {}
@@ -81,8 +84,11 @@ class AdmissionControl:
         projection_registry: ProjectionRegistryProtocol,
     ) -> ResponseAdmission | None:
         """驗證投影 Registry 後，在 Generation 尚可發新准入時建立 Grant。"""
-        with self._lock:
-            if world_generation_id in self._sealed:
+        with self._lock, projection_registry.profile_guard(
+                projection_evidence.compatibility_profile.profile_sha256) as profile_revocation:
+            if profile_revocation is not None:
+                return None
+            if world_generation_id in self._sealed or world_generation_id in self._emergency_revisions:
                 return None
             authorization = projection_registry.authorize(
                 projection_contract_hash=projection_contract_hash,
@@ -112,7 +118,7 @@ class AdmissionControl:
                 source=source,
                 projection_evidence=projection_evidence,
             )
-            self._records[admission.admission_id] = _Record(admission, AdmissionState.GRANTED)
+            self._records[admission.admission_id] = _Record(admission, AdmissionState.GRANTED, projection_registry)
             return admission
 
     def cutover(self, world_generation_id: str) -> int:
@@ -130,6 +136,13 @@ class AdmissionControl:
         with self._lock:
             return self._cutover_revisions.get(world_generation_id)
 
+    def emergency_revoke(self, world_generation_id: str) -> int:
+        """在共同控制鎖內撤銷整個世代，回傳第一次緊急撤銷的 revision。"""
+        with self._lock:
+            if world_generation_id not in self._emergency_revisions:
+                self._emergency_revisions[world_generation_id] = self._next_revision()
+            return self._emergency_revisions[world_generation_id]
+
     def claim(self, admission_id: str, *, owner: str, now: int) -> AdmissionOperationResult:
         """原子取得一次 Claim；Cutover 後仍允許期限內的既有 Grant。"""
         with self._lock:
@@ -138,13 +151,19 @@ class AdmissionControl:
                 return AdmissionOperationResult.REJECTED
             if record.state is not AdmissionState.GRANTED:
                 return AdmissionOperationResult.ALREADY_CLAIMED
-            if now >= record.admission.authorization_deadline:
-                record.state = AdmissionState.EXPIRED
-                return AdmissionOperationResult.EXPIRED
-            record.state = AdmissionState.CLAIMED
-            record.claim_owner = owner
-            record.claim_revision = self._next_revision()
-            return AdmissionOperationResult.SUCCESS
+            with record.projection_registry.profile_guard(
+                    record.admission.projection_evidence.compatibility_profile.profile_sha256) as profile:
+                if ((profile is not None and profile.emergency)
+                        or record.admission.world_generation_id in self._emergency_revisions):
+                    record.state = AdmissionState.ABANDONED
+                    return AdmissionOperationResult.REJECTED
+                if now >= record.admission.authorization_deadline:
+                    record.state = AdmissionState.EXPIRED
+                    return AdmissionOperationResult.EXPIRED
+                record.state = AdmissionState.CLAIMED
+                record.claim_owner = owner
+                record.claim_revision = self._next_revision()
+                return AdmissionOperationResult.SUCCESS
 
     def authorize_send(self, admission_id: str, *, now: int, revoked: bool = False) -> AdmissionOperationResult:
         """在 Send Authorization 邊界檢查期限與撤銷，通過後才允許發送。"""
@@ -152,12 +171,67 @@ class AdmissionControl:
             record = self._records.get(admission_id)
             if record is None or record.state is not AdmissionState.CLAIMED:
                 return AdmissionOperationResult.REJECTED
-            if revoked or now >= record.admission.transmission_deadline:
-                record.state = AdmissionState.EXPIRED if not revoked else AdmissionState.ABANDONED
+            with record.projection_registry.profile_guard(
+                    record.admission.projection_evidence.compatibility_profile.profile_sha256) as profile:
+                revoked = (revoked or record.admission.world_generation_id in self._emergency_revisions
+                           or (profile is not None and profile.emergency))
+                if revoked or now >= record.admission.transmission_deadline:
+                    record.state = AdmissionState.EXPIRED if not revoked else AdmissionState.ABANDONED
+                    return AdmissionOperationResult.REJECTED
+                record.state = AdmissionState.SEND_AUTHORIZED
+                record.send_authorization_revision = self._next_revision()
+                return AdmissionOperationResult.SUCCESS
+
+    def get_admission(self, admission_id: str) -> ResponseAdmission | None:
+        """讀回已保存准入的獨立副本，供發送者核對授權封套。"""
+        with self._lock:
+            record = self._records.get(admission_id)
+            return None if record is None else record.admission.model_copy(deep=True)
+
+    def start_send(self, admission_id: str, *, owner: str, now: int) -> AdmissionOperationResult:
+        """同一 Claim owner 在期限內啟動一次傳輸，撤銷時以最佳努力停止未起送回應。"""
+        with self._lock:
+            record = self._records.get(admission_id)
+            if record is None or record.claim_owner != owner or record.state is not AdmissionState.SEND_AUTHORIZED:
                 return AdmissionOperationResult.REJECTED
-            record.state = AdmissionState.SEND_AUTHORIZED
-            record.send_authorization_revision = self._next_revision()
+            with record.projection_registry.profile_guard(
+                    record.admission.projection_evidence.compatibility_profile.profile_sha256) as profile:
+                if now >= record.admission.transmission_deadline:
+                    record.state = AdmissionState.EXPIRED
+                    return AdmissionOperationResult.EXPIRED
+                if ((profile is not None and profile.emergency)
+                        or record.admission.world_generation_id in self._emergency_revisions):
+                    record.state = AdmissionState.ABANDONED
+                    return AdmissionOperationResult.REJECTED
+                record.state = AdmissionState.SEND_STARTED
+                record.transmission_events.append({"event_name": "send_started",
+                                                   "final_response_hash": record.admission.candidate_hash})
+                return AdmissionOperationResult.SUCCESS
+
+    def finish_send(self, admission_id: str, *, owner: str, outcome: AdmissionState,
+                    attempted: bool = False) -> AdmissionOperationResult:
+        """同一發送者把已啟動傳輸記成完成、失敗或部分失敗，終態不接受覆寫。"""
+        if outcome not in {AdmissionState.SEND_COMPLETED, AdmissionState.SEND_FAILED,
+                           AdmissionState.SEND_PARTIAL_FAILURE}:
+            raise ValueError("invalid transmission outcome")
+        with self._lock:
+            record = self._records.get(admission_id)
+            if record is None or record.claim_owner != owner or record.state is not AdmissionState.SEND_STARTED:
+                return AdmissionOperationResult.REJECTED
+            record.state = outcome
+            if attempted or outcome is AdmissionState.SEND_COMPLETED:
+                record.transmission_events.append({"event_name": "response_send_attempted",
+                                                   "final_response_hash": record.admission.candidate_hash})
+            record.transmission_events.append({"event_name": "asgi_send_completed" if outcome is AdmissionState.SEND_COMPLETED
+                                               else "asgi_send_failed", "outcome": outcome.value,
+                                               "final_response_hash": record.admission.candidate_hash})
             return AdmissionOperationResult.SUCCESS
+
+    def transmission_events(self, admission_id: str) -> tuple[dict, ...]:
+        """提供傳輸摘要的獨立副本，事件不包含原始 body、headers 或 Client 收件宣告。"""
+        with self._lock:
+            record = self._records.get(admission_id)
+            return () if record is None else tuple(dict(event) for event in record.transmission_events)
 
     def state(self, admission_id: str) -> AdmissionState | None:
         """讀取准入的持久化狀態，找不到時不建立或恢復紀錄。"""
@@ -175,6 +249,8 @@ class AdmissionControl:
                 return record.admission.grant_revision
             if event == "claim":
                 return record.claim_revision
+            if event == "emergency_revocation":
+                return self._emergency_revisions.get(record.admission.world_generation_id)
             if event == "cutover":
                 return self._cutover_revisions.get(record.admission.world_generation_id)
             if event == "send_authorization":
@@ -194,6 +270,7 @@ class AdmissionControl:
                     AdmissionState.GRANTED,
                     AdmissionState.CLAIMED,
                     AdmissionState.SEND_AUTHORIZED,
+                    AdmissionState.SEND_STARTED,
                 } and now < deadline:
                     active.add(record.admission.candidate_ref)
             return frozenset(active)

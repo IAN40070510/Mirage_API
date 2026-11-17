@@ -52,9 +52,10 @@ def create_app(
                                 content={"code": exc.detail, "request_id": request_id},
                                 headers={"X-Request-ID": request_id})
         response = await handler(normalized)
-        # M 已把追蹤 ID 納入 I 的最終驗證，A 不可在這裡再修改其封套。
+        # 商品及固定安全錯誤 Renderer 都已驗證最終追蹤 ID，A 不可再修改其封套。
         from deception.core.renderer import ValidatedHTTPResponse
-        if isinstance(response, ValidatedHTTPResponse):
+        from deception.core.security_error import SecurityErrorResponse
+        if isinstance(response, (ValidatedHTTPResponse, SecurityErrorResponse)):
             response.assert_request(normalized)
             return response
         # 讓後續 handler 的回應也帶有本次請求的追蹤 ID。

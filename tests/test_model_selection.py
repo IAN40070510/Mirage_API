@@ -26,6 +26,9 @@ def test_repository_default_is_the_installed_foundation_reasoning_variant():
     assert default.planner_mode == "structured_actions"
     assert len(default.model_digest) == 64 and default.model_digest != "0" * 64
     assert default.max_output_tokens >= 1024
+    assert default.for_task("planner").max_output_tokens == 256
+    assert default.for_task("generation").max_output_tokens == 256
+    assert default.for_task("repair").max_output_tokens == 512
 
 
 def transport_for(models, calls):

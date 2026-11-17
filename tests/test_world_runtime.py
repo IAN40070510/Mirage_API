@@ -264,3 +264,105 @@ def test_emergency_revocation_is_persistent_terminal_boundary():
     assert control.authorize_send(admission.admission_id, now=100, revoked=True) is AdmissionOperationResult.REJECTED
     assert control.state(admission.admission_id) is AdmissionState.ABANDONED
     assert control.authorize_send(admission.admission_id, now=101) is AdmissionOperationResult.REJECTED
+
+
+@pytest.mark.parametrize("send_first", [True, False])
+def test_memory_emergency_boundary(send_first):
+    """程序內原型與共享 Store 都以發送授權作緊急撤銷邊界。"""
+    control = AdmissionControl()
+    admission = grant(control)
+    assert control.claim(admission.admission_id, owner="test", now=1) is AdmissionOperationResult.SUCCESS
+    if send_first:
+        assert control.authorize_send(admission.admission_id, now=2) is AdmissionOperationResult.SUCCESS
+    revision = control.emergency_revoke(admission.world_generation_id)
+    assert control.emergency_revoke(admission.world_generation_id) == revision
+    assert control.authorize_send(admission.admission_id, now=3) is AdmissionOperationResult.REJECTED
+    assert control.state(admission.admission_id) is (
+        AdmissionState.SEND_AUTHORIZED if send_first else AdmissionState.ABANDONED)
+    assert grant(control) is None
+
+def test_snapshot_nested_state_and_scope_are_immutable():
+    """凍結巢狀 JSON 與 scope，明確 deepcopy 只產生可變提案，不改原快照。"""
+    from copy import deepcopy
+
+    original = {"items": [{"quantity": 2}]}
+    snapshot = WorldSnapshot.create(scope(), original)
+    original["items"][0]["quantity"] = 9
+    assert snapshot.state["items"][0]["quantity"] == 2
+    with pytest.raises(TypeError):
+        snapshot.state["items"][0]["quantity"] = 3
+    with pytest.raises(TypeError):
+        snapshot.state["items"].append({})
+    with pytest.raises(ValueError):
+        snapshot.scope.session_id = "other"
+    proposal = deepcopy(snapshot.state)
+    proposal["items"][0]["quantity"] = 1
+    assert snapshot.state["items"][0]["quantity"] == 2
+    copied = snapshot.model_copy(deep=True)
+    with pytest.raises(TypeError):
+        copied.state["items"].clear()
+    assert WorldSnapshot.model_validate_json(snapshot.model_dump_json()) == snapshot
+
+
+def test_memory_commit_lookup_preserves_original_version_and_expiry():
+    """原型 Store 保存原提交收據與原期限，不因後續 CAS 或查詢改寫狀態。"""
+    from uuid import uuid4
+
+    store = InMemoryWorldStore()
+    target = scope()
+    store.create_if_absent(target, {"quantity": 3}, expires_at=100)
+    attempt = uuid4()
+    committed = store.compare_and_swap(target, expected_version=1, state={"quantity": 2}, commit_attempt_id=attempt)
+    later = store.compare_and_swap(target, expected_version=2, state={"quantity": 1})
+    receipt = store.get_commit_result(target, attempt, authorized_scope=target)
+    assert (receipt.status, receipt.state_version, receipt.state_hash) == ("committed", 2, committed.state_hash)
+    assert later.expires_at == 100
+    assert store.get_commit_result(target, uuid4(), authorized_scope=target).status == "not_found"
+    assert store.get_commit_result(target, attempt, authorized_scope=scope(session_id="other")).status == "unverifiable"
+    with pytest.raises(WorldStoreError, match="already_used"):
+        store.compare_and_swap(target, expected_version=3, state={"quantity": 0}, commit_attempt_id=attempt)
+    assert store.load(target) == later
+
+
+@pytest.mark.parametrize("changes", [
+    {"hash_encoding_version": 2},
+    {"candidate_serialization_version": 2},
+    {"hash_encoding_version": True},
+    {"hash_encoding_version": 1.0},
+    {"candidate_serialization_version": True},
+    {"candidate_serialization_version": 1.0},
+    {"world_generation_id": "another-generation"},
+    {"projection_contract_hash": "f" * 64},
+])
+def test_admission_rejects_unknown_encoding_or_mixed_evidence(changes):
+    """持久化准入拒絕未知封套版本、跨世代來源及另一份投影契約。"""
+    from deception.world.models import ResponseAdmission
+
+    admission = grant(AdmissionControl())
+    assert admission.hash_encoding_version == admission.candidate_serialization_version == 1
+    values = admission.model_dump()
+    values.update(changes)
+    with pytest.raises(ValueError):
+        ResponseAdmission.model_validate(values)
+
+
+def test_admission_rejects_invalid_effective_projection():
+    """即使契約 hash 相同，也不能把未通過有效投影的證據保存成准入。"""
+    from deception.world.models import ResponseAdmission
+
+    values = grant(AdmissionControl()).model_dump()
+    values["projection_evidence"]["effective_projection_valid"] = False
+    with pytest.raises(ValueError, match="valid effective projection"):
+        ResponseAdmission.model_validate(values)
+
+
+def test_admission_nested_evidence_is_immutable():
+    """Grant 保存後不能藉共享來源或 Profile 物件原地改寫准入的證據。"""
+    admission = grant(AdmissionControl())
+    with pytest.raises(ValueError):
+        admission.source.state_hash = "f" * 64
+    with pytest.raises(ValueError):
+        admission.projection_evidence.official_schema_valid = False
+    with pytest.raises(ValueError):
+        admission.projection_evidence.compatibility_profile.platform_version = "other"
+    assert admission.source.state_hash == "a" * 64

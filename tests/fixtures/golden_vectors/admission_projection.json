@@ -1,0 +1,866 @@
+{
+  "fixture_version": 1,
+  "purpose": "Admission, ResponseSource and reviewed Projection evidence interchange; not a complete SDK or conformance claim.",
+  "cases": [
+    {
+      "name": "committed-approved-deviation",
+      "admission": {
+        "admission_id": "admission-vector-1",
+        "request_binding_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "world_generation_id": "generation-vector-1",
+        "grant_revision": 10,
+        "projection_registry_revision": 7,
+        "candidate_ref": "candidate-vector-1",
+        "hash_encoding_version": 1,
+        "candidate_serialization_version": 1,
+        "candidate_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "immutable_body_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "semantic_headers_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+        "authorization_revision": "trusted-auth-1",
+        "authorization_deadline": 2000000000,
+        "transmission_deadline": 2000000100,
+        "source": {
+          "kind": "committed_operation",
+          "world_generation_id": "generation-vector-1",
+          "operation_result_digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "committed_state_version": 2,
+          "committed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "projection_evidence": {
+          "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "compatibility_profile": {
+            "profile_id": "vector-profile",
+            "profile_version": "1",
+            "profile_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "platform_id": "test",
+            "platform_version": "1",
+            "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "world_schema_version": "1",
+            "domain_adapter_version": "1"
+          },
+          "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+          "official_schema_valid": false,
+          "effective_projection_valid": true,
+          "deviation_approval": {
+            "approval_id": "guest-order-nullable",
+            "approval_revision": "review-1",
+            "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+            "approved_profile_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "reason": "Anonymous synthetic order has no customer account."
+          }
+        }
+      },
+      "accepted": true
+    },
+    {
+      "name": "snapshot-official",
+      "admission": {
+        "admission_id": "admission-vector-1",
+        "request_binding_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "world_generation_id": "generation-vector-1",
+        "grant_revision": 10,
+        "projection_registry_revision": 7,
+        "candidate_ref": "candidate-vector-1",
+        "hash_encoding_version": 1,
+        "candidate_serialization_version": 1,
+        "candidate_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "immutable_body_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "semantic_headers_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+        "authorization_revision": "trusted-auth-1",
+        "authorization_deadline": 2000000000,
+        "transmission_deadline": 2000000100,
+        "source": {
+          "kind": "snapshot",
+          "read_admission_id": "read-vector-1",
+          "world_generation_id": "generation-vector-1",
+          "state_version": 1,
+          "state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "projection_evidence": {
+          "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "compatibility_profile": {
+            "profile_id": "vector-profile",
+            "profile_version": "1",
+            "profile_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "platform_id": "test",
+            "platform_version": "1",
+            "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "world_schema_version": "1",
+            "domain_adapter_version": "1"
+          },
+          "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+          "official_schema_valid": true,
+          "effective_projection_valid": true
+        }
+      },
+      "accepted": true
+    },
+    {
+      "name": "security-error-official",
+      "admission": {
+        "admission_id": "admission-vector-1",
+        "request_binding_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "world_generation_id": "generation-vector-1",
+        "grant_revision": 10,
+        "projection_registry_revision": 7,
+        "candidate_ref": "candidate-vector-1",
+        "hash_encoding_version": 1,
+        "candidate_serialization_version": 1,
+        "candidate_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "immutable_body_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "semantic_headers_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+        "authorization_revision": "trusted-auth-1",
+        "authorization_deadline": 2000000000,
+        "transmission_deadline": 2000000100,
+        "source": {
+          "kind": "security_error",
+          "template_id": "safe-unavailable",
+          "contract_revision": "1"
+        },
+        "projection_evidence": {
+          "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "compatibility_profile": {
+            "profile_id": "vector-profile",
+            "profile_version": "1",
+            "profile_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "platform_id": "test",
+            "platform_version": "1",
+            "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "world_schema_version": "1",
+            "domain_adapter_version": "1"
+          },
+          "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+          "official_schema_valid": true,
+          "effective_projection_valid": true
+        }
+      },
+      "accepted": true
+    },
+    {
+      "name": "missing-approval",
+      "admission": {
+        "admission_id": "admission-vector-1",
+        "request_binding_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "world_generation_id": "generation-vector-1",
+        "grant_revision": 10,
+        "projection_registry_revision": 7,
+        "candidate_ref": "candidate-vector-1",
+        "hash_encoding_version": 1,
+        "candidate_serialization_version": 1,
+        "candidate_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "immutable_body_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "semantic_headers_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+        "authorization_revision": "trusted-auth-1",
+        "authorization_deadline": 2000000000,
+        "transmission_deadline": 2000000100,
+        "source": {
+          "kind": "committed_operation",
+          "world_generation_id": "generation-vector-1",
+          "operation_result_digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "committed_state_version": 2,
+          "committed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "projection_evidence": {
+          "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "compatibility_profile": {
+            "profile_id": "vector-profile",
+            "profile_version": "1",
+            "profile_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "platform_id": "test",
+            "platform_version": "1",
+            "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "world_schema_version": "1",
+            "domain_adapter_version": "1"
+          },
+          "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+          "official_schema_valid": false,
+          "effective_projection_valid": true,
+          "deviation_approval": null
+        }
+      },
+      "accepted": false,
+      "error_contains": "effective projection requires deviation approval"
+    },
+    {
+      "name": "approval-source-mismatch",
+      "admission": {
+        "admission_id": "admission-vector-1",
+        "request_binding_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "world_generation_id": "generation-vector-1",
+        "grant_revision": 10,
+        "projection_registry_revision": 7,
+        "candidate_ref": "candidate-vector-1",
+        "hash_encoding_version": 1,
+        "candidate_serialization_version": 1,
+        "candidate_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "immutable_body_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "semantic_headers_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+        "authorization_revision": "trusted-auth-1",
+        "authorization_deadline": 2000000000,
+        "transmission_deadline": 2000000100,
+        "source": {
+          "kind": "committed_operation",
+          "world_generation_id": "generation-vector-1",
+          "operation_result_digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "committed_state_version": 2,
+          "committed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "projection_evidence": {
+          "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "compatibility_profile": {
+            "profile_id": "vector-profile",
+            "profile_version": "1",
+            "profile_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "platform_id": "test",
+            "platform_version": "1",
+            "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "world_schema_version": "1",
+            "domain_adapter_version": "1"
+          },
+          "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+          "official_schema_valid": false,
+          "effective_projection_valid": true,
+          "deviation_approval": {
+            "approval_id": "guest-order-nullable",
+            "approval_revision": "review-1",
+            "source_spec_sha256": "9999999999999999999999999999999999999999999999999999999999999999",
+            "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+            "approved_profile_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "reason": "Anonymous synthetic order has no customer account."
+          }
+        }
+      },
+      "accepted": false,
+      "error_contains": "deviation approval source spec does not match"
+    },
+    {
+      "name": "approval-contract-mismatch",
+      "admission": {
+        "admission_id": "admission-vector-1",
+        "request_binding_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "world_generation_id": "generation-vector-1",
+        "grant_revision": 10,
+        "projection_registry_revision": 7,
+        "candidate_ref": "candidate-vector-1",
+        "hash_encoding_version": 1,
+        "candidate_serialization_version": 1,
+        "candidate_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "immutable_body_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "semantic_headers_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+        "authorization_revision": "trusted-auth-1",
+        "authorization_deadline": 2000000000,
+        "transmission_deadline": 2000000100,
+        "source": {
+          "kind": "committed_operation",
+          "world_generation_id": "generation-vector-1",
+          "operation_result_digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "committed_state_version": 2,
+          "committed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "projection_evidence": {
+          "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "compatibility_profile": {
+            "profile_id": "vector-profile",
+            "profile_version": "1",
+            "profile_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "platform_id": "test",
+            "platform_version": "1",
+            "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "world_schema_version": "1",
+            "domain_adapter_version": "1"
+          },
+          "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+          "official_schema_valid": false,
+          "effective_projection_valid": true,
+          "deviation_approval": {
+            "approval_id": "guest-order-nullable",
+            "approval_revision": "review-1",
+            "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "projection_contract_hash": "9999999999999999999999999999999999999999999999999999999999999999",
+            "approved_profile_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "reason": "Anonymous synthetic order has no customer account."
+          }
+        }
+      },
+      "accepted": false,
+      "error_contains": "deviation approval contract does not match"
+    },
+    {
+      "name": "approval-profile-mismatch",
+      "admission": {
+        "admission_id": "admission-vector-1",
+        "request_binding_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "world_generation_id": "generation-vector-1",
+        "grant_revision": 10,
+        "projection_registry_revision": 7,
+        "candidate_ref": "candidate-vector-1",
+        "hash_encoding_version": 1,
+        "candidate_serialization_version": 1,
+        "candidate_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "immutable_body_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "semantic_headers_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+        "authorization_revision": "trusted-auth-1",
+        "authorization_deadline": 2000000000,
+        "transmission_deadline": 2000000100,
+        "source": {
+          "kind": "committed_operation",
+          "world_generation_id": "generation-vector-1",
+          "operation_result_digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "committed_state_version": 2,
+          "committed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "projection_evidence": {
+          "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "compatibility_profile": {
+            "profile_id": "vector-profile",
+            "profile_version": "1",
+            "profile_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "platform_id": "test",
+            "platform_version": "1",
+            "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "world_schema_version": "1",
+            "domain_adapter_version": "1"
+          },
+          "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+          "official_schema_valid": false,
+          "effective_projection_valid": true,
+          "deviation_approval": {
+            "approval_id": "guest-order-nullable",
+            "approval_revision": "review-1",
+            "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+            "approved_profile_sha256": "9999999999999999999999999999999999999999999999999999999999999999",
+            "reason": "Anonymous synthetic order has no customer account."
+          }
+        }
+      },
+      "accepted": false,
+      "error_contains": "deviation approval profile does not match"
+    },
+    {
+      "name": "profile-source-mismatch",
+      "admission": {
+        "admission_id": "admission-vector-1",
+        "request_binding_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "world_generation_id": "generation-vector-1",
+        "grant_revision": 10,
+        "projection_registry_revision": 7,
+        "candidate_ref": "candidate-vector-1",
+        "hash_encoding_version": 1,
+        "candidate_serialization_version": 1,
+        "candidate_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "immutable_body_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "semantic_headers_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+        "authorization_revision": "trusted-auth-1",
+        "authorization_deadline": 2000000000,
+        "transmission_deadline": 2000000100,
+        "source": {
+          "kind": "committed_operation",
+          "world_generation_id": "generation-vector-1",
+          "operation_result_digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "committed_state_version": 2,
+          "committed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "projection_evidence": {
+          "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "compatibility_profile": {
+            "profile_id": "vector-profile",
+            "profile_version": "1",
+            "profile_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "platform_id": "test",
+            "platform_version": "1",
+            "source_spec_sha256": "9999999999999999999999999999999999999999999999999999999999999999",
+            "world_schema_version": "1",
+            "domain_adapter_version": "1"
+          },
+          "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+          "official_schema_valid": false,
+          "effective_projection_valid": true,
+          "deviation_approval": {
+            "approval_id": "guest-order-nullable",
+            "approval_revision": "review-1",
+            "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+            "approved_profile_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "reason": "Anonymous synthetic order has no customer account."
+          }
+        }
+      },
+      "accepted": false,
+      "error_contains": "projection source spec does not match compatibility profile"
+    },
+    {
+      "name": "admission-contract-mismatch",
+      "admission": {
+        "admission_id": "admission-vector-1",
+        "request_binding_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "world_generation_id": "generation-vector-1",
+        "grant_revision": 10,
+        "projection_registry_revision": 7,
+        "candidate_ref": "candidate-vector-1",
+        "hash_encoding_version": 1,
+        "candidate_serialization_version": 1,
+        "candidate_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "immutable_body_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "semantic_headers_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "projection_contract_hash": "9999999999999999999999999999999999999999999999999999999999999999",
+        "authorization_revision": "trusted-auth-1",
+        "authorization_deadline": 2000000000,
+        "transmission_deadline": 2000000100,
+        "source": {
+          "kind": "committed_operation",
+          "world_generation_id": "generation-vector-1",
+          "operation_result_digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "committed_state_version": 2,
+          "committed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "projection_evidence": {
+          "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "compatibility_profile": {
+            "profile_id": "vector-profile",
+            "profile_version": "1",
+            "profile_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "platform_id": "test",
+            "platform_version": "1",
+            "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "world_schema_version": "1",
+            "domain_adapter_version": "1"
+          },
+          "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+          "official_schema_valid": false,
+          "effective_projection_valid": true,
+          "deviation_approval": {
+            "approval_id": "guest-order-nullable",
+            "approval_revision": "review-1",
+            "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+            "approved_profile_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "reason": "Anonymous synthetic order has no customer account."
+          }
+        }
+      },
+      "accepted": false,
+      "error_contains": "projection evidence contract does not match admission"
+    },
+    {
+      "name": "generation-mismatch",
+      "admission": {
+        "admission_id": "admission-vector-1",
+        "request_binding_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "world_generation_id": "generation-vector-1",
+        "grant_revision": 10,
+        "projection_registry_revision": 7,
+        "candidate_ref": "candidate-vector-1",
+        "hash_encoding_version": 1,
+        "candidate_serialization_version": 1,
+        "candidate_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "immutable_body_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "semantic_headers_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+        "authorization_revision": "trusted-auth-1",
+        "authorization_deadline": 2000000000,
+        "transmission_deadline": 2000000100,
+        "source": {
+          "kind": "committed_operation",
+          "world_generation_id": "other-generation",
+          "operation_result_digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "committed_state_version": 2,
+          "committed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "projection_evidence": {
+          "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "compatibility_profile": {
+            "profile_id": "vector-profile",
+            "profile_version": "1",
+            "profile_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "platform_id": "test",
+            "platform_version": "1",
+            "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "world_schema_version": "1",
+            "domain_adapter_version": "1"
+          },
+          "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+          "official_schema_valid": false,
+          "effective_projection_valid": true,
+          "deviation_approval": {
+            "approval_id": "guest-order-nullable",
+            "approval_revision": "review-1",
+            "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+            "approved_profile_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "reason": "Anonymous synthetic order has no customer account."
+          }
+        }
+      },
+      "accepted": false,
+      "error_contains": "response source generation does not match admission"
+    },
+    {
+      "name": "transmission-before-authorization",
+      "admission": {
+        "admission_id": "admission-vector-1",
+        "request_binding_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "world_generation_id": "generation-vector-1",
+        "grant_revision": 10,
+        "projection_registry_revision": 7,
+        "candidate_ref": "candidate-vector-1",
+        "hash_encoding_version": 1,
+        "candidate_serialization_version": 1,
+        "candidate_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "immutable_body_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "semantic_headers_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+        "authorization_revision": "trusted-auth-1",
+        "authorization_deadline": 2000000000,
+        "transmission_deadline": 1999999999,
+        "source": {
+          "kind": "committed_operation",
+          "world_generation_id": "generation-vector-1",
+          "operation_result_digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "committed_state_version": 2,
+          "committed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "projection_evidence": {
+          "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "compatibility_profile": {
+            "profile_id": "vector-profile",
+            "profile_version": "1",
+            "profile_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "platform_id": "test",
+            "platform_version": "1",
+            "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "world_schema_version": "1",
+            "domain_adapter_version": "1"
+          },
+          "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+          "official_schema_valid": false,
+          "effective_projection_valid": true,
+          "deviation_approval": {
+            "approval_id": "guest-order-nullable",
+            "approval_revision": "review-1",
+            "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+            "approved_profile_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "reason": "Anonymous synthetic order has no customer account."
+          }
+        }
+      },
+      "accepted": false,
+      "error_contains": "transmission_deadline must not precede authorization_deadline"
+    },
+    {
+      "name": "invalid-effective-projection",
+      "admission": {
+        "admission_id": "admission-vector-1",
+        "request_binding_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "world_generation_id": "generation-vector-1",
+        "grant_revision": 10,
+        "projection_registry_revision": 7,
+        "candidate_ref": "candidate-vector-1",
+        "hash_encoding_version": 1,
+        "candidate_serialization_version": 1,
+        "candidate_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "immutable_body_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "semantic_headers_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+        "authorization_revision": "trusted-auth-1",
+        "authorization_deadline": 2000000000,
+        "transmission_deadline": 2000000100,
+        "source": {
+          "kind": "committed_operation",
+          "world_generation_id": "generation-vector-1",
+          "operation_result_digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "committed_state_version": 2,
+          "committed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "projection_evidence": {
+          "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "compatibility_profile": {
+            "profile_id": "vector-profile",
+            "profile_version": "1",
+            "profile_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "platform_id": "test",
+            "platform_version": "1",
+            "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "world_schema_version": "1",
+            "domain_adapter_version": "1"
+          },
+          "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+          "official_schema_valid": false,
+          "effective_projection_valid": false,
+          "deviation_approval": {
+            "approval_id": "guest-order-nullable",
+            "approval_revision": "review-1",
+            "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+            "approved_profile_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "reason": "Anonymous synthetic order has no customer account."
+          }
+        }
+      },
+      "accepted": false,
+      "error_contains": "response admission requires a valid effective projection"
+    },
+    {
+      "name": "unknown-hash-encoding",
+      "admission": {
+        "admission_id": "admission-vector-1",
+        "request_binding_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "world_generation_id": "generation-vector-1",
+        "grant_revision": 10,
+        "projection_registry_revision": 7,
+        "candidate_ref": "candidate-vector-1",
+        "hash_encoding_version": 2,
+        "candidate_serialization_version": 1,
+        "candidate_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "immutable_body_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "semantic_headers_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+        "authorization_revision": "trusted-auth-1",
+        "authorization_deadline": 2000000000,
+        "transmission_deadline": 2000000100,
+        "source": {
+          "kind": "committed_operation",
+          "world_generation_id": "generation-vector-1",
+          "operation_result_digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "committed_state_version": 2,
+          "committed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "projection_evidence": {
+          "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "compatibility_profile": {
+            "profile_id": "vector-profile",
+            "profile_version": "1",
+            "profile_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "platform_id": "test",
+            "platform_version": "1",
+            "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "world_schema_version": "1",
+            "domain_adapter_version": "1"
+          },
+          "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+          "official_schema_valid": false,
+          "effective_projection_valid": true,
+          "deviation_approval": {
+            "approval_id": "guest-order-nullable",
+            "approval_revision": "review-1",
+            "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+            "approved_profile_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "reason": "Anonymous synthetic order has no customer account."
+          }
+        }
+      },
+      "accepted": false,
+      "error_contains": null
+    },
+    {
+      "name": "boolean-serialization-version",
+      "admission": {
+        "admission_id": "admission-vector-1",
+        "request_binding_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "world_generation_id": "generation-vector-1",
+        "grant_revision": 10,
+        "projection_registry_revision": 7,
+        "candidate_ref": "candidate-vector-1",
+        "hash_encoding_version": 1,
+        "candidate_serialization_version": true,
+        "candidate_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "immutable_body_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "semantic_headers_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+        "authorization_revision": "trusted-auth-1",
+        "authorization_deadline": 2000000000,
+        "transmission_deadline": 2000000100,
+        "source": {
+          "kind": "committed_operation",
+          "world_generation_id": "generation-vector-1",
+          "operation_result_digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "committed_state_version": 2,
+          "committed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "projection_evidence": {
+          "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "compatibility_profile": {
+            "profile_id": "vector-profile",
+            "profile_version": "1",
+            "profile_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "platform_id": "test",
+            "platform_version": "1",
+            "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "world_schema_version": "1",
+            "domain_adapter_version": "1"
+          },
+          "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+          "official_schema_valid": false,
+          "effective_projection_valid": true,
+          "deviation_approval": {
+            "approval_id": "guest-order-nullable",
+            "approval_revision": "review-1",
+            "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+            "approved_profile_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "reason": "Anonymous synthetic order has no customer account."
+          }
+        }
+      },
+      "accepted": false,
+      "error_contains": "encoding version must be an integer"
+    },
+    {
+      "name": "unknown-source-kind",
+      "admission": {
+        "admission_id": "admission-vector-1",
+        "request_binding_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "world_generation_id": "generation-vector-1",
+        "grant_revision": 10,
+        "projection_registry_revision": 7,
+        "candidate_ref": "candidate-vector-1",
+        "hash_encoding_version": 1,
+        "candidate_serialization_version": 1,
+        "candidate_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "immutable_body_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "semantic_headers_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+        "authorization_revision": "trusted-auth-1",
+        "authorization_deadline": 2000000000,
+        "transmission_deadline": 2000000100,
+        "source": {
+          "kind": "uncommitted_operation",
+          "world_generation_id": "generation-vector-1",
+          "operation_result_digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "committed_state_version": 2,
+          "committed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "projection_evidence": {
+          "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "compatibility_profile": {
+            "profile_id": "vector-profile",
+            "profile_version": "1",
+            "profile_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "platform_id": "test",
+            "platform_version": "1",
+            "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "world_schema_version": "1",
+            "domain_adapter_version": "1"
+          },
+          "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+          "official_schema_valid": false,
+          "effective_projection_valid": true,
+          "deviation_approval": {
+            "approval_id": "guest-order-nullable",
+            "approval_revision": "review-1",
+            "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+            "approved_profile_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "reason": "Anonymous synthetic order has no customer account."
+          }
+        }
+      },
+      "accepted": false,
+      "error_contains": null
+    },
+    {
+      "name": "missing-commit-digest",
+      "admission": {
+        "admission_id": "admission-vector-1",
+        "request_binding_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "world_generation_id": "generation-vector-1",
+        "grant_revision": 10,
+        "projection_registry_revision": 7,
+        "candidate_ref": "candidate-vector-1",
+        "hash_encoding_version": 1,
+        "candidate_serialization_version": 1,
+        "candidate_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "immutable_body_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "semantic_headers_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+        "authorization_revision": "trusted-auth-1",
+        "authorization_deadline": 2000000000,
+        "transmission_deadline": 2000000100,
+        "source": {
+          "kind": "committed_operation",
+          "world_generation_id": "generation-vector-1",
+          "operation_result_digest": null,
+          "committed_state_version": 2,
+          "committed_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "projection_evidence": {
+          "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "compatibility_profile": {
+            "profile_id": "vector-profile",
+            "profile_version": "1",
+            "profile_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "platform_id": "test",
+            "platform_version": "1",
+            "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "world_schema_version": "1",
+            "domain_adapter_version": "1"
+          },
+          "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+          "official_schema_valid": false,
+          "effective_projection_valid": true,
+          "deviation_approval": {
+            "approval_id": "guest-order-nullable",
+            "approval_revision": "review-1",
+            "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "projection_contract_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+            "approved_profile_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "reason": "Anonymous synthetic order has no customer account."
+          }
+        }
+      },
+      "accepted": false,
+      "error_contains": null
+    }
+  ],
+  "world_policy": {
+    "world_schema_version": "1",
+    "domain_adapter_version": "ecommerce-1",
+    "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "compatibility_profile_hash": "2eb86b127869fca0eacbc9f17b0441637bbf559a66a69fcdf49a36af603d5d54",
+    "projection_profiles": {
+      "2222222222222222222222222222222222222222222222222222222222222222": {
+        "profile_id": "vector-profile",
+        "profile_version": "1",
+        "profile_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+        "platform_id": "test",
+        "platform_version": "1",
+        "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "world_schema_version": "1",
+        "domain_adapter_version": "1"
+      }
+    }
+  },
+  "world_state": {
+    "_mirage_world_compatibility": {
+      "world_schema_version": "1",
+      "domain_adapter_version": "ecommerce-1",
+      "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "compatibility_profile_hash": "2eb86b127869fca0eacbc9f17b0441637bbf559a66a69fcdf49a36af603d5d54",
+      "projection_profiles": {
+        "2222222222222222222222222222222222222222222222222222222222222222": {
+          "profile_id": "vector-profile",
+          "profile_version": "1",
+          "profile_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+          "platform_id": "test",
+          "platform_version": "1",
+          "source_spec_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "world_schema_version": "1",
+          "domain_adapter_version": "1"
+        }
+      }
+    },
+    "stock": 5
+  },
+  "world_state_sha256": "3dcee6e96f63bec32992cdafd19e435258f99a301ea5016e951e52596a3b1838"
+}

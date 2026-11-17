@@ -7,7 +7,7 @@ from urllib.parse import quote, unquote
 
 from pydantic import Field, JsonValue, model_validator
 
-from deception.generation.models import digest
+from deception.generation.models import GeneratedFieldValidationError, digest
 from deception.common.models import SLUG, SyntheticModel
 
 REQUEST_ENTITY_ID_TOKEN = "{request_entity_id}"
@@ -103,15 +103,18 @@ class RecoveryTool:
 
     @staticmethod
     def _bind_request_entity_id(values, context):
-        """只將核准 token 綁定到已驗證的商品 ID，並 URL encode 防止回顯可執行輸入。"""
-        entity_id = context.domain_context.get("product_id")
-        if not isinstance(entity_id, str) or not entity_id:
-            raise ValueError("Request-bound fallback requires a verified product ID")
-        encoded_id = quote(unquote(entity_id), safe="")
+        """遇到核准 token 才要求已驗證商品 ID 並編碼；純固定值可供其他領域使用。"""
+        encoded_id = None
 
         def bind(value):
-            """遞迴替換核准字串 token，不解讀其他模板語法或新增欄位。"""
-            if isinstance(value, str):
+            """只在含 token 的字串取商品 ID，不解讀其他模板語法或改動固定字串。"""
+            nonlocal encoded_id
+            if isinstance(value, str) and REQUEST_ENTITY_ID_TOKEN in value:
+                if encoded_id is None:
+                    entity_id = context.domain_context.get("product_id")
+                    if not isinstance(entity_id, str) or not entity_id:
+                        raise ValueError("Request-bound fallback requires a verified product ID")
+                    encoded_id = quote(unquote(entity_id), safe="")
                 return value.replace(REQUEST_ENTITY_ID_TOKEN, encoded_id)
             if isinstance(value, list):
                 return [bind(item) for item in value]
@@ -128,9 +131,14 @@ class RecoveryTool:
                 and all(issue.location == "body" for issue in result.errors))
 
     @staticmethod
-    def repair_feedback(field_ids) -> str:
-        """只回固定指示及管理者核准的欄位 ID，不把例外、原請求或 I 的原始 reason 回填模型。"""
+    def repair_feedback(field_ids, *, error=None) -> str:
+        """只回白名單欄位的受控 schema 摘要；其他例外及 gate reason 保留泛用回饋。"""
+        allowed = set(field_ids)
+        violations = ([item.model_dump(mode="json", exclude_none=True) for item in error.violations
+                       if item.field_id in allowed] if isinstance(error, GeneratedFieldValidationError) else [])
         return json.dumps({"code": "allowed_content_rejected", "allowed_field_ids": sorted(field_ids),
-                           "instruction": "Regenerate only these allowed fields to satisfy their supplied schemas. "
+                           "violations": violations,
+                           "instruction": "Regenerate all allowed fields. Correct the listed constraints and satisfy "
+                                          "the supplied schemas and field instructions. "
                                           "Keep authoritative facts, scenario and HTTP metadata unchanged."},
                           ensure_ascii=False, sort_keys=True)

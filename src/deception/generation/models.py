@@ -9,6 +9,7 @@ from pydantic import Field, JsonValue, model_validator
 from deception.core.models import CompositionPlan
 from deception.llm.models import RunLimits
 from deception.common.models import SLUG, DatasetScope, SyntheticModel
+from deception.world.models import WorldScope
 
 from .pointers import tokens as pointer_tokens
 
@@ -56,12 +57,17 @@ class GenerationRule(SyntheticModel):
     media_type: Literal["application/json"] = "application/json"
     protected_pointers: list[str] = Field(default_factory=list, max_length=128)
     fields: list[GenerationField] = Field(min_length=1, max_length=16)
+    generation_mode: Literal["model", "reviewed_template"] = "model"
+    planning_mode: Literal["model", "fixed_fields"] = "model"
+    fact_keys: list[str] | None = Field(default=None, max_length=128)
 
     @model_validator(mode="after")
     def check_fields(self):
         """生成欄位不可重複、互為父子，或覆寫政策明列的權威資料。"""
         if len({f.field_id for f in self.fields}) != len(self.fields):
             raise ValueError("Generated field IDs must be unique per rule")
+        if self.fact_keys is not None and len(set(self.fact_keys)) != len(self.fact_keys):
+            raise ValueError("Fact dependency keys must be unique")
         # 同一組內容原子發布，故首版只允許同一快取範圍與同一實體來源。
         # 混合 request/entity 會讓請求指紋改變時連 entity 描述都重新生成。
         if len({(f.cache_scope, f.entity_pointer) for f in self.fields}) != 1:
@@ -103,6 +109,35 @@ class GenerationIntent(SyntheticModel):
     instructions: str = Field(default="", max_length=1000)
 
 
+class FieldViolation(SyntheticModel):
+    """提供模型修正的受控摘要，不含失敗值、原始路徑或驗證器錯誤文字。"""
+
+    field_id: str = Field(pattern=SLUG)
+    code: Literal["type", "min_length", "max_length", "minimum", "maximum", "exclusive_minimum",
+                  "exclusive_maximum", "min_items", "max_items", "min_properties", "max_properties",
+                  "pattern", "format", "enum", "const", "required", "additional_properties",
+                  "unique_items", "schema"]
+    limit: int | float | None = None
+    expected_type: Literal["string", "number", "integer", "boolean", "object", "array", "null"] | None = None
+
+
+class GeneratedFieldValidationError(ValueError):
+    """攜帶已去識別的欄位限制摘要，讓修正流程不必解析原始例外。"""
+
+    def __init__(self, violations: list[FieldViolation]):
+        """保存至多十六筆獨立摘要；例外文字固定，不回顯生成內容。"""
+        self.violations = tuple(item.model_copy(deep=True) for item in violations[:16])
+        super().__init__("Generated fields do not satisfy their supplied schemas")
+
+
+class ContentLifecycle(SyntheticModel):
+    """可信組裝層提供的世界與實體版次；不從訪客 header 或模型文字建立。"""
+
+    world_scope: WorldScope
+    entity_version: str = Field(min_length=1, max_length=128)
+    content_epoch: str = Field(min_length=1, max_length=128)
+
+
 class GenerationContext(SyntheticModel):
     """J：C 從已核對工具結果建置，原始 body、Cookie、Authorization 不放入模型 context。"""
 
@@ -122,6 +157,16 @@ class GenerationContext(SyntheticModel):
     state_sha256: str
     domain_context: dict[str, JsonValue]
     model_identity: dict[str, JsonValue]
+    content_lifecycle: ContentLifecycle | None = None
+
+    @model_validator(mode="after")
+    def check_lifecycle(self):
+        """世界生命週期必須與本次受信任環境及部署相符，不能借用其他 scope。"""
+        if self.content_lifecycle is not None:
+            world = self.content_lifecycle.world_scope
+            if (world.environment_id, world.deployment_id) != (self.environment_id, self.deployment_id):
+                raise ValueError("Content lifecycle belongs to another deployment")
+        return self
 
     @property
     def context_id(self) -> str:

@@ -3,9 +3,25 @@
 from typing import Literal
 from urllib.parse import urlsplit
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from deception.common.models import SyntheticModel
+
+
+class TaskModelConfig(SyntheticModel):
+    """由管理者覆寫單一任務的模型與解碼配方；換模型必須同時固定完整摘要。"""
+
+    model_name: str | None = Field(default=None, min_length=1, max_length=256)
+    model_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    temperature: float | None = Field(default=None, ge=0, le=1)
+    max_output_tokens: int | None = Field(default=None, ge=32, le=8192)
+
+    @model_validator(mode="after")
+    def check_model_pair(self):
+        """拒絕只有模型名稱或只有摘要的半份選擇，避免沿用另一模型身份。"""
+        if (self.model_name is None) != (self.model_digest is None):
+            raise ValueError("Task model selection requires both name and digest")
+        return self
 
 
 class LLMConfig(SyntheticModel):
@@ -19,6 +35,23 @@ class LLMConfig(SyntheticModel):
     planner_mode: Literal["native_tools", "structured_actions"] = "native_tools"
     temperature: float = Field(default=0.0, ge=0, le=1)
     max_output_tokens: int = Field(default=512, ge=32, le=8192)
+    tasks: dict[Literal["planner", "generation", "repair"], TaskModelConfig] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def check_tasks(self):
+        """將每份任務覆寫重驗為相同 loopback 限制的完整設定。"""
+        for task in self.tasks:
+            self.for_task(task)
+        return self
+
+    def for_task(self, task: Literal["planner", "generation", "repair"]) -> "LLMConfig":
+        """解析任務的實際模型與設定；省略的值繼承基準，回傳不含遞迴覆寫的副本。"""
+        if task not in ("planner", "generation", "repair"):
+            raise ValueError("Unknown model task")
+        data = self.model_dump(mode="json", exclude={"tasks"})
+        if task in self.tasks:
+            data.update(self.tasks[task].model_dump(mode="json", exclude_none=True))
+        return LLMConfig.model_validate(data)
 
     @field_validator("base_url")
     @classmethod
@@ -42,10 +75,14 @@ class LLMConfig(SyntheticModel):
 
     def identity_fields(self) -> dict:
         """追溯使用明確模型身份；test 不能被誤報為本機真模型。"""
-        return dict(provider="ollama" if self.execution_mode == "local" else "test",
+        identity = dict(provider="ollama" if self.execution_mode == "local" else "test",
                     execution_mode=self.execution_mode, model_name=self.model_name, model_digest=self.model_digest,
                     temperature=self.temperature, max_output_tokens=self.max_output_tokens,
                     planner_mode=self.planner_mode)
+        if self.tasks:
+            identity["tasks"] = {task: self.for_task(task).identity_fields()
+                                 for task in ("planner", "generation", "repair")}
+        return identity
 
 
 class RunLimits(SyntheticModel):

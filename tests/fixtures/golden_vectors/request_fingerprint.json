@@ -1,0 +1,513 @@
+{
+  "canonicalization_version": 1,
+  "cases": [
+    {
+      "name": "encoded-path-and-repeated-query",
+      "request": {
+        "request_id": "request-vector-raw-1",
+        "method": "GET",
+        "raw_url": "https://vector.test/store/products/a%2Fb?tag=x&tag=y&q=%E4%B8%AD&empty=",
+        "path": "/store/products/a/b",
+        "raw_path": "2f73746f72652f70726f64756374732f6125324662",
+        "query_string": "7461673d78267461673d7926713d25453425423825414426656d7074793d",
+        "query": [
+          [
+            "tag",
+            "x"
+          ],
+          [
+            "tag",
+            "y"
+          ],
+          [
+            "q",
+            "中"
+          ],
+          [
+            "empty",
+            ""
+          ]
+        ],
+        "headers": [
+          [
+            "Host",
+            "vector.test"
+          ],
+          [
+            "X-Request-ID",
+            "request-vector-raw-1"
+          ],
+          [
+            "Authorization",
+            "Bearer synthetic-vector-only"
+          ],
+          [
+            "x-trusted-session",
+            "not-an-authorization"
+          ],
+          [
+            "x-ignored",
+            "value"
+          ]
+        ],
+        "body": ""
+      },
+      "fingerprint": "3c081f6c049ce0ed153f8cb5e40f76d3a14f5092f9da6a92e3d6cc5739f75679"
+    },
+    {
+      "name": "exact-binary-body",
+      "request": {
+        "request_id": "request-vector-raw-1",
+        "method": "POST",
+        "raw_url": "https://vector.test/synthetic/carts",
+        "path": "/synthetic/carts",
+        "raw_path": "2f73796e7468657469632f6361727473",
+        "query_string": "",
+        "query": [],
+        "headers": [
+          [
+            "Host",
+            "vector.test"
+          ],
+          [
+            "X-Request-ID",
+            "request-vector-raw-1"
+          ],
+          [
+            "Authorization",
+            "Bearer synthetic-vector-only"
+          ],
+          [
+            "x-trusted-session",
+            "not-an-authorization"
+          ],
+          [
+            "x-ignored",
+            "value"
+          ],
+          [
+            "Content-Type",
+            "application/octet-stream"
+          ],
+          [
+            "Content-Length",
+            "23"
+          ]
+        ],
+        "body": "00ff7b227a223a312c202261223a2262696e617279227d"
+      },
+      "fingerprint": "6527b206d5e7ee51c25c44f7a9636a83a4204f2bc319493ab237d7d6e674dee3"
+    },
+    {
+      "name": "ignored-headers-do-not-change-hash",
+      "request": {
+        "request_id": "request-vector-raw-1",
+        "method": "GET",
+        "raw_url": "https://vector.test/store/products/a%2Fb?tag=x&tag=y&q=%E4%B8%AD&empty=",
+        "path": "/store/products/a/b",
+        "raw_path": "2f73746f72652f70726f64756374732f6125324662",
+        "query_string": "7461673d78267461673d7926713d25453425423825414426656d7074793d",
+        "query": [
+          [
+            "tag",
+            "x"
+          ],
+          [
+            "tag",
+            "y"
+          ],
+          [
+            "q",
+            "中"
+          ],
+          [
+            "empty",
+            ""
+          ]
+        ],
+        "headers": [
+          [
+            "Host",
+            "vector.test"
+          ],
+          [
+            "X-Request-ID",
+            "request-vector-raw-1"
+          ],
+          [
+            "Authorization",
+            "Bearer synthetic-vector-only"
+          ],
+          [
+            "x-trusted-session",
+            "different-jws-excluded"
+          ],
+          [
+            "x-ignored",
+            "different-ignored-value"
+          ],
+          [
+            "x-ignored",
+            "duplicate-ignored-header"
+          ]
+        ],
+        "body": ""
+      },
+      "fingerprint": "3c081f6c049ce0ed153f8cb5e40f76d3a14f5092f9da6a92e3d6cc5739f75679"
+    },
+    {
+      "name": "approved-header-order-is-bound",
+      "request": {
+        "request_id": "request-vector-raw-1",
+        "method": "GET",
+        "raw_url": "https://vector.test/store/products/a%2Fb?tag=x&tag=y&q=%E4%B8%AD&empty=",
+        "path": "/store/products/a/b",
+        "raw_path": "2f73746f72652f70726f64756374732f6125324662",
+        "query_string": "7461673d78267461673d7926713d25453425423825414426656d7074793d",
+        "query": [
+          [
+            "tag",
+            "x"
+          ],
+          [
+            "tag",
+            "y"
+          ],
+          [
+            "q",
+            "中"
+          ],
+          [
+            "empty",
+            ""
+          ]
+        ],
+        "headers": [
+          [
+            "X-Request-ID",
+            "request-vector-raw-1"
+          ],
+          [
+            "Host",
+            "vector.test"
+          ],
+          [
+            "Authorization",
+            "Bearer synthetic-vector-only"
+          ],
+          [
+            "x-trusted-session",
+            "not-an-authorization"
+          ],
+          [
+            "x-ignored",
+            "value"
+          ]
+        ],
+        "body": ""
+      },
+      "fingerprint": "c3b80e5bbb2bb6ec839a4e45d2a8056b0ab5c78068505b3a38e1813f3b6ae1c8"
+    },
+    {
+      "name": "duplicate-host",
+      "request": {
+        "request_id": "request-vector-raw-1",
+        "method": "GET",
+        "raw_url": "https://vector.test/store/products/a%2Fb?tag=x&tag=y&q=%E4%B8%AD&empty=",
+        "path": "/store/products/a/b",
+        "raw_path": "2f73746f72652f70726f64756374732f6125324662",
+        "query_string": "7461673d78267461673d7926713d25453425423825414426656d7074793d",
+        "query": [
+          [
+            "tag",
+            "x"
+          ],
+          [
+            "tag",
+            "y"
+          ],
+          [
+            "q",
+            "中"
+          ],
+          [
+            "empty",
+            ""
+          ]
+        ],
+        "headers": [
+          [
+            "Host",
+            "vector.test"
+          ],
+          [
+            "X-Request-ID",
+            "request-vector-raw-1"
+          ],
+          [
+            "Authorization",
+            "Bearer synthetic-vector-only"
+          ],
+          [
+            "x-trusted-session",
+            "not-an-authorization"
+          ],
+          [
+            "x-ignored",
+            "value"
+          ],
+          [
+            "host",
+            "vector.test"
+          ]
+        ],
+        "body": ""
+      },
+      "error": "ambiguous_request_fingerprint_header"
+    },
+    {
+      "name": "duplicate-authorization",
+      "request": {
+        "request_id": "request-vector-raw-1",
+        "method": "GET",
+        "raw_url": "https://vector.test/store/products/a%2Fb?tag=x&tag=y&q=%E4%B8%AD&empty=",
+        "path": "/store/products/a/b",
+        "raw_path": "2f73746f72652f70726f64756374732f6125324662",
+        "query_string": "7461673d78267461673d7926713d25453425423825414426656d7074793d",
+        "query": [
+          [
+            "tag",
+            "x"
+          ],
+          [
+            "tag",
+            "y"
+          ],
+          [
+            "q",
+            "中"
+          ],
+          [
+            "empty",
+            ""
+          ]
+        ],
+        "headers": [
+          [
+            "Host",
+            "vector.test"
+          ],
+          [
+            "X-Request-ID",
+            "request-vector-raw-1"
+          ],
+          [
+            "Authorization",
+            "Bearer synthetic-vector-only"
+          ],
+          [
+            "x-trusted-session",
+            "not-an-authorization"
+          ],
+          [
+            "x-ignored",
+            "value"
+          ],
+          [
+            "authorization",
+            "Bearer synthetic-vector-only"
+          ]
+        ],
+        "body": ""
+      },
+      "error": "ambiguous_request_fingerprint_header"
+    },
+    {
+      "name": "native-control-headers",
+      "request": {
+        "request_id": "request-vector-raw-1",
+        "method": "GET",
+        "raw_url": "https://vector.test/store/products/a%2Fb?tag=x&tag=y&q=%E4%B8%AD&empty=",
+        "path": "/store/products/a/b",
+        "raw_path": "2f73746f72652f70726f64756374732f6125324662",
+        "query_string": "7461673d78267461673d7926713d25453425423825414426656d7074793d",
+        "query": [
+          [
+            "tag",
+            "x"
+          ],
+          [
+            "tag",
+            "y"
+          ],
+          [
+            "q",
+            "中"
+          ],
+          [
+            "empty",
+            ""
+          ]
+        ],
+        "headers": [
+          [
+            "Host",
+            "vector.test"
+          ],
+          [
+            "X-Request-ID",
+            "request-vector-raw-1"
+          ],
+          [
+            "Authorization",
+            "Bearer synthetic-vector-only"
+          ],
+          [
+            "x-trusted-session",
+            "not-an-authorization"
+          ],
+          [
+            "x-ignored",
+            "value"
+          ],
+          [
+            "idempotency-key",
+            "native-retry-1"
+          ],
+          [
+            "x-publishable-api-key",
+            "pk_synthetic_vector"
+          ]
+        ],
+        "body": ""
+      },
+      "fingerprint": "b684a3bf3f0f82486069d33e34f51fa8fece89232e69155b928e3228626bec80"
+    },
+    {
+      "name": "native-control-header-changed",
+      "request": {
+        "request_id": "request-vector-raw-1",
+        "method": "GET",
+        "raw_url": "https://vector.test/store/products/a%2Fb?tag=x&tag=y&q=%E4%B8%AD&empty=",
+        "path": "/store/products/a/b",
+        "raw_path": "2f73746f72652f70726f64756374732f6125324662",
+        "query_string": "7461673d78267461673d7926713d25453425423825414426656d7074793d",
+        "query": [
+          [
+            "tag",
+            "x"
+          ],
+          [
+            "tag",
+            "y"
+          ],
+          [
+            "q",
+            "中"
+          ],
+          [
+            "empty",
+            ""
+          ]
+        ],
+        "headers": [
+          [
+            "Host",
+            "vector.test"
+          ],
+          [
+            "X-Request-ID",
+            "request-vector-raw-1"
+          ],
+          [
+            "Authorization",
+            "Bearer synthetic-vector-only"
+          ],
+          [
+            "x-trusted-session",
+            "not-an-authorization"
+          ],
+          [
+            "x-ignored",
+            "value"
+          ],
+          [
+            "idempotency-key",
+            "native-retry-2"
+          ],
+          [
+            "x-publishable-api-key",
+            "pk_synthetic_vector"
+          ]
+        ],
+        "body": ""
+      },
+      "fingerprint": "b1344cc7d0fdd278b10c4daaa0519db6ed405db4b9c6518d8afaf78a1c13bc26"
+    },
+    {
+      "name": "native-duplicate-idempotency",
+      "request": {
+        "request_id": "request-vector-raw-1",
+        "method": "GET",
+        "raw_url": "https://vector.test/store/products/a%2Fb?tag=x&tag=y&q=%E4%B8%AD&empty=",
+        "path": "/store/products/a/b",
+        "raw_path": "2f73746f72652f70726f64756374732f6125324662",
+        "query_string": "7461673d78267461673d7926713d25453425423825414426656d7074793d",
+        "query": [
+          [
+            "tag",
+            "x"
+          ],
+          [
+            "tag",
+            "y"
+          ],
+          [
+            "q",
+            "中"
+          ],
+          [
+            "empty",
+            ""
+          ]
+        ],
+        "headers": [
+          [
+            "Host",
+            "vector.test"
+          ],
+          [
+            "X-Request-ID",
+            "request-vector-raw-1"
+          ],
+          [
+            "Authorization",
+            "Bearer synthetic-vector-only"
+          ],
+          [
+            "x-trusted-session",
+            "not-an-authorization"
+          ],
+          [
+            "x-ignored",
+            "value"
+          ],
+          [
+            "idempotency-key",
+            "native-retry-1"
+          ],
+          [
+            "x-publishable-api-key",
+            "pk_synthetic_vector"
+          ],
+          [
+            "Idempotency-Key",
+            "native-retry-1"
+          ]
+        ],
+        "body": ""
+      },
+      "error": "ambiguous_request_fingerprint_header"
+    }
+  ]
+}

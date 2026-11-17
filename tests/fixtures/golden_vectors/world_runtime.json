@@ -25,6 +25,8 @@
     "grant_revision": 10,
     "projection_registry_revision": 7,
     "candidate_ref": "candidate-vector-1",
+    "hash_encoding_version": 1,
+    "candidate_serialization_version": 1,
     "candidate_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "immutable_body_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
     "semantic_headers_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",

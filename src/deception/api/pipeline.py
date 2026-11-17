@@ -8,31 +8,32 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime
 
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import Response
 
 from deception.core.renderer import ResponseRenderer
 from deception.scenarios.models import AttackAssessment
+from deception.generation import ContentLifecycle
 
 from .app import RequestHandler, create_app as create_ingress_app
 from .ingress import MAX_BODY_BYTES, NormalizedRequest
+from .fingerprint import fingerprint_request
 
 AssessmentProvider = Callable[[NormalizedRequest], AttackAssessment | Awaitable[AttackAssessment]]
+ContentLifecycleProvider = Callable[[NormalizedRequest, AttackAssessment], ContentLifecycle | Awaitable[ContentLifecycle]]
 
 
 def _unavailable(request: NormalizedRequest, *, not_applicable: bool = False) -> Response:
-    """回傳固定入口診斷，不將工具錯誤、身份、請求內容或憑證輸出給訪客。"""
-    return JSONResponse(
-        status_code=409 if not_applicable else 503,
-        content={"code": "pipeline_not_applicable" if not_applicable else "pipeline_unavailable",
-                 "request_id": request.request_id},
-        headers={"X-Request-ID": request.request_id},
-    )
+    """以獨立固定 Renderer 核對拒絕模板及原請求，不讀取世界、資料庫或私有錯誤內容。"""
+    from deception.core.security_error import SecurityErrorRenderer
+
+    return SecurityErrorRenderer().render(request, not_applicable=not_applicable)
 
 
 def make_pipeline_handler(
     orchestrator, *, runtime, generation_config, assessment_provider: AssessmentProvider,
     dataset=None, renderer=None, now: datetime | None = None, allow_unreviewed: bool = False,
     assessment_timeout_seconds: float = 15.0,
+    content_lifecycle_provider: ContentLifecycleProvider | None = None,
 ) -> RequestHandler:
     """綁定管理者的 C/M 依賴與可信判定供應器，產生 A 使用的非同步 handler。
 
@@ -43,6 +44,8 @@ def make_pipeline_handler(
     """
     if not callable(assessment_provider):
         raise ValueError("A trusted assessment provider must be explicitly supplied")
+    if content_lifecycle_provider is not None and not callable(content_lifecycle_provider):
+        raise ValueError("Content lifecycle provider must be server supplied")
     if (type(assessment_timeout_seconds) not in (int, float)
             or not 0 < assessment_timeout_seconds <= 120
             or not math.isfinite(assessment_timeout_seconds)):
@@ -66,9 +69,23 @@ def make_pipeline_handler(
                 raise ValueError("The assessment provider must return an AttackAssessment")
             # 重新驗證既有模型，避免 model_copy 的未檢查更新跨越整合邊界。
             assessment = AttackAssessment.model_validate(assessment.model_dump(mode="python"))
+            extra = {}
+            if content_lifecycle_provider is not None and assessment.verdict == "malicious":
+                if (assessment.request_id != request.request_id or
+                        assessment.request_fingerprint != fingerprint_request(request) or
+                        assessment.environment_id != runtime.environment_id or
+                        assessment.deployment_id != runtime.deployment_id):
+                    raise ValueError("Assessment does not bind the lifecycle request")
+                async with asyncio.timeout(max(0, deadline - time.monotonic())):
+                    lifecycle = content_lifecycle_provider(request, assessment)
+                    if inspect.isawaitable(lifecycle):
+                        lifecycle = await lifecycle
+                if time.monotonic() >= deadline or not isinstance(lifecycle, ContentLifecycle):
+                    raise ValueError("Content lifecycle provider did not return a timely trusted binding")
+                extra["content_lifecycle"] = ContentLifecycle.model_validate(lifecycle.model_dump(mode="json"))
             result = await orchestrator.run(
                 request, assessment, runtime=runtime, generation_config=generation_config,
-                dataset=dataset, now=now, allow_unreviewed=allow_unreviewed,
+                dataset=dataset, now=now, allow_unreviewed=allow_unreviewed, **extra,
             )
             if result.decision == "not_applicable":
                 return _unavailable(request, not_applicable=True)
@@ -91,6 +108,7 @@ def create_app(
     dataset=None, renderer=None, now: datetime | None = None, allow_unreviewed: bool = False,
     max_body_bytes: int = MAX_BODY_BYTES,
     assessment_timeout_seconds: float = 15.0,
+    content_lifecycle_provider: ContentLifecycleProvider | None = None,
 ) -> FastAPI:
     """建立可選的完整 HTTP app；不自動核准來源、建立判定服務或轉送正常流量。"""
     handler = make_pipeline_handler(
@@ -98,5 +116,6 @@ def create_app(
         assessment_provider=assessment_provider, dataset=dataset, renderer=renderer,
         now=now, allow_unreviewed=allow_unreviewed,
         assessment_timeout_seconds=assessment_timeout_seconds,
+        content_lifecycle_provider=content_lifecycle_provider,
     )
     return create_ingress_app(handler=handler, max_body_bytes=max_body_bytes)

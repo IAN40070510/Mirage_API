@@ -25,7 +25,7 @@ weakness_scenario: null
 seed: 20261109
 product_count: 2
 run_id: isolated-demo
-fallback_description: This is a reviewed synthetic demonstration product.
+fallback_description: See the product details for more information.
 fallback_missing_message: Entity with requested id {request_entity_id} was not found.
 ```
 
@@ -35,6 +35,8 @@ fallback_missing_message: Entity with requested id {request_entity_id} was not f
 | `origin` | 綁定實際 HTTP origin，不接受帳密、query、fragment 或路徑前綴 |
 | `mode` | `fallback` 刻意不啟動模型；`local` 使用共用 `configs/llm.yaml` 的本機模型及已配置備援 |
 | `weakness_scenario` | `null` 表示一般商品查詢；非空時只接受此領域已實作情境 |
+
+HTTP local 模式的商品描述採 `fixed_fields`，省略已由主機決定的欄位規劃；404 使用綁定當次 ID 的核准固定模板，不啟動模型。追溯以 `generation_source: template` 區分固定模板、`model`、`cache` 與 `fallback`，不得將 local 設定本身當作每次都有模型推論。CLI 的真模型展示仍生成兩個分支。未注入可信 World／Generation 內容生命週期的隔離 demo，不會自行從訪客 header 猜測 Session 或提供正式世界銜接保證。
 | `seed` | 0–4294967295 的固定種子 |
 | `product_count` | 2–10 個合成商品，讓驗證可檢查不同商品隔離 |
 | `run_id` | 資料隔離身份，不代表真實顧客或登入會話 |
