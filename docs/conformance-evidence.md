@@ -6,6 +6,8 @@
 
 2026-11-18 當前完整機器回歸為 **1221 passed、7 skipped，0 failed／errors**。四批終態 JUnit 的全部 1228 個 testcase 身份與原收集一致，無遺漏、重複、額外或非預期 skip；262 份來源／測試輸入及核准封存的非文件內容保持一致，詳見本機 `generated/acceptance-completion-20261118-summary.json`。七個 opt-in 不冒稱在該套 pytest 通過：四容器及還原已在本輪 ARM64 另驗，Medusa 身份／Gateway 兩項保留 2026-11-17 最近實測，對應身份與 dispatcher 模組本輪未變。正式部署 Gate 仍保持未核准／未啟用，不由此宣稱任意部署符合性。
 
+**後續補充（2026-11-20）：** 上述七項 opt-in 已在另建且測後清除的 Oracle ARM64 隔離環境**分批重驗為 7 passed、0 failed、0 skipped**；具名案例、mTLS 臨時 CA 修正與備份還原證據見[七項隔離整合驗收](implementation-progress.md#2026-11-20-七項隔離整合驗收)。此結果不改寫 2026-11-18 的完整基線或 GitHub CI，也不表示正式 MSDSS 導流與 Protocol v1.1 全面符合性已通過。
+
 | 要求 | 可重現證據 | 邊界／未完成項目 |
 | --- | --- | --- |
 | 可信請求、嚴格 JWS 與 Replay | test_trusted_session、test_trusted_ingress、test_trusted_clock、test_postgres_conformance | 已驗證授權使用同次接收端時間，核准 skew 內可供判定且不延長 signed exp；修正版 ARM64 有實際 HTTP／Audit 證據。需要固定金鑰政策與 TLS；正式 Gateway 注入未切換。 |

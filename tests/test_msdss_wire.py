@@ -18,7 +18,12 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 
 def serve_receiver(listener, cert, key, public, ca):
-    """在子程序啟動 Mirage 原生請求標準化與驗章入口，只回傳已驗證身份。"""
+    """在子程序沿用已綁定的 listener，啟動需客戶端憑證的 HTTPS 入口。
+
+    cert／key／ca 是本次測試產生的臨時 TLS 檔，public 是 JWS 驗章公鑰。
+    `/check` 僅回傳已驗證的 session、epoch、PID；無效簽章或憑證拒絕。
+    函式由 Uvicorn 持續服務，直到父程序停止測試 worker。
+    """
     import uvicorn
     from fastapi import FastAPI, Request
     from deception.api.ingress import normalize_request, resolve_request_id
@@ -32,7 +37,11 @@ def serve_receiver(listener, cert, key, public, ca):
 
     @app.get("/check")
     async def check(request: Request):
-        """依線上收到的 bytes 核對簽章與部署，回傳 session 供父程序比對。"""
+        """核對實際 HTTPS 請求 bytes、部署範圍與一次性 JWS。
+
+        成功時回傳 [session_id, session_epoch, 子程序 PID]；
+        身份與 request fingerprint 不符時拒絕，不使用訪客自填身份。
+        """
         received = await normalize_request(request, resolve_request_id(request))
         claims = verifier.verify(request.headers["x-trusted-session"], expected_issuer="gw",
                                  expected_audience="mirage", environment_id="lab",
@@ -46,7 +55,12 @@ def serve_receiver(listener, cert, key, public, ca):
 
 
 def serve_pipeline(listener, cert, key, public, ca, native=False):
-    """在獨立 HTTPS 程序執行完整電商回應流程，從共用 PostgreSQL 消費 JTI。"""
+    """在獨立 mTLS 子程序啟動可信 Mirage 電商 HTTP pipeline。
+
+    從 `MIRAGE_POSTGRES_TEST_DSN` 指定的隔離 schema 建立共享 Replay、
+    世界與准入；cert／key／ca 只供本輪臨時 TLS。native 為真才另啟
+    合成 Store 寫入及原生映射；函式會持續服務直到父程序停止 worker。
+    """
     import uvicorn
     from deception.domains.ecommerce.http_demo import DemoConfig
     from deception.domains.ecommerce.trusted_http import create_app
@@ -68,7 +82,14 @@ def serve_pipeline(listener, cert, key, public, ca, native=False):
 
 @pytest.mark.parametrize("full_pipeline", [False, True, "medusa", "anonymous", "native"], ids=["claims", "postgres-pipeline", "medusa-pipeline", "anonymous-pipeline", "native-store"])
 def test_gateway_dispatch_to_independent_mirage(tmp_path, monkeypatch, full_pipeline, request):
-    """走 MSDSS 的 proxy 決策與實際 TLS 傳輸，確認訪客標頭無法取代伺服器綁定。"""
+    """以真正的 MSDSS proxy、臨時 mTLS 與獨立 Mirage 程序執行 wire 驗收。
+
+    full_pipeline 選擇 claims／PostgreSQL／Medusa／匿名／原生 Store 分支；
+    需要資料庫的分支各自透過 fixture 建立獨立 schema，Medusa 分支還
+    必須提供合成帳號與隔離身份服務。案例產生短期 CA／雙向憑證與 JWS，
+    驗證 session 綁定、回應及跨程序 Replay，並在 finally 終止測試 worker。
+    缺少必要 checkout 或依賴會 skip，不得當成實機通過。
+    """
     if full_pipeline:
         # 每個流程使用獨立 schema；子程序沿用該 DSN，避免跨輪過期世界及共用 DDL 干擾。
         dsn = request.getfixturevalue("isolated_test_dsn")
@@ -138,7 +159,11 @@ def test_gateway_dispatch_to_independent_mirage(tmp_path, monkeypatch, full_pipe
     listener.listen()
     port = listener.getsockname()[1]
     def start_receiver():
-        """以同一監聽位址啟動新的接收程序，確保重送時的 HTTP 綁定完全相同。"""
+        """依本輪 pipeline 類型啟動新 worker，回傳可終止的 Process。
+
+        重啟時沿用同一個 listener 位址及臨時 TLS／驗章公鑰，避免
+        因 origin 變化而把 Replay 拒絕誤判成請求綁定失敗。
+        """
         target = serve_pipeline if full_pipeline else serve_receiver
         arguments = (listener, cert, key, signing.public_key().public_bytes_raw(), ca_cert)
         if full_pipeline == "native":
@@ -153,12 +178,21 @@ def test_gateway_dispatch_to_independent_mirage(tmp_path, monkeypatch, full_pipe
 
     class Predictor:
         def predict(self, request):
-            """提供合成分類結果以走過 Gateway 實際決策與 dispatcher 分支。"""
+            """忽略測試請求內容，回傳固定惡意 SQLi 分類供決策流程使用。
+
+            不呼叫模型、不儲存攻擊內容；僅提供 Gateway dispatcher
+            走過已核准欺敵分支所需的合成分類結果。
+            """
             return dict(label="sqli", probabilities=dict(normal=0., sqli=1., xss=0.),
                         mode="live", exploratory=False)
 
     async def run():
-        """注入短期 TLS 信任與測試綁定，分別驗證缺少身份及有效身份。"""
+        """用短期 mTLS client 驗證 MSDSS proxy 與獨立 Mirage 的完整傳輸。
+
+        依場景注入合成身份 provider 和固定決策政策；驗證合法授權、
+        訪客偽造身份拒絕，以及 worker 被殺掉後的 JTI 重放拒絕。
+        此流程只操作本輪隔離 schema、測試憑證和子程序。
+        """
         nonlocal process, listener
         scope = AssessmentScope(source_id="detector", environment_id="lab", deployment_id="test",
                                 service_id="shop", site_id="site")
@@ -222,7 +256,11 @@ def test_gateway_dispatch_to_independent_mirage(tmp_path, monkeypatch, full_pipe
                 dispatcher = app.state.deception_dispatcher
             binding = SessionBinding(scope.environment_id, scope.deployment_id, server_session_id, 3)
             async def gateway(scope, receive, send):
-                """由測試主機在請求私有 state 提供可信綁定，以實際 Gateway app 處理。"""
+                """只在 ASGI state 注入伺服器端 SessionBinding 後轉交真實 app。
+
+                訪客 Header 不會決定綁定；binding 清空後應由實際
+                dispatcher 拒絕，藉此驗證可信入口的身份邊界。
+                """
                 scope["state"] = {"trusted_session_binding": binding} if binding else {}
                 await app(scope, receive, send)
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=gateway),
@@ -255,7 +293,11 @@ def test_gateway_dispatch_to_independent_mirage(tmp_path, monkeypatch, full_pipe
                     captured = []
 
                     async def capture(request):
-                        """在記憶體保留本次合成簽章請求，以便原樣送給第二個程序。"""
+                        """僅保留送往本輪 HTTPS port 的原始 httpx Request。
+
+                        事件鉤子不更動請求或傳輸 bytes；暫存對象只用於
+                        重啟 worker 後的同一 JWS Replay 負向驗證。
+                        """
                         if request.url.port == port:
                             captured.append(request)
 
@@ -293,7 +335,11 @@ def test_gateway_dispatch_to_independent_mirage(tmp_path, monkeypatch, full_pipe
                     assert (await visitor.get("/check", headers={"x-session-id": "visitor"})).status_code == 503
 
     def wait_ready():
-        """等待新程序完成 TLS 與應用啟動，直到收到可識別的診斷回應。"""
+        """在 90 秒上限內，持臨時 CA／客戶端憑證輪詢 HTTPS 健康端點。
+
+        只有指定 HTTP 200／404 代表該分支真正就緒；連線錯誤、
+        worker 提前結束或逾時均使 pytest 失敗，不把 TLS 故障算通過。
+        """
         deadline = time.monotonic() + 90
         while True:
             try:

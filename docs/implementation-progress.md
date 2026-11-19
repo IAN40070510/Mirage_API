@@ -22,6 +22,47 @@
 
 七項 skip 分別是四個隔離容器案例、還原，以及 Medusa 身份／實際 Gateway 兩項。容器四項與原 pg_dump／pg_restore 測試已在該輪 ARM64 另通過，身份兩項另有 2026-11-17 的實際 Medusa 驗收。skip 與通過分開記錄。
 
+### 2026-11-20 七項隔離整合驗收
+
+2026-11-20 使用 Oracle Ubuntu ARM64 主機，針對上述七個**明確 opt-in** 的 testcase 另建一次性驗收環境，逐項執行後得到 **7 passed、0 failed、0 skipped**。這是獨立重驗的合計，不是把 2026-11-18 全套回歸的七個 skip 事後改成 pass，也不是新 commit 的 GitHub Actions 結果。當次測試使用未改動執行邏輯的 Mirage／MSDSS 來源；MSDSS Gateway 指測試載入的實際 Python dispatcher，不是用來登入主機的 Gateway SSH 服務。
+
+| 具名測試 | 隔離驗證內容 | 最終結果 |
+| --- | --- | --- |
+| `tests/test_medusa_live.py::test_real_medusa_customer_identity_and_logout` | Medusa 2.22.4 合成管理員／顧客、Bearer／Cookie、登出及 Session 隔離 | PASS |
+| `tests/test_msdss_wire.py::test_gateway_dispatch_to_independent_mirage[medusa-pipeline]` | 真實 MSDSS proxy 判定及 dispatcher、測試 CA 的 mTLS、獨立 HTTPS Mirage、跨程序 Replay | PASS（修正隔離 CA 設定後重跑） |
+| `tests/test_container_runtime.py::test_packaged_trusted_service_guest_checkout` | 已封裝 Mirage 的訪客購物車、冪等下單與取消庫存回補 | PASS |
+| `tests/test_container_runtime.py::test_packaged_native_store_mapping` | 原生 Store 路由、商品／訂單關聯、衝突拒絕及投影核准證據 | PASS |
+| `tests/test_container_runtime.py::test_packaged_profile_revocation_requires_explicit_isolated_opt_in` | 僅在可丟棄 DB 永久撤銷 Profile，確認原生 API 拒絕且安全投影保留 | PASS |
+| `tests/test_container_runtime.py::test_packaged_key_revocation_requires_explicit_isolated_opt_in` | 僅在可丟棄 DB 撤銷簽發 kid，確認舊授權無法增加世界／Replay／准入 | PASS |
+| `tests/test_database_restore.py::test_restore_preserves_world_receipts_and_profile_tombstones` | `pg_dump -Fc`／`pg_restore` 到**另一個資料庫名稱**，比對整張表的內容摘要、世界與撤銷墓碑 | PASS |
+
+**隔離拓樸與信任界線：** 專案專用、未公開任何主機連接埠的 Docker internal network；兩個全新 PostgreSQL 容器（Mirage 使用 PostgreSQL 17、Medusa 使用 PostgreSQL 16）、一個 Redis 7、一個 Medusa 2.22.4、一個只讀根檔案系統且以非 root 執行的 Mirage。合計五個長駐測試容器及三個具名資料卷，沒有掛接 `mirage-api`、`mirage-app` 或 `msdss-staging` 的資料卷。測試使用一次性 Ed25519 簽章私鑰、另行產生的 mTLS 憑證、合成管理員／顧客及專用 DB 密碼；私鑰未進入 Mirage 服務容器。pytest 在 ARM64 上的 Python 3.13.13／pytest 8.4.2 容器執行，Medusa 身份測試透過**同一隔離容器的 loopback** 存取，沒有對外開 port。各 PostgreSQL fixture 另建／刪除測試 schema；還原測試把獨立 Mirage 資料庫備份至不同命名的資料庫，沒有碰正式資料。
+
+備份前在來源**合成**資料庫觀察到 `world_snapshots` 8、`world_events` 5、`world_commit_receipts` 9、`projection_profile_revocations` 1、`response_audit` 51、`ingress_refusal_audit` 5、`trusted_key_revocations` 1 筆；測試核對每張表的行數與排序後 SHA-256 摘要相等，並重新載入快照、驗證撤銷仍生效。這不是正式商店的備份驗證，也不代表 PITR／跨區復原通過。
+
+**mTLS 首次失敗與重驗：** 原測試以 `openssl req -x509` 產生的短期 CA 缺少 X.509 `keyUsage`，Python 3.13／OpenSSL 嚴格驗證會報 `CA cert does not include key usage extension`，導致 HTTPS 探測逾時。這次只在測試容器使用獨立 `OPENSSL_CONF`，讓該自簽 CA 增加 `keyUsage = critical, keyCertSign, cRLSign`，不放寬 TLS 驗證、不修改測試執行邏輯或服務端憑證信任，隨後同一具名案例 **1 passed（10.06 秒）**。可重現的測試用 CA 設定重點如下；正式 CA 另依自己的 PKI 政策處理：
+
+```ini
+[req]
+distinguished_name = req_dn
+x509_extensions = v3_ca
+prompt = no
+
+[req_dn]
+CN = Mirage acceptance CA
+
+[v3_ca]
+keyUsage = critical, keyCertSign, cRLSign
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always,issuer
+```
+
+**重驗前置條件：** `MIRAGE_POSTGRES_TEST_DSN` 必須指向可建立／刪除 schema 的**專用測試資料庫**；身份／wire 測試另需 `MIRAGE_MEDUSA_TEST_ORIGIN`、`MIRAGE_MEDUSA_TEST_ADMIN_EMAIL`、`MIRAGE_MEDUSA_TEST_ADMIN_PASSWORD` 及 `MSDSS_ROOT`，Medusa origin 為測試網路命名空間內的 loopback；容器測試另需 `MIRAGE_CONTAINER_TEST_ORIGIN`、`MIRAGE_CONTAINER_TEST_KEY_FILE`、`MIRAGE_CONTAINER_NATIVE_PUBLISHABLE_KEY`。兩項破壞性隔離案例須各自明確設定 `MIRAGE_CONTAINER_PROFILE_REVOCATION_TEST=true`、`MIRAGE_CONTAINER_KEY_REVOCATION_TEST=true`，簽章金鑰撤銷安排在其他可信容器案例之後。還原測試需 `MIRAGE_BACKUP_RESTORE_TEST=true` 與**不同命名**的 `MIRAGE_BACKUP_SOURCE_TEST_DSN`／`MIRAGE_BACKUP_RESTORE_TEST_DSN`；必須先執行真實備份／還原並準備包含各類合成資料的來源 DB。缺少任何前置條件所產生的 skip 不能視為通過；不要將這些變數指向 staging 或正式資料。
+
+**測後撤權與清理：** 測試用五個容器、三個具名卷、隔離網路、短期金鑰、合成帳號及秘密檔案均已刪除；原有七個 Mirage／Medusa staging 服務保持運行。連線工具 Gateway SSH 的專用 `ubuntu` 公鑰已從 `authorized_keys` 精確移除，只保留使用者原始的 Windows 公鑰；Gateway 伺服器登錄為零，執行中工作／排程為零，使用者再從 Windows 以原私鑰登入並確認原公鑰指紋。此撤權只針對此次 Gateway SSH 身分，不是對主機所有使用者／外部權限的完整稽核。
+
+**仍未完成：** 正式 MSDSS 判定與導流啟用、staging 映像切換、GitHub Release／Tag 更新及完整 Protocol v1.1 Conformance。七項隔離測試成功不代表正式端到端流量已切換，也不替代未執行的部署安全檢查。
+
 ARM64 映像驗證了 non-root 10001:10001、唯讀 root filesystem、健康、安裝模組 hash、原生／合成交易及撤銷。時間回撥探測確認下單／取消、原收據與上下文重播、庫存回補與 Lease 不變。另以獨立 PostgreSQL volume 在提交後 SIGKILL 再啟動，查回相同版本、state hash、結果摘要與原 attempt，重試不重複預留；這不是主機斷電或跨區災難恢復測試。
 
 發布整理新增獨立 HTTPX adapter，改用 Mirage 自身介面執行核心 HTTP 測試，避免公開 clone 必須搭配私有 checkout。GitHub Actions 使用獨立 PostgreSQL、Node 固定向量、文件檢查與 Compose 的 16 請求驗證；各 commit 的實際結果以 Actions 及其 JUnit／HTTP 報告為準。

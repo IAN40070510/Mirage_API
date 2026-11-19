@@ -34,7 +34,10 @@ def test_packaged_trusted_service_guest_checkout():
                              session_id="container-" + uuid4().hex, session_epoch=1)
 
     def encode(value):
-        """將合成授權欄位編成不含 padding 的 Compact JWS 元件。"""
+        """把 JSON 相容欄位編為無 padding 的 Base64URL JWS 元件字串。
+
+        不簽章、不寫入秘密；輸出交由 send 組合成最終 Compact JWS。
+        """
         return base64.urlsafe_b64encode(json.dumps(value, separators=(",", ":")).encode()).decode().rstrip("=")
 
     with httpx.Client(base_url=origin, timeout=60, trust_env=False) as client:
@@ -44,7 +47,11 @@ def test_packaged_trusted_service_guest_checkout():
         variant = info.json()["variants"][0]
 
         def send(method, path, binding, payload=None):
-            """在本機對最終 wire bytes 簽發新授權，只重用業務鍵而不重用 JTI。"""
+            """對指定方法、路徑與可信綁定簽發一次性 JWS 並送出請求。
+
+            payload 可省略；每次產生新的 JTI、請求 ID 與指紋，成功
+            回傳已解析 JSON，非 HTTP 200 或額外 Cookie 都會中止驗收。
+            """
             request_id, now = uuid4().hex, int(time.time())
             request = client.build_request(method, path, json=payload, headers={"x-request-id": request_id})
             header = dict(alg="Ed25519", typ="mirage-trusted-session+jwt", protocol_version="1.1", kid="acceptance")
@@ -71,7 +78,10 @@ def test_packaged_trusted_service_guest_checkout():
         before = worlds.inspect_binding(binding, now=int(time.time())).state["inventory"]
 
         def metadata(version):
-            """產生事先保存的業務冪等鍵、CAS 版本與提交查詢識別。"""
+            """依預期 CAS 版本產生新的業務冪等鍵及提交 attempt ID。
+
+            回傳可直接放入合成交易 payload 的字典；不觸碰資料庫。
+            """
             return dict(expected_version=version, idempotency_key=uuid4().hex, commit_attempt_id=str(uuid4()))
 
         send("POST", f"/synthetic/carts/{cart_id}/line-items", binding,
@@ -92,7 +102,12 @@ def test_packaged_trusted_service_guest_checkout():
 
 
 def test_packaged_native_store_mapping():
-    """更新映像的原生建立／加品項／下單／查單保留合成商品關聯及差異核准證據。"""
+    """以隔離映像及原生 `/store` API 核對合成購物車到訂單的整段流程。
+
+    需指定專用 origin、簽章私鑰、publishable key 及測試資料庫；
+    否則明確 skip。成功案例保存合成事件，並讀回准入／投影核准
+    證據；錯配 session 與重複冪等鍵不得改寫既有世界。
+    """
     origin = os.environ.get("MIRAGE_CONTAINER_TEST_ORIGIN")
     key_path = os.environ.get("MIRAGE_CONTAINER_TEST_KEY_FILE")
     dsn = os.environ.get("MIRAGE_POSTGRES_TEST_DSN")
@@ -109,7 +124,11 @@ def test_packaged_native_store_mapping():
                              session_id="native-image-" + uuid4().hex, session_epoch=1)
     with httpx.Client(base_url=origin, timeout=60, trust_env=False) as client:
         def send(method, path, binding, payload=None, *, idempotency=None, changes=None, expected=200):
-            """在本機簽發精確原生請求及錯配負例；私鑰不傳入容器，也不重用 JTI。"""
+            """依原生路徑簽發新 JTI、送出請求並核對預期 HTTP status。
+
+            idempotency 指定業務鍵，changes 僅用於刻意竄改合成 claims
+            的負例；私鑰保留在測試執行器，非預期 status／Cookie 會拒絕。
+            """
             request_id, now = uuid4().hex, int(time.time())
             headers = {"x-request-id": request_id, "x-publishable-api-key": publishable}
             if idempotency is not None:
@@ -184,7 +203,12 @@ def test_packaged_native_store_mapping():
 
 
 def test_packaged_profile_revocation_requires_explicit_isolated_opt_in():
-    """只有明確指定可丟棄資料庫時，永久撤銷映像的原生 Profile 並確認安全投影仍可用。"""
+    """只在明確允許的可丟棄 DB 撤銷原生 Profile，核對安全投影保留。
+
+    必須設定專用 origin、簽章私鑰、publishable key、DSN 與破壞性
+    opt-in，否則 skip；撤銷寫入持久墓碑，不可對正式 Profile 執行。
+    原生路由應回固定拒絕，但合法 `/synthetic` 讀取仍能使用同一世界。
+    """
     if os.environ.get("MIRAGE_CONTAINER_PROFILE_REVOCATION_TEST") != "true":
         pytest.skip("requires explicit isolated Profile revocation opt-in")
     origin, key_file, dsn, publishable = [os.environ.get(name) for name in (
@@ -203,7 +227,11 @@ def test_packaged_profile_revocation_requires_explicit_isolated_opt_in():
                              session_id="profile-container-" + uuid4().hex, session_epoch=1)
     with httpx.Client(base_url=origin, trust_env=False, timeout=30) as client:
         def send(method, path, binding, payload=None):
-            """對該隔離服務簽發新 JTI，讓拒絕確實來自 Profile 墓碑而不是舊授權重放。"""
+            """對隔離路由簽發新 JTI 並回傳原始 HTTP Response。
+
+            每次都換請求 ID 與一次性簽章，避免 Replay 效果掩蓋
+            Profile 墓碑應有的拒絕結果。
+            """
             now, request_id = int(time.time()), uuid4().hex
             request = client.build_request(method, path, json=payload,
                 headers={"x-request-id": request_id, "x-publishable-api-key": publishable})
@@ -239,7 +267,12 @@ def test_packaged_profile_revocation_requires_explicit_isolated_opt_in():
 
 
 def test_packaged_key_revocation_requires_explicit_isolated_opt_in():
-    """最後才永久撤銷隔離映像的簽發 kid，確認有效舊簽章不能新增世界、Replay 或准入。"""
+    """在其他容器案例完成後，永久撤銷**隔離測試**簽發 kid。
+
+    需要專用 origin、私鑰、DSN 及明確 opt-in，否則 skip；操作只
+    寫入測試 DB 的 Key 墓碑。撤銷後的全新 JTI 仍須固定拒絕，
+    世界／Replay／准入筆數不得增加；正式部署金鑰不參與測試。
+    """
     if os.environ.get("MIRAGE_CONTAINER_KEY_REVOCATION_TEST") != "true":
         pytest.skip("requires explicit disposable signing key revocation opt-in")
     origin, key_file, dsn = [os.environ.get(name) for name in (
@@ -258,7 +291,10 @@ def test_packaged_key_revocation_requires_explicit_isolated_opt_in():
         product_path = info["product_path_template"].replace("{id}", info["product_ids"][0])
 
         def send():
-            """每次以新 JTI 簽同一合法查詢，讓拒絕原因確實來自撤銷而不是 Replay。"""
+            """對同一商品查詢使用新的請求 ID、JTI 及簽章並回傳 Response。
+
+            撤銷前應成功；撤銷後應由共享 Key 墓碑拒絕而非 Replay。
+            """
             now, request_id = int(time.time()), uuid4().hex
             request = client.build_request("GET", product_path, headers={"x-request-id": request_id})
             claims = dict(iss="gateway", aud="mirage", iat=now, nbf=now, exp=now+60, jti=uuid4().hex,
@@ -271,7 +307,11 @@ def test_packaged_key_revocation_requires_explicit_isolated_opt_in():
             return client.send(request)
 
         def counts():
-            """從新連線比對世界與控制表，拒絕稽核另計，不讓拒絕產生新准入。"""
+            """以全新唯讀查詢回傳四張持久化狀態表的行數字典。
+
+            用於比對 Key 撤銷前後世界、Replay、Read／Response Admission
+            未增加；拒絕稽核另行檢查，不將合法告警誤算成業務寫入。
+            """
             with psycopg.connect(dsn) as connection:
                 return {table: connection.execute(sql.SQL("SELECT count(*) FROM {}").format(sql.Identifier(table))).fetchone()[0]
                     for table in ("world_snapshots", "replay_entries", "read_admissions", "response_admissions")}

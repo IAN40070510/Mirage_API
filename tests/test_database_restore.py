@@ -11,7 +11,12 @@ from deception.security.key_revocation import PostgresTrustedKeyRevocations
 
 
 def database_manifest(dsn):
-    """在唯讀 Repeatable Read 快照比對全部業務表，只回傳筆數與摘要，不輸出原始資料。"""
+    """由指定 DSN 的唯讀 Repeatable Read 快照建立資料表完整性清單。
+
+    回傳 (資料庫名稱, schema 名稱, {表名: 行數與 SHA-256 摘要})；
+    各列依完整 JSON 內容排序，不依賴 pg_restore 後的物理列順序。
+    不修改資料庫、不輸出原始列；連線或讀表失敗時讓例外傳回測試。
+    """
     import psycopg
     from psycopg import sql, IsolationLevel
 
@@ -31,7 +36,13 @@ def database_manifest(dsn):
 
 
 def test_restore_preserves_world_receipts_and_profile_tombstones():
-    """還原至不同命名 DB 後，資料摘要完全相同、快照完整且 Profile／key 墓碑保留。"""
+    """核對已執行 pg_dump／pg_restore 的**兩個獨立命名測試資料庫**。
+
+    需明確 opt-in 並提供來源與還原 DSN，否則 skip；先唯讀比較全部
+    資料表的行數／摘要，再在還原 DB 驗證快照、提交收據和 Profile／
+    Trusted Key 撤銷。任一資料不一致或墓碑失效都會 assert 失敗；
+    本函式不執行備份、還原或正式資料的寫入。
+    """
     if os.environ.get("MIRAGE_BACKUP_RESTORE_TEST") != "true":
         pytest.skip("requires explicit disposable backup/restore acceptance opt-in")
     source, restored = [os.environ.get(name) for name in ("MIRAGE_BACKUP_SOURCE_TEST_DSN", "MIRAGE_BACKUP_RESTORE_TEST_DSN")]
