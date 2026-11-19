@@ -17,7 +17,7 @@ from test_postgres_conformance import isolated_test_dsn
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 
-def serve_receiver(listener, cert, key, public):
+def serve_receiver(listener, cert, key, public, ca):
     """在子程序啟動 Mirage 原生請求標準化與驗章入口，只回傳已驗證身份。"""
     import uvicorn
     from fastapi import FastAPI, Request
@@ -40,11 +40,12 @@ def serve_receiver(listener, cert, key, public):
         return [claims.session_id, claims.session_epoch, os.getpid()]
 
     server = uvicorn.Server(uvicorn.Config(app, ssl_certfile=str(cert), ssl_keyfile=str(key),
+                                          ssl_ca_certs=str(ca), ssl_cert_reqs=ssl.CERT_REQUIRED,
                                           http="h11", log_level="error"))
     server.run(sockets=[listener])
 
 
-def serve_pipeline(listener, cert, key, public, native=False):
+def serve_pipeline(listener, cert, key, public, ca, native=False):
     """在獨立 HTTPS 程序執行完整電商回應流程，從共用 PostgreSQL 消費 JTI。"""
     import uvicorn
     from deception.domains.ecommerce.http_demo import DemoConfig
@@ -61,6 +62,7 @@ def serve_pipeline(listener, cert, key, public, native=False):
                      postgres_dsn=os.environ["MIRAGE_POSTGRES_TEST_DSN"], enable_business=native,
                      enable_medusa_store=native, medusa_publishable_key="pk_synthetic_native" if native else None)
     uvicorn.Server(uvicorn.Config(app, ssl_certfile=str(cert), ssl_keyfile=str(key),
+                                  ssl_ca_certs=str(ca), ssl_cert_reqs=ssl.CERT_REQUIRED,
                                   http="h11", log_level="error")).run(sockets=[listener])
 
 
@@ -87,13 +89,48 @@ def test_gateway_dispatch_to_independent_mirage(tmp_path, monkeypatch, full_pipe
     from msdss.adapters.attack_assessment import AssessmentScope
     from msdss.decision.policy import DecisionPolicy
     from integrations.msdss.trusted_session_dispatch import SessionBinding, TrustedSessionDispatcher
+    from sentinel.gateway.mtls_transport import build_mirage_mtls_client
 
-    cert, key = tmp_path / "cert.pem", tmp_path / "tls.pem"
-    config = tmp_path / "openssl.cnf"
-    config.write_text("[req]\ndistinguished_name=dn\n[dn]\n", encoding="ascii")
-    subprocess.run(["openssl", "req", "-config", str(config), "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
-                    "-subj", "/CN=localhost", "-addext", "subjectAltName=IP:127.0.0.1",
-                    "-out", str(cert), "-keyout", str(key)], check=True, capture_output=True)
+    # 臨時 CA 分別簽發 HTTPS 伺服器與 Gateway 身分；不能以單向 TLS 冒充 mTLS。
+    ca_cert, ca_key = tmp_path / "ca.pem", tmp_path / "ca.key"
+    cert, key, server_csr = tmp_path / "cert.pem", tmp_path / "tls.pem", tmp_path / "server.csr"
+    client_cert, client_key, client_csr = (
+        tmp_path / "gateway.pem", tmp_path / "gateway.key", tmp_path / "gateway.csr"
+    )
+    server_ext, client_ext = tmp_path / "server.ext", tmp_path / "client.ext"
+    server_ext.write_text(
+        "basicConstraints=critical,CA:FALSE\nsubjectAltName=IP:127.0.0.1\nextendedKeyUsage=serverAuth\n",
+        encoding="ascii",
+    )
+    client_ext.write_text(
+        "basicConstraints=critical,CA:FALSE\nextendedKeyUsage=clientAuth\n",
+        encoding="ascii",
+    )
+    subprocess.run([
+        "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+        "-subj", "/CN=Mirage wire test CA", "-addext", "basicConstraints=critical,CA:TRUE",
+        "-out", str(ca_cert), "-keyout", str(ca_key),
+    ], check=True, capture_output=True)
+    for name, private_key, csr, extension, certificate in (
+        ("localhost", key, server_csr, server_ext, cert),
+        ("Gateway wire client", client_key, client_csr, client_ext, client_cert),
+    ):
+        subprocess.run([
+            "openssl", "req", "-newkey", "rsa:2048", "-nodes",
+            "-subj", f"/CN={name}", "-keyout", str(private_key), "-out", str(csr),
+        ], check=True, capture_output=True)
+        subprocess.run([
+            "openssl", "x509", "-req", "-in", str(csr), "-CA", str(ca_cert),
+            "-CAkey", str(ca_key), "-CAcreateserial", "-days", "1",
+            "-extfile", str(extension), "-out", str(certificate),
+        ], check=True, capture_output=True)
+    client_key.chmod(0o600)
+    for name, path in (
+        ("GATEWAY_MIRAGE_MTLS_CA_FILE", ca_cert),
+        ("GATEWAY_MIRAGE_MTLS_CERT_FILE", client_cert),
+        ("GATEWAY_MIRAGE_MTLS_KEY_FILE", client_key),
+    ):
+        monkeypatch.setenv(name, str(path))
     signing = Ed25519PrivateKey.generate()
     listener = socket.socket()
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -103,7 +140,7 @@ def test_gateway_dispatch_to_independent_mirage(tmp_path, monkeypatch, full_pipe
     def start_receiver():
         """以同一監聽位址啟動新的接收程序，確保重送時的 HTTP 綁定完全相同。"""
         target = serve_pipeline if full_pipeline else serve_receiver
-        arguments = (listener, cert, key, signing.public_key().public_bytes_raw())
+        arguments = (listener, cert, key, signing.public_key().public_bytes_raw(), ca_cert)
         if full_pipeline == "native":
             arguments += (True,)
         worker = multiprocessing.get_context("spawn").Process(target=target, args=arguments)
@@ -128,8 +165,17 @@ def test_gateway_dispatch_to_independent_mirage(tmp_path, monkeypatch, full_pipe
         if full_pipeline:
             scope = AssessmentScope(source_id="local-demo-detector", environment_id="isolated-demo",
                                     deployment_id="isolated-demo", service_id="synthetic-store", site_id="demo-store")
-        async with httpx.AsyncClient(verify=ssl.create_default_context(cafile=str(cert)),
-                                     trust_env=False, timeout=30) as client:
+        mirage_client = build_mirage_mtls_client()
+        assert mirage_client is not None
+        async with httpx.AsyncClient(trust_env=False, timeout=30) as client, mirage_client:
+            # 沒有 Gateway 憑證的一般 HTTPS client 必須遭接收端拒絕。
+            if full_pipeline is False:
+                async with httpx.AsyncClient(
+                    verify=ssl.create_default_context(cafile=str(ca_cert)),
+                    trust_env=False, timeout=5,
+                ) as without_client_certificate:
+                    with pytest.raises(httpx.TransportError):
+                        await without_client_certificate.get(f"https://127.0.0.1:{port}/ready-probe")
             identity = None
             visitor_headers = {}
             if full_pipeline == "medusa":
@@ -153,7 +199,8 @@ def test_gateway_dispatch_to_independent_mirage(tmp_path, monkeypatch, full_pipe
                     environment_id=scope.environment_id, deployment_id=scope.deployment_id)
             dispatcher = TrustedSessionDispatcher(private_key=signing, kid="key", issuer="gw",
                 audience="mirage", scope=scope, mirage_origin=f"https://127.0.0.1:{port}", identity_provider=identity)
-            for name, value in dict(client=client, analysis_lock=asyncio.Lock(), analysis_task=None,
+            for name, value in dict(client=client, deception_client=mirage_client,
+                analysis_lock=asyncio.Lock(), analysis_task=None,
                 analysis_timeout=3, predictor=Predictor(), deception_dispatcher=dispatcher,
                 decision_policy=DecisionPolicy(enforcement_enabled=True, deception_approved=True)).items():
                 monkeypatch.setattr(app.state, name, value, raising=False)
@@ -181,7 +228,7 @@ def test_gateway_dispatch_to_independent_mirage(tmp_path, monkeypatch, full_pipe
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=gateway),
                                          base_url="http://gateway.test") as visitor:
                 if full_pipeline == "native":
-                    info = (await client.get(f"{dispatcher.origin}/demo/info")).json()
+                    info = (await mirage_client.get(f"{dispatcher.origin}/demo/info")).json()
                     headers = {"x-publishable-api-key": "pk_synthetic_native", "idempotency-key": "native-wire-create"}
                     created = await visitor.post("/store/carts", json={}, headers=headers)
                     assert created.status_code == 200, created.text
@@ -201,7 +248,7 @@ def test_gateway_dispatch_to_independent_mirage(tmp_path, monkeypatch, full_pipe
                     assert "set-cookie" not in retrieved.headers
                     return
                 if full_pipeline:
-                    info = (await client.get(f"{dispatcher.origin}/demo/info")).json()
+                    info = (await mirage_client.get(f"{dispatcher.origin}/demo/info")).json()
                     assert info["assessment_mode"] == "session_world"
                     product_id = info["product_ids"][0]
                     path = f"/api/products/{product_id}"
@@ -212,13 +259,14 @@ def test_gateway_dispatch_to_independent_mirage(tmp_path, monkeypatch, full_pipe
                         if request.url.port == port:
                             captured.append(request)
 
-                    client.event_hooks["request"].append(capture)
+                    mirage_client.event_hooks["request"].append(capture)
                     response = await visitor.get(path, headers=visitor_headers)
                     assert response.status_code == 200, response.text
                     assert response.json()["product"]["id"] == product_id
-                    client.event_hooks["request"].remove(capture)
+                    mirage_client.event_hooks["request"].remove(capture)
                     signed, = captured
-                    process.terminate()
+                    # 模擬程序崩潰，驗證共享 Replay 不依賴正常關機。
+                    process.kill()
                     process.join(5)
                     assert not process.is_alive()
                     listener.close()
@@ -228,7 +276,7 @@ def test_gateway_dispatch_to_independent_mirage(tmp_path, monkeypatch, full_pipe
                     listener.listen()
                     process = start_receiver()
                     wait_ready()
-                    replay = await client.send(signed)
+                    replay = await mirage_client.send(signed)
                     assert replay.status_code == 503
                     assert replay.json()["code"] == "pipeline_unavailable"
                     assert (await visitor.get(path, headers=visitor_headers)).status_code == 200
@@ -249,8 +297,9 @@ def test_gateway_dispatch_to_independent_mirage(tmp_path, monkeypatch, full_pipe
         deadline = time.monotonic() + 90
         while True:
             try:
-                with httpx.Client(verify=ssl.create_default_context(cafile=str(cert)), trust_env=False,
-                                  timeout=1) as probe:
+                trust = ssl.create_default_context(cafile=str(ca_cert))
+                trust.load_cert_chain(certfile=str(client_cert), keyfile=str(client_key))
+                with httpx.Client(verify=trust, trust_env=False, timeout=1) as probe:
                     endpoint = "/healthz" if full_pipeline else "/ready-probe"
                     if probe.get(f"https://127.0.0.1:{port}{endpoint}").status_code == (200 if full_pipeline else 404):
                         break
