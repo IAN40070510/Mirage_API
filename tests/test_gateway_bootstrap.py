@@ -1,6 +1,7 @@
 """Mirage 內的 Gateway 部署組裝介面，不啟動原 Gateway 或連線資料庫。"""
 
 import asyncio
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -17,7 +18,7 @@ from integrations.msdss.gateway_bootstrap import (
 @pytest.fixture
 def setup_gateway(monkeypatch):
     """提供實際 MSDSS 型別路徑與短期驗收金鑰，結束時釋放 HTTP client。"""
-    root = Path(__file__).resolve().parents[2] / "MSDSS"
+    root = Path(os.environ.get("MSDSS_ROOT", Path(__file__).resolve().parents[2] / "MSDSS"))
     if not (root / "src/msdss/adapters/attack_assessment.py").is_file():
         pytest.skip("requires local MSDSS adapter checkout")
     monkeypatch.syspath_prepend(str(root / "src"))
@@ -88,10 +89,18 @@ def test_actual_gateway_optional_import_boundary(setup_gateway, monkeypatch, ena
     import builtins
     import importlib
 
-    root = Path(__file__).resolve().parents[2] / "MSDSS"
+    root = Path(os.environ.get("MSDSS_ROOT", Path(__file__).resolve().parents[2] / "MSDSS"))
     monkeypatch.syspath_prepend(str(root))
     gateway = importlib.import_module("sentinel.gateway.app")
     monkeypatch.setenv("GATEWAY_MODEL_DIR", "")
+    # This test is specifically about an absent optional integration, not
+    # transport configuration. Do not inherit a certificate from the host.
+    for name in (
+        "GATEWAY_MIRAGE_MTLS_CA_FILE",
+        "GATEWAY_MIRAGE_MTLS_CERT_FILE",
+        "GATEWAY_MIRAGE_MTLS_KEY_FILE",
+    ):
+        monkeypatch.delenv(name, raising=False)
     if enabled:
         monkeypatch.setenv("MIRAGE_GATEWAY_SETTINGS_FILE", "synthetic-missing-settings.json")
     else:
@@ -122,3 +131,33 @@ def test_actual_gateway_optional_import_boundary(setup_gateway, monkeypatch, ena
 
     asyncio.run(exercise())
     assert bool(attempted) is enabled
+
+
+
+def test_actual_gateway_requires_dedicated_mtls_for_configured_mirage(
+    setup_gateway, monkeypatch,
+):
+    """可信 Mirage 已安裝也不能用普通 Medusa HTTP client 啟動遠端 DECEIVE。"""
+    import importlib
+
+    root = Path(os.environ.get("MSDSS_ROOT", Path(__file__).resolve().parents[2] / "MSDSS"))
+    monkeypatch.syspath_prepend(str(root))
+    gateway = importlib.import_module("sentinel.gateway.app")
+    monkeypatch.setenv("GATEWAY_MODEL_DIR", "")
+    monkeypatch.setenv("MIRAGE_GATEWAY_SETTINGS_FILE", "synthetic-missing-settings.json")
+    for name in (
+        "GATEWAY_MIRAGE_MTLS_CA_FILE",
+        "GATEWAY_MIRAGE_MTLS_CERT_FILE",
+        "GATEWAY_MIRAGE_MTLS_KEY_FILE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    async def exercise():
+        """驗證阻止啟動並關閉共用 Medusa client，不觸發 Mirage 的業務請求。"""
+        with pytest.raises(ValueError, match="dedicated mTLS"):
+            async with gateway.lifespan(gateway.app):
+                pytest.fail("trusted Mirage without mTLS must never start")
+        assert gateway.app.state.deception_client is None
+        assert gateway.app.state.client.is_closed
+
+    asyncio.run(exercise())
