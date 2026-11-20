@@ -6,6 +6,8 @@
 
 專案自有程式採 Apache-2.0；Medusa 規格、OWASP 分類資料、套件及模型的個別授權與封裝聲明見 [專案授權與第三方材料](licensing.md)。
 
+安全架構提案（**尚未實作／尚未驗收**）：[MIR-SEC-WORLD-001 World DB 信任邊界 ADR v0.1](adr/MIR-SEC-WORLD-001-world-db-trust-boundary.md)；[決策歷史、權威證據、交易鎖與負面測試索引](security/world-db/README.md)。狀態：Architecture Proposed／Weakness OPEN／MSDSS P2 NO-GO。
+
 | 工具／介面 | 程式位置 | 說明文件 |
 | --- | --- | --- |
 | 獨立 HTTPX 請求摘要 | `src/deception/api/fingerprint.py` | [不依賴外部 Gateway 的客戶端摘要](trusted-session.md#獨立客戶端的請求摘要) |
