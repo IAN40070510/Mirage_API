@@ -1,6 +1,6 @@
 # MIR-SEC-WORLD-001 — 架構決策歷史與審查修正
 
-**Consolidated v0.1 — 2026-11-21；Architecture Proposed／Weakness OPEN／MSDSS P2 NO-GO。**
+**Consolidated v0.2 — 2026-11-21；Architecture Proposed／Weakness OPEN／MSDSS P2 NO-GO。** 本表於同一文件分支依次 Commit，保留 v0.1 歷史。
 
 本紀錄把先前多輪對話中的**結論、假設、已否決方向、仍待 Owner 核准的決策**整理為可版本控制的狀態；不是把每則聊天當作已正式簽核的會議紀錄。完整決策權屬於 [ADR](../../adr/MIR-SEC-WORLD-001-world-db-trust-boundary.md) 指定的 Mirage Owner／DBA／Security。
 
@@ -16,7 +16,7 @@
 | D-06 | Verifier 必須自己驗原始 JWS、Claims、部署綁定、Session、Revocation、Replay | Runtime 不得自填 `verified`、issuer、policy、時間或 Receipt 核准結果 |
 | D-07 | `replay_entries` 防重放，Receipt 證明驗證、Binding 控制一次使用、Operation Receipt 控制對帳 | 四者證明不同主張，不能互相代替 |
 | D-08 | 同一 PostgreSQL IngressTx 原子消費 JTI 並建立可信 Receipt | 不承諾跨 DB 原子性；已消費 JTI 不因後續 Grant 失敗而重新開放 |
-| D-09 | GrantTx 以單交易原子建立 Receipt／Candidate／Generation／Admission 的一次性 Binding | Candidate 通常在 Ingress 後才產生，Ingress 不得虛構未來 hash |
+| D-09 | **IngressTx** 先建立 Replay Tombstone＋Receipt；**GrantTx** 僅鎖定並檢查既有 Receipt／Candidate／Generation／撤銷，原子建立唯一 Binding＋Admission，**不重新建立 Receipt** | 修正 v0.1 不精確措辭；兩階段在不同交易提交，不能假裝同一建立交易 |
 | D-10 | 授權使用 Envelope v1 的實際應用層 bytes，Candidate 受保護不可改 | Hash 不證明 ASGI／TLS 客戶端實際收到；任何後置內容變動使 Admission 失效 |
 | D-11 | AuthorizeTx／StartSendTx 用 Receipt/Binding 身分作當前 Epoch、Key、Profile、Generation 的動態查核 | Receipt 是歷史驗證事實，不是永久授權；同一 Receipt 已綁當前 Admission 並非重放 |
 | D-12 | 不要求「整個 HTTP 請求單一交易」；僅要求「每個安全狀態轉移單一交易」 | World Commit／外部 side effect 與 Admission 分階段，有故障不一致，需對帳 |
@@ -25,6 +25,13 @@
 | D-15 | 既有 `pg_advisory_xact_lock` 是交易級；重構需保留鎖鍵相容 | 不把它當 Session-level；不得在鎖鍵不相容時混跑新舊版 |
 | D-16 | Restore 時 Fail-Closed Quarantine，不靠單純還原 DB 取得安全性 | Replay／Revocation／Epoch 舊狀態可能倒退；須核實舊 Token 全部無效才解禁 |
 | D-17 | DB ACL 與 SECURITY DEFINER 都要真實 PG 負面測試 | 不能以 superuser fixture 或 13 項「成功重現」測試宣稱缺口修復 |
+| D-18 | Request Provenance 本輪採**語意 A**：JWS 與 Runtime 提交 Canonical Request 相符；不證明實際 HTTP 入口來源 | 語意 B 需可信 Gateway／入口證據，另案；後續 Binding 仍須同 Request Fingerprint |
+| D-19 | Verifier 的 Verified Context 僅是內部不可變資料，**不是 DB 可獨立驗證的證明** | 來源可信性依真實驗章、受限 Writer Role、窄介面與秘密／網路隔離，不接受 Runtime 自填 verified JSON |
+| D-20 | Ingress Key Revocation Guard、Replay Tombstone、Receipt 共用**同一 PostgreSQL DB／Physical Connection／Transaction Coordinator** | 現有 `trusted_session.py`、`postgres_replay.py`、`key_revocation.py` 各自連線，需要重構內部交易介面與 cleanup；禁止 Store 自行 commit |
+| D-21 | Candidate Submission、Validation、Promotion、Binding 為**不同授權語意**；不強制新增 staging table | Authorizer 不信任 Runtime 自填 hash／Scope／驗證旗標；Promotion 對 bytes＋Policy Revision 原子固定，避免 Validation→Promotion TOCTOU |
+| D-22 | Candidate Promotion 失敗不得留下半可信物件；GC 不能刪除受保護 Bound Candidate | 需檢查真正 FK／Row Lock／GC，不能只憑 Runtime 提交的 protected_refs 清單 |
+| D-23 | `WORLD_COMMITTED_ADMISSION_UNAVAILABLE` 是跨交易 **Reconciliation Classification** | 禁止擅自加入既有 AdmissionState／World Commit Enum |
+| D-24 | 正式發送 OFF 須有獨立強制、可驗證且 Restore 後不倒退的控制面 | `production DECEIVE OFF` 目前作為政策要求，不宣稱存在已驗證的全域功能開關 |
 
 ## 曾討論但明確拒絕的捷徑
 
@@ -41,6 +48,11 @@
 | COPY FROM PROGRAM 只靠一般 EXECUTE 就能執行 | **校正** | 另須 superuser 或 `pg_execute_server_program` 類權限，須審核真實有效權限 |
 | PostgreSQL 不寫 volatility 就預設 IMMUTABLE／parallel safe | **校正** | DML 函式宜顯式標示 `VOLATILE PARALLEL UNSAFE` 方便審計，但不應錯稱預設為 IMMUTABLE |
 | Runtime 原地改 Admission Hash 後重新授權同 Receipt | **拒絕** | 破壞 Envelope 不可變與一次性 Binding；需新 Candidate＋合法新授權流程 |
+| 讓 Runtime 直接提供 `request_fingerprint` 或「原始快照」便宣稱已證明實際 HTTP 入口 | **拒絕過度承諾** | 只能證明 JWS 與提交資料相符；外部來源需另有可信入口證據 |
+| 在外層增加 `BEGIN`，但 Replay／Key Guard Store 仍自行開連線 | **拒絕** | 不同 Physical Connection 無法因外層 Python 區塊產生同一 PostgreSQL 原子交易 |
+| 以 Python `VerifiedContext` 類別作為資料庫身分認證 | **拒絕** | Class／JSON 不是 DB 可信來源證明，需受保護 DB 身分與寫入介面 |
+| 強制 Candidate 新增 staging table 作為唯一設計 | **不預先指定** | 可沿用既有儲存並加權限、Validator／Promotion 或受限函式；以安全驗收證據裁決 |
+| Validation 已 PASS 就不再核對 bytes／Policy Revision，直接 Promotion | **拒絕** | 內容或政策可能在兩階段之間改變，需不可變證據及重新驗證 |
 | `SEND_STARTED` 表示 Client 收到，或網路失聯等於沒送 | **拒絕** | DB 起送、ASGI 嘗試、Socket 寫入與客戶端接收是不同事件 |
 
 ## 仍須正式裁決（不得隱藏成既定事實）
@@ -54,9 +66,14 @@
 | World Commit 成功但 Admission 無法取得 | API 可查回／at-most-once／可補償與對外回應 | **OPEN** |
 | Replay／Receipt 保留、還原隔離與釋放條件 | 單機 Quarantine 與外部安全錨點／保守到期窗口 | **OPEN** |
 | R4/R5 額外安全需求 | 分開威脅模型或正式殘餘風險接受 | **OPEN** |
+| Request Provenance 語意 A 風險接受 | 若未來要求實際入口來源驗證，採語意 B 並另行威脅分析 | **OPEN（提案採 A）** |
+| Candidate Validator 身分與 Promotion 具體交易 | 鎖定內容版本、可信 Policy Revision、Scope、不可挪用驗證證據 | **OPEN** |
+| 正式發送禁用控制面 | 查明開關與 Credential／Restore／Runtime 權限，驗證 fail-closed | **OPEN** |
 
 ## 紀錄原則
 
 每個後續決策需有：ID、日期、決策人、選項、來源 commit／PR、威脅能力、測試結果、殘餘風險與可回滾方式。**實作完成**、**測試通過**、**Owner 核准**與**安全弱點關閉**是四個獨立狀態。
+
+**持續紀錄工作約定（本輪已獲使用者同意）**：每次與此 ADR 有關的討論形成新結論時，將可核對內容整合到**同一文件分支**，以新的 Git Commit／版本歷史保留修改理由；不重複建構平行文件，不以「合併討論紀錄」解讀為可合併 `main`、修改 staging 或啟用正式發送。尚未核准的選項必須標為 Proposed／OPEN，測試未執行仍是 NOT_RUN；未來新對話需由取得 Repo 權限的執行者實際提交，**不宣稱已有無人值守的跨會話自動化**。
 
 目前無正式 Owner 簽核紀錄，請勿把本檔的「已固定提案方向」解讀成已核准進入 production。
