@@ -4,14 +4,19 @@
 
 **目前狀態：Proposed／Security Weakness OPEN／MSDSS P2 NO-GO。沒有執行任何修復或正式發送啟用。**
 
+**v0.2 Contract Freeze candidate（2026-11-21）**：唯一授權點為 `SEND_AUTHORIZED` COMMIT（Freeze v1 不變）；StartSend 只核對 Snapshot／owner／deadline／single-use／Purge Fence，沒有第二次 Policy 或 Emergency 授權；Candidate Payload 與 Snapshot Purge 分開。Operation Identity、外部 effect key、未知 `SEND_STARTED`、Restore Quarantine、Old Role Mixed Binary Fence 已有 Proposed MUST 與 22 個 NOT_RUN 測試 ID。**新控制 NOT_IMPLEMENTED，無安全修補通過證據**。
+
+**來源追溯**：Mirage upstream `main` `88dc2008fd35a2d3873949a769653dc9f18e8980`；MSDSS `main` `5a1ee26dcf79f04cf29345a0403e3f3f8082358b` 的 Protocol Freeze v1；Mirage 文件分支前置 `docs/mir-sec-world-001-adr-v0.1`／`003c918f142296588d2fe14b70fafe3cc5cf8458`，**Mirage main 尚未收錄此 ADR**，後續 HEAD 以 GitHub Draft PR 為準。
+
+
 | 文件 | 說明 | 建議閱讀順序 |
 | --- | --- | --- |
-| [ADR v0.2](../../adr/MIR-SEC-WORLD-001-world-db-trust-boundary.md) | 問題、方案 B、信任邊界、不變量、遷移及 Owner 未決事項 | 1 |
+| [ADR v0.2](../../adr/MIR-SEC-WORLD-001-world-db-trust-boundary.md) | 問題、方案 B、Freeze v1 不變、不可變 Snapshot／Operation/Purge 與 I-01～I-19、Owner 未決事項 | 1 |
 | [決策歷史](decisions-log.md) | 多輪採納／否決／校正的具體理由，避免對話結論遺失 | 2 |
 | [權威證據矩陣](evidence-authority-matrix.md) | JWS、Replay、Receipt、Candidate Submission／Validation／Promotion／Binding、Admission、Operation Result 各自可信來源 | 3 |
 | [交易／鎖矩陣](transaction-lock-matrix.md) | 現有鎖順序、可能循環、交易責任、未知 COMMIT 與失敗恢復 | 4 |
 | [威脅能力矩陣](threat-capability-matrix.md) | R1–R5、Runtime/Verifier/主機威脅與每項控制覆蓋能力 | 5 |
-| [驗收計畫](verification-plan.md) | 真實 PostgreSQL／非特權 Role、並行、Key Rotation、Restore、ASGI snapshot、未知 COMMIT 的負面與正向測試 | 6 |
+| [驗收計畫](verification-plan.md) | 真 PostgreSQL／非特權 Role、Snapshot/Purge、Policy Race、外部 side effect／Restore、Mixed Runtime、未知 COMMIT（22 個精確化 ID 全 NOT_RUN） | 6 |
 
 ## 交接原則
 

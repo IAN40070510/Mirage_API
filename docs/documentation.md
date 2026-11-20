@@ -54,3 +54,7 @@
 此工具只使用 Python 標準庫的 `ast`、`pathlib`、`re`、`sys`、`urllib.parse`，隨 Python 的 PSF 授權及聲明管理，沒有新增套件。
 
 文件檢查通過表示具名函式具有非空功能說明、文件登錄與本地連結完整，不表示執行功能已通過 API 契約、業務一致性或真模型品質驗證。可執行行為變更仍按各工具文件執行對應測試。
+
+## World DB ADR v0.2 契約文件同步（僅在 ADR 分支啟用檢查）
+
+`python tools/check_documentation.py` 除了函式 docstring／工具指南／本地 Markdown Link，亦會在 `docs/adr/MIR-SEC-WORLD-001-world-db-trust-boundary.md` 存在時核對 ADR、[Decision Log](security/world-db/decisions-log.md)、[Verification Plan](security/world-db/verification-plan.md) 的 v0.2 關鍵測試 ID 與 **NOT_RUN**，確認索引存在、Freeze v1／`MIR-SEC-WORLD-001 OPEN`／`MSDSS P2 NO-GO` 不被誤標成 PASS。這是文件一致性靜態檢查，不取代真 PostgreSQL ACL／Race／Object Storage／Restore 的未來驗收。

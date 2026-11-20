@@ -2,12 +2,15 @@
 
 | 欄位 | 值 |
 | --- | --- |
-| ADR 版本 | **v0.2**（2026-11-21，Asia/Taipei；由 v0.1 追加審查結論） |
+| ADR 版本 | **v0.2 Contract Freeze candidate**（2026-11-21；Proposed、未核准） |
+| ADR 所在分支 | `docs/mir-sec-world-001-adr-v0.1`（保留舊名稱與 v0.1→v0.2 歷史；Mirage `main` 尚未包含；本次 Draft PR HEAD 以 GitHub 為準） |
+| World DB authority remediation | **NOT_IMPLEMENTED**；新驗收 **NOT_RUN**；production DECEIVE **OFF**（政策要求，實際部署強制證據尚缺） |
 | Architecture | **Proposed；未經 Owner／DBA／Security 核准** |
 | Security weakness | **MIR-SEC-WORLD-001 — OPEN／尚未修復** |
 | 關聯驗收 | **MSDSS P2 — NO-GO**；P2 是 MSDSS 的驗收代號，不是 Mirage 的漏洞識別碼 |
-| Mirage 原始碼基準 | `main` commit `88dc2008fd35a2d3873949a769653dc9f18e8980` |
-| 來源 | 多輪架構審查結論及原始碼唯讀核對；**本文件本身不構成已通過的安全驗證** |
+| Mirage 原始碼基準 | Mirage 上游 `main` `88dc2008fd35a2d3873949a769653dc9f18e8980`；本文件前置 HEAD `003c918f142296588d2fe14b70fafe3cc5cf8458` |
+| 協定基準 | MSDSS `main` `5a1ee26dcf79f04cf29345a0403e3f3f8082358b` 的 `docs/P2_SEND_AUTHORIZATION_FREEZE.md`，**SEND_AUTHORIZED COMMIT 是唯一授權線性化點**；Mirage 上游尚未因此採納 |
+| 來源 | 多輪安全審查及兩個不同 Repo/SHA 的唯讀核對；**非已實作／通過的安全驗證** |
 | 變更界線 | 文件提案；**不代表已修改 Runtime、資料庫 ACL、staging、金鑰或 production 開關** |
 | 審核責任 | Mirage Owner、DBA、Security；發布仍須 Release Approver 與 MSDSS P2 個別驗收 |
 
@@ -62,11 +65,11 @@ T1／T1.5／T2 舊稱僅保留於 [決策歷史](../security/world-db/decisions-
 3. **同資料庫原子性與唯一交易協調器**：同一 PostgreSQL **database、physical connection、IngressTx** 內取得 Key Revocation Guard、依 DB 權威時間重新檢查期限／撤銷、原子插入 Replay Tombstone 與 Ingress Receipt；僅交易協調器可 commit/rollback。靜態 JWS 驗證的不可變結果不得由呼叫者任意注入 Claims／JSON／policy／時間；Replay Store、Key Revocation Store、Receipt Writer 的受保護交易介面不得自行開第二條連線或在中途 commit。例外須 rollback 並清理連線池 Session 狀態。**現行** `TrustedSessionVerifier.verify()`、`PostgresReplayStore.consume()` 與 `KeyRevocationRegistry.guard()` 分別管理連線／消費，尚未達成本合約。若未來拆分 DB，必須另立安全協定，不可沿用此原子性聲明。
 4. **Ingress 與 Candidate 的時間順序**：Ingress 發生時 Candidate 通常**尚未生成**；Receipt 先綁定已驗證 Claims、request fingerprint 與候選意圖／允許的 Scope，**不得偽稱此時已驗證未來的 Candidate hash**。GrantTx 再將不可變的實際 Candidate、Envelope v1 hash、Session、Generation、Projection 與 Receipt **原子綁定**到 Admission。
 5. **不可挪用／唯一性**：`(issuer,audience,jti)` 確保 Token 一次性消費；Receipt ID、Operation ID、Admission ID 與 Candidate ID 各有不同語意與完整 Scope。Receipt 最多有一筆有效 Grant Binding；同一 Receipt 不得換 Candidate／Generation；同一 Operation ID 配不同 `input_digest` 必須拒絕。使用 DB FK、UNIQUE、鎖與權限強制，而非只相信 Python。
-6. **「已使用」定義**：StartSend 時 Receipt **原本就已綁定目前 Admission**。不得因 `used=true` 一律拒絕；必須拒絕的是**其他 Admission 的重綁、已撤銷或不符合當前授權窗口**。
+6. **「已使用」定義**：StartSend 時 Receipt **原本就已綁定目前 Admission**。不得因 `used=true` 一律拒絕；必須拒絕的是**其他 Admission 的重綁**，或**尚未獲 SEND_AUTHORIZED 前**已被撤銷的授權請求；授權已提交後的 Policy／Emergency 變化不可在 StartSend 二次否決。StartSend 仍會拒絕 owner／期限／single-use／Snapshot execution 失效。
 7. **Candidate Submission／Validation／Promotion／Binding**：Runtime 可提出低信任 Candidate，但不能自行指定可信 owner、generation、validation、promotion、授權狀態；可採 staging、受限函式或**既有** `PostgresCandidateStore` 加權限隔離，**不預先指定新資料表**。Candidate Validator 對實際 bytes 及完整 Scope、request fingerprint、Projection／Contract、政策與來源版本獨立驗證。**首選短交易 Promotion**：先鎖定受 DB 保護的 Candidate 版本並讀取確定 bytes，依可信政策完成必要驗證，原子固定 Promotion；若昂貴的 Projection／Contract 檢查必須在鎖外完成，須由可信 Validator 產生綁定 DB 產生且不可變的 Candidate Version、Envelope hash、Scope、`projection_contract_hash`、`policy_revision`、`source_spec_sha256`、validator identity／algorithm version／驗證時間的證據；如跨信任邊界還需可驗的來源認證。Promotion 的**短**交易重新鎖定並核對版本、bytes hash、Scope 與政策可用性，再建立可信 Candidate。Runtime 提供的版本整數或 `validated=true` 不算安全證據。Staging 不可直接供 Grant 使用，失敗不留下半可信物件。
 8. **完整性、授權、傳輸是三個不同證明**：`SHA256(bytes)==candidate_hash` 只證明資料完整性；符合核准 Projection／Scope／Contract／來源才是政策授權；送入 ASGI 的 status／headers／body 不變快照才是傳輸邊界。任何後置 Middleware 變更使原 Admission 失效，不能以原 hash 重新授權，不能宣稱 TLS／Client exactly-once delivery。
 9. `domain_validation='passed'`／`contract_validation='passed'` 僅可作為 Runtime 觀察與稽核；若 Authorizer 無法取得獨立可信的必要驗證結果，必須 Fail-Closed，**不得採取「限速臨時信任 Runtime」作為正式通路**。
-10. **政策狀態與時間語意**：版本升級／Key Rotation **不自動等於撤銷**。由受保護 Policy Authority 明定 Revision 的 ACTIVE／禁止新 Grant／REVOKED 狀態及過渡相容規則；Promotion／Grant 必須依當下核准政策，AuthorizeTx／StartSendTx **重新查核同一已綁 Revision 是否仍准許發送**。若 Grant 後、StartSend 前撤銷，禁止後續 SEND_STARTED；已 SEND_STARTED 的外部傳輸不能回溯改寫。不能僅因數字上有「最新版」便擅自否定或放行既有 Candidate。
+10. **政策狀態與時間語意**：版本升級／Key Rotation **不自動等於撤銷**。由受保護 Policy Authority 明定 Revision 的 ACTIVE／禁止新 Grant／REVOKED 狀態及過渡相容規則；Promotion／Grant 必須依當下核准政策，AuthorizeTx **在 SEND_AUTHORIZED COMMIT 前**重新確認 Revision／撤銷；StartSendTx **不得**二次查核 Policy／Emergency／Epoch／Generation 作授權。撤銷若晚於授權提交不可回溯撤銷；Payload／Snapshot 缺失屬執行條件，不是第二次授權。不能僅因數字上有「最新版」便擅自否定或放行既有 Candidate。
 11. **Candidate GC、參照及資料保留**：優先以受保護 FK／UNIQUE 與相容 Row Lock 防 GC 刪除被有效 Binding 引用的 Candidate，但現行 `candidate_records` 使用完整 Scope＋`candidate_ref`，**不應憑空假設全域唯一 `candidate_id`**。FK 必須指向實際權威複合鍵；`ON DELETE RESTRICT`／等效約束不得被 Runtime 改寫。**FK 不等於完整 GC 策略**：若 Binding 永久保留，無限期保存原始 Payload 將造成資料保留／容量風險；可分離不可變審計 Metadata／Hash 與短期 Payload，或依經核准的終態與保留窗口安排受限清理，絕不清除仍可 StartSend／UNRESOLVED／對帳所需的 bytes 或證據。`protected_refs` 僅供效能優化，不能作唯一刪除依據。
 
 來源、Writer、Reader、信任等級與 Source of Truth 細項見 [Evidence Authority Matrix](../security/world-db/evidence-authority-matrix.md)。
@@ -92,19 +95,19 @@ T1／T1.5／T2 舊稱僅保留於 [決策歷史](../security/world-db/decisions-
 | **IngressTx** | 驗證 JWS 成功後，在同一 DB 交易消費 JTI、建立 Receipt；失敗兩者一起 rollback | 不包含尚未生成的 Candidate；沒有 Admission 不代表可恢復 JTI |
 | **CandidatePromotionTx** | 原子固定經受保護驗證的 Candidate bytes／Scope／Contract／Policy Revision 與 Promotion 結果；驗證證據不能挪用於其他 bytes | Staging 提交不等於 Promotion；失敗不得留下可被 Grant 使用的資料 |
 | **GrantTx** | 鎖可信 Receipt／Candidate，核對 Scope、摘要、當前 Generation／Session／Revocation，原子建立唯一 Binding 與 Admission | 不與已提交 World Mutation、外部 API 共用交易 |
-| **AuthorizeTx** | 對同一 Admission 重新檢查動態狀態與期限，再進入 `SEND_AUTHORIZED` | 歷史 Receipt 不能取代現時查核 |
-| **StartSendTx** | 同一受保護交易重新檢查 Session Head、Key、Profile、Generation、Receipt、owner、時間與 Envelope，記錄 `SEND_STARTED` | DB 記錄不等於 HTTP bytes 已送達客戶端 |
-| **Pre-send block** | 原子地從尚未開始發送的 Admission 轉 `ABANDONED`，並保存安全拒絕原因 | 不能把 SEND_STARTED 的未知傳輸改成確定未發送 |
+| **AuthorizeTx** | 受保護交易查核當前 Policy／Emergency／Session／Generation／Receipt／Snapshot Binding 及期限；**COMMIT SEND_AUTHORIZED 是唯一授權線性化點** | 決策時間不是 COMMIT；未知提交不可推定授權 |
+| **StartSendTx** | 只核對已提交授權、可信 owner、期限、single-use、精確 Snapshot Binding／完整性／Purge Fence；原子提交 `SEND_STARTED` 和安全必要 Audit | **不得重作 Policy／Emergency／Session／Key 授權**；提交確認後才可送出第一個 ASGI 訊息，DB 記錄不等於客戶端收到 |
+| **Pre-send block** | 尚未 SEND_STARTED 時持久化不可重試 execution fence，可將執行狀態轉 ABANDONED，**但必須保留先前 SEND_AUTHORIZED 修訂與不可變授權歷史**；原子保存安全拒絕原因 | 不得把既有授權抹除、宣稱政策撤銷已回溯生效；未知 SEND_STARTED 不得偽造「未發送」 |
 
-`AuthorizeTx`／`StartSendTx` 必須使用 Receipt／Binding 自己保存的 `issuer`、`kid`、Session scope/epoch、Generation 作**重新查核的索引**，不可使用 Runtime 傳來的替代識別；Receipt 歷史驗證成功**沒有永久授權效力**。
+`AuthorizeTx` 用受保護 Receipt／Binding 取得可信 issuer、kid、Session scope/epoch、Generation 和 Snapshot Identity，不能信 Runtime 自填識別。`StartSendTx` 僅驗同一已授權 Snapshot 與執行條件；Receipt 歷史成功不授予**新的**發送權限，但已提交授權不因之後的撤銷回溯失效。
 
 ### 6.2 並行與線性化點
 
 目前程式 `postgres_admission._lock_admission` 有 **Admission → Generation → Profile** 鎖序，`session._resolve_in_transaction` 有 **Session Head →（舊）Generation** 鎖序。若在 StartSend 的 Generation lock **之後**追加 Session Head lock，可能產生 `Session Head ↔ Generation` 循環等待，**不能盲目加一條 SQL 當作修復**。
 
-新的鎖順序、Isolation、Revocation 與 StartSend 誰先成立、Snapshot 時機、超時及可重試錯誤，均依 [交易／鎖矩陣](../security/world-db/transaction-lock-matrix.md) 完成 Owner／DBA 審查及真實 PostgreSQL 並行測試後定稿。**`Candidate → Binding／Admission` 只能先視為 Grant／GC 的局部排序建議**；既有 Grant 先鎖 Generation、Session 切換先鎖 Session Head，若把 Candidate 鎖硬塞到它們前面，可能另造循環；須確認全路徑 DAG 與 FK 自動鎖後再訂全域順序。任何切換 `hashtextextended('mirage-profile:'...)`、Key namespace 或 Advisory Lock Key 的變更都要獨立審核，不能在新舊版本混用鍵值時滾動升級。
+新的鎖順序、Isolation、Revocation 與 **AuthorizeSend** 誰先提交、Snapshot 時機、超時及可重試錯誤，均依 [交易／鎖矩陣](../security/world-db/transaction-lock-matrix.md) 完成 Owner／DBA 審查及真實 PostgreSQL 並行測試後定稿。**`Candidate → Binding／Admission` 只能先視為 Grant／GC 的局部排序建議**；既有 Grant 先鎖 Generation、Session 切換先鎖 Session Head，若把 Candidate 鎖硬塞到它們前面，可能另造循環；須確認全路徑 DAG 與 FK 自動鎖後再訂全域順序。任何切換 `hashtextextended('mirage-profile:'...)`、Key namespace 或 Advisory Lock Key 的變更都要獨立審核，不能在新舊版本混用鍵值時滾動升級。
 
-**建議政策**：較新 Session epoch 已提交後，舊 epoch 尚未 `SEND_STARTED` 的 Admission 不得開始發送；已 `SEND_STARTED` 的外部傳輸不可事後回收。撤銷與 StartSend 競爭時依正式鎖／提交順序定義勝負；無法確認目前安全狀態時禁止新的 `SEND_AUTHORIZED`、`SEND_STARTED`。
+**Protocol Freeze v1**：較新 epoch／Emergency 先 COMMIT → 拒絕後續 SEND_AUTHORIZED；SEND_AUTHORIZED 先 COMMIT → 保留授權，StartSend 不重查 Head／Policy／Emergency。Snapshot 無法安全執行可以拒絕傳輸，但不可假裝是授權被撤銷。完整鎖圖／FK 隱含鎖仍待真 PG 驗證。
 
 ### 6.3 Token、Grant、Transmission Window
 
@@ -121,7 +124,7 @@ start_send_deadline = min(
 
 `approved_grace`、window、clock skew、比較精度與是否准許 Token 到期後開始傳輸仍為 **Owner＋Security Blocking Policy Decision**；沒有核准即採 `approved_grace=0` 的保守政策。不得接受 Runtime 傳入的任意 world expiry。
 
-DB 須在取得必要鎖後，以**實際檢查時間**評估（可用 `clock_timestamp()`，不要誤用交易開始固定的 `now()`），`current_time >= deadline` 拒絕；應明確區分 DB StartSend 判定時點與 ASGI 第一個 byte 交接時間，並限制兩者間的延遲。
+**Deadline Matrix**（MSDSS Freeze v1 現行實作）：Claim 檢查 `authorization_deadline`；AuthorizeSend 及 StartSend 檢查 `transmission_deadline`；每段 ASGI 發送仍受 transmission deadline 限制。每個受保護交易取得必要鎖後**只從 DB 取得一次 decision_time**，同一交易全部期限／GC／Lease 使用同一值並持久化。`decision_time < deadline` 是判定時間有效，**不是** COMMIT 保證早於 deadline；SEND_AUTHORIZED 的 COMMIT 仍是唯一授權生效點。未知 COMMIT、DB 時鐘倒退／不可驗證、跨 DB skew 均 Fail-Closed；Runtime 提供的 now 僅可診斷。
 
 ### 6.4 Admission 與 HTTP 傳輸結果
 
@@ -132,20 +135,105 @@ DB 須在取得必要鎖後，以**實際檢查時間**評估（可用 `clock_ti
 - `SEND_STARTED` 記錄的是 DB 許可／開始發送意圖；不能推導 ASGI 已嘗試、TCP/TLS 已送達或 Client 收到。這四種事件應分開。
 - World Commit 成功但 Admission 失敗，**可以存在**且不能藉 HTTP 重試重做 Mutation；需以 `commit_attempt_id`、request fingerprint、Session／Generation 和既有 World Operation Result 對帳。`WORLD_COMMITTED_ADMISSION_UNAVAILABLE` 僅是提議的 **Reconciliation Classification（跨交易對帳分類）**，不是既有 World Commit／Admission enum。
 
+## 6.5 v0.2 Contract Freeze：決定性受保護合約（其餘舊措辭不得抵觸）
+
+本節是 **Proposed／NOT_IMPLEMENTED** 的 v0.2 規範性內容，並以 MSDSS `main` `5a1ee26dcf79f04cf29345a0403e3f3f8082358b` 的 Protocol Freeze v1 為控制邊界。**不得**以 Mirage 上游 `main` `88dc2008fd35a2d3873949a769653dc9f18e8980` 的舊實作推定本合約已修復、已核准或已部署。
+
+### 6.5.1 Policy、Revocation、Deadlines 和 Send Freeze
+
+1. **MUST**：`CLAIMED → SEND_AUTHORIZED` 的 **DB COMMIT** 是唯一授權線性化點；Policy／Emergency／Epoch／Generation／Key 撤銷先提交則拒絕之後的授權，授權先提交則**不得回溯撤銷**。如需授權後撤銷，須正式升版 **Protocol Freeze v2** 並另跑競態驗收。
+2. **MUST**：Policy Authority 由獨立受保護控制者管理 `ACTIVE`、`NO_NEW_GRANTS`、`REVOKED`；NO_NEW_GRANTS 禁止**新** Grant，舊有效 Grant 在其他條件符合下仍可取得 Send Authorization；REVOKED 禁新 Grant 及尚未提交的 Authorize。`REVOKED` 不可改回 ACTIVE，恢復必須新 Revision；Candidate Validation 只記錄 Revision，不代表已授權。
+3. **MUST**：`StartSend` **不**重查 Policy／Emergency／Session Head／Key／Generation 做第二次授權；它只核對已提交授權、可信 claim owner、`transmission_deadline`、single-use、已綁定 Snapshot 的 bytes/hash/version、Snapshot Purge Fence。若內容缺失則 `PAYLOAD_UNAVAILABLE`／`SNAPSHOT_UNAVAILABLE` Fail-Closed（執行條件失效，不是授權撤銷）。
+4. **MUST**：每個受保護交易於全部必要鎖到手後，從權威 DB **一次**取 `decision_time`，記錄並供該交易所有期限／Lease／GC 判斷；`decision_time < deadline` 是**邏輯判定時有效**，不保證 COMMIT 早於期限；`SEND_AUTHORIZED COMMIT` 才是線性化點。Claim 使用 `authorization_deadline`；AuthorizeSend 與 StartSend 使用 `transmission_deadline`；之後每個 ASGI 發送段也檢查後者。DB clock rollback/skew／未知時間、不同 DB clock 不可互信、Runtime now 都不能擴權；需要已核准同步／最大偏差／監控與 Fail-Closed。
+5. **MUST**：`SEND_STARTED` 與安全必要傳輸 Audit／Snapshot 參照須在**確認 COMMIT** 後才可送第一個 ASGI 訊息。補充 Audit 可進 durable reconciliation queue，但**不得**補造 send_started。已開始輸出後 Audit 失敗 → 結果未知，不得假設傳輸未發生。
+
+### 6.5.2 Operation Identity、外部效果、Restore Fence
+
+6. **MUST**：Operation 在副作用前建立受保護 `OperationIdentity`：`authority_namespace`、`namespace_epoch`、`operation_id`、`input_digest NOT NULL`、`digest_algorithm`、`external_effect_key`、`created_at`、`retention_until`。`UNIQUE(authority_namespace,namespace_epoch,operation_id)`；同 ID 不同 Digest = `OPERATION_DIGEST_CONFLICT` 並無第二筆結果；同 Digest 只能取既有結果或進入對帳。禁止 UPDATE／UPSERT 改寫 Digest 或外部 Key。Namespace／Tenant 由可信 Receipt／權威映射取得，不採 HTTP body／Runtime 參數。
+7. **MUST**：`operation_id`、`jti`、`admission_id`、`snapshot_id`、`external_effect_key` 分別表示不同身分。`external_effect_key` 首次 Operation Identity 持久化時固定，不能因 Epoch、Restore、重試或重新簽發 JWS 自動更換；一項 Operation 若有多個不同外部效果，須固定每項效果的 key。新 Namespace Epoch 不證明舊效果已 rollback。
+8. **MUST**：Restore 先 Quarantine，核對 Operation／World Result、Ingress／Grant Receipt、Transmission Audit、外部 effect status；未知提交或外部服務無法對帳時採 at-most-once／持續拒絕或經 Owner 授權人工處置，**不能**自動換 Epoch／新 JWS 重做。`WORLD_COMMITTED_ADMISSION_UNAVAILABLE` 是 **reconciliation classification**，不是新增 AdmissionState。
+9. **MUST**：未知 `SEND_STARTED` COMMIT → Sender 不得自行重試、建立新 JWS／Admission／Snapshot 或新 HTTP 傳輸；對帳查到 SEND_STARTED **只證明 DB 已提交**，不證明 ASGI／Proxy／Client 已收。沒有正式核准的 resumable transport，**不可因對帳而新開傳輸**；同一仍活著的 Sender 與原連線可依 Freeze v1 結束原本已開始的傳輸，不能描述為「恢復後重送」。
+
+### 6.5.3 Candidate／Snapshot Write-Once、合法狀態與 Purge
+
+10. **MUST**：明確分離 `CandidateEvidence`（完整 Scope、candidate_ref/version、Envelope hash、Policy／Source／Validation）、`CandidatePayload`（BYTEA 或固定 object id/version/hash 與 purge state）、`GrantBinding`、`SnapshotProposal`、`OperationSnapshotBinding`、`AuthorizedSnapshot`、`PayloadPurgeTombstone`；允許等價受保護模型而不強制每個名稱都需獨立資料表。`SUBMITTED + VALID BINDING` 不合法；`PURGED → AVAILABLE` 永久禁止；相同完整 Candidate Identity 不得 INSERT 替代版本。
+11. **MUST**：先以受保護交易記錄**首次不可變 Snapshot Proposal** 和完整 Scope Pin；固定 object ID／version／hash，交易外依固定版本 materialize 完整 bytes、驗 Envelope encoding v1／Hash，再建立不可變 Snapshot。不能在等待外部 Object Storage 時一直持有關鍵 DB row lock。首次 Proposal 未持久化，無法聲稱能阻止改選。外部物件不存在／hash 失配 → Fail-Closed，不可請 Runtime 重新提供相同 Hash 的「替代內容」。
+12. **MUST**：`OperationSnapshotBinding` 受 `UNIQUE(operation_identity_id)` Write-Once 控制，綁 Snapshot id/version/hash/encoding、Operation、完整 Scope／Generation、Admission。不同值重綁 → `SNAPSHOT_BINDING_CONFLICT` 且原紀錄不變；相同值只能讀回（不得重新授權）。未知 COMMIT 先對帳；確定 Rollback 也只能沿最初**持久化** Proposal 重試；Restore 後缺 Binding 不得改選。Binding 與 Authorize 同受保護交易，或 Authorize 在同一交易鎖定並引用既有**已提交且不可變** Binding；未綁定不得 SEND_AUTHORIZED。
+13. **MUST**：`SEND_AUTHORIZED` 持久化精確 `candidate_identity/version`、`operation_identity`、`snapshot_id/version/hash`、`envelope_encoding_version`、`payload_pin_id`、`admission_id`、Scope/Generation；StartSend 只讀取此 Snapshot，不重新解析 Candidate 或拉取 Object 的新 version。Snapshot 是應用層 Envelope（status、按序 headers、body）及現有編碼 v1 的 hash，**不是 TCP wire-byte hash**；允許的 HTTP framing 轉換須獨立驗證。
+14. **MUST**：原 Candidate Payload Purged **不會**否定已完整驗證、獨立保存的合法 Snapshot；Snapshot Purged／corrupt 才使 StartSend 無資格。GC 必須依完整 Identity／Version／Binding／Pin／Lease／Purge Tombstone 的受保護資料庫權威決定；`protected_refs` 只能當最佳化提示。FK 保證參照，不足以保證 Promotion、Purge、StartSend 的合法狀態組合。
+15. **MUST**：Snapshot 清理前先持久化**不可重試 Execution Fence**（不回溯抹除 SEND_AUTHORIZED）、阻擋新 StartSend；已 SEND_STARTED 的活躍 Sender 必須持續取得原 Snapshot 至完成或受控中止；結果 UNKNOWN 依有界留存／對帳規則，不因到期假設傳輸失敗。保留 `operation_id,external_effect_key,admission_id,snapshot_id/hash,encoding_version,purge_time/reason,non_retryable`，清理 bytes 後永不恢復原發送資格。Secure Purge 保證須限定實際儲存，不能聲稱立即追回 RAM／ASGI／WAL／Backup 內容。
+16. **MUST**：Snapshot 原始 bytes 需定義可讀 Role、隔離／加密、最大大小、保留期限、備份／Restore、加密金鑰銷毀與安全刪除；一般 Audit／Debug log 不得儲存敏感全文；取回時重新計算 Hash，不能只相信 Metadata。
+
+### 6.5.4 Privileged Caller、完整鎖圖、Mixed Runtime
+
+17. **MUST**：獨立 `NOLOGIN` 函式 Owner、可信固定 `search_path`（`pg_temp` 末尾）、撤銷 `PUBLIC EXECUTE`；一般 Runtime 不可透過 `SET ROLE`／membership／直接 DML 或可繼承權限取得 Verifier／Authorizer。`SESSION_USER`／`CURRENT_USER`／`SET LOCAL app.tenant_id`／`app.claim_owner`／自填 `protocol_version` 皆不是可信業務主體或版本證明。特權操作沿受保護 Ingress Receipt → Operation Authority → Persisted Subject／Tenant → Grant Binding 推導權限並查核 input scope、owner、generation、revision；需測試跨 owner/admission 越權。
+18. **MUST**：完整 Lock DAG 記錄每交易隔離級別、row `FOR UPDATE/FOR SHARE/FOR KEY SHARE`、FK INSERT／DELETE 隱含鎖、advisory lock 先後與 Session Head／Generation／Admission／Candidate／Binding／Policy／Key／Pin／GC 的順序；`40P01`／`40001` 只在確認 Rollback 且沒有任何外部不可逆效果後才可有界重試，`lock_timeout`／未知 COMMIT 不得猜測成功。真 PostgreSQL 多 Backend 實證完成前，不宣稱「全球無死鎖」。
+19. **MUST**：新版 Runtime 使用**新 DB Role／Credential**；部署 Preflight 先撤銷舊 Role 的 protected DML／EXECUTE、終止舊連線／清空 Pool，才允許新版 Schema／函式／ACL 相容 Sender。Runtime 自填 protocol_version 只是診斷資料，不能作安全版本憑證；舊二進位／舊 Role、DB restore、migration rollback 不能重啟受保護寫入／發送。
+
+### 6.5.5 規範性不變量與驗收映射
+
+| ID | MUST（v0.2 新設計，尚未實作） |
+| --- | --- |
+| I-01–I-04 | Evidence immutable；Payload Purge 不可逆；Binding 不代表 bytes 可用；StartSend 不得回頭重取 Candidate |
+| I-05–I-06 | 同 Namespace Operation ID 只綁單一 Digest；未知 COMMIT 不得自動重新 World Mutation |
+| I-07–I-08 | Policy/Emergency 尊重 Freeze v1；一般 Runtime 不可改授權狀態／偽造可信 Subject |
+| I-09–I-12 | Pin／GC 防刪；未知外部傳輸不自動重送；舊備份不能復活撤銷權限；NOT_RUN 不是 PASS |
+| I-13 | 各受保護交易於取得必要鎖後只取一次 DB decision_time，明定判定時間 vs COMMIT |
+| I-14 | 跨表狀態以受保護轉移＋完整 FK／鎖圖強制，不只相信 Trigger/precheck |
+| I-15 | 傳輸只用已授權綁定的同一不可變 Snapshot，不取代、不重新抓 Candidate |
+| I-16 | Namespace rotation 不改變首次固定的外部 idempotency key |
+| I-17 | 未知 SEND_STARTED 不得自動重試／新授權／新傳輸；對帳也不直接授權開新連線 |
+| I-18 | 授權綁 Envelope 編碼、完整 Scope、Snapshot identity/version/hash；不稱 TCP hash |
+| I-19 | Snapshot bytes 有明確 Role、保留、加密、備份、Purge Fence 與不可重試規則 |
+
+**驗收 ID**：`WORLD-OPERATION-01/02/03`、`WORLD-POLICY-01/02`、`WORLD-PAYLOAD-01/02/03`、`WORLD-SNAPSHOT-01`、`WORLD-SNAPSHOT-ACL-01`、`WORLD-LIFECYCLE-01/02/03`、`WORLD-PURGE-01`、`WORLD-TIME-01`、`WORLD-LOCK-01`、`WORLD-IDENTITY-01`、`WORLD-COMPAT-01`、`WORLD-RECOVERY-03/04`、`WORLD-RESTORE-OP-01`。**全部 NOT_RUN**；先前 13/13 World Role 測試中 3 項是漏洞重現，與新的修補驗收不可混算。
+
+
+### 6.5.6 新增／修訂契約測試完整 ID 登錄（全數 NOT_RUN）
+
+以下使用**完整 ID**，避免 `01/02/03` 縮寫被誤認為單一測試；與 Decision Log 及 Verification Plan 同步，文件檢查器必須逐項核對：
+
+| Test ID | 狀態 |
+| --- | --- |
+| `WORLD-IDENTITY-01` | **NOT_RUN** |
+| `WORLD-OPERATION-01` | **NOT_RUN** |
+| `WORLD-OPERATION-02` | **NOT_RUN** |
+| `WORLD-OPERATION-03` | **NOT_RUN** |
+| `WORLD-POLICY-01` | **NOT_RUN** |
+| `WORLD-POLICY-02` | **NOT_RUN** |
+| `WORLD-PAYLOAD-01` | **NOT_RUN** |
+| `WORLD-PAYLOAD-02` | **NOT_RUN** |
+| `WORLD-PAYLOAD-03` | **NOT_RUN** |
+| `WORLD-SNAPSHOT-01` | **NOT_RUN** |
+| `WORLD-SNAPSHOT-ACL-01` | **NOT_RUN** |
+| `WORLD-LIFECYCLE-01` | **NOT_RUN** |
+| `WORLD-LIFECYCLE-02` | **NOT_RUN** |
+| `WORLD-LIFECYCLE-03` | **NOT_RUN** |
+| `WORLD-PURGE-01` | **NOT_RUN** |
+| `WORLD-TIME-01` | **NOT_RUN** |
+| `WORLD-LOCK-01` | **NOT_RUN** |
+| `WORLD-COMPAT-01` | **NOT_RUN** |
+| `WORLD-RECOVERY-03` | **NOT_RUN** |
+| `WORLD-RECOVERY-04` | **NOT_RUN** |
+| `WORLD-RESTORE-OP-01` | **NOT_RUN** |
+| `WORLD-AUDIT-02` | **NOT_RUN** |
+
+既有其餘 `WORLD-*` 測試維持 [Verification Plan](../security/world-db/verification-plan.md) 的原 ID；本清單為**本輪 v0.2 合約精確化所新增／修改的必檢子集**，不是所有歷史測試 ID。所有 22 項目前 NOT_RUN，任何結論不得被描述成已修復的 PostgreSQL 控制。
+
 ## 7. Replay、未知 COMMIT、GC 與 Restore
 
 - **Replay**：`replay_entries` 僅保存**已消費** JTI；未消費 JTI 無需建立 GC 條目。有效 Receipt 必須對應同交易提交的墓碑，只有墓碑／只有 Receipt 都必須拒絕並告警，不能自行補寫授權證據。
 - **可用性與重試界線**：語意 A 下 Runtime 可提前提交一份與合法 JWS 相符的資料並消費 JTI；Verifier Caller 必須經服務認證，對 Caller／Session／Scope 設流量與消費異常監控並留存稽核，不能以單獨「每 JTI 限速」取代總量防護。**已提交消費**後的 Grant 失敗，不得復活同 JTI；若政策允許重新發起新業務意圖，須由合法簽發者產生新 JWS／JTI，並確保不重複執行既有副作用。**已確認 IngressTx rollback** 時原 JTI 未消費，同一仍有效 JWS 能否重新嘗試須依原 Operation ID／digest 與簽發政策決定，**不強制無條件換 JWS**。**未知 COMMIT** 則舊／新 JWS 都不能作為繞過對帳的自動重試理由。
 - **保留**：JTI、Receipt、Binding、Operation Receipt 應保留到 Token 最長可能可接受時間、skew、安全延遲、重試／對帳及備份還原安全界限全部結束；使用經核准公式與政策參數，例如驗證過的 `exp + skew + restore_margin` 與 `consume_time + max_lifetime + 2×skew + 2×uncertainty` 取保守上限。`UNRESOLVED` 不得僅以逾時自動視為 `ABORTED`。
-- **未知 COMMIT**：Operation ID 必須在副作用前可重建或由受保護來源發給呼叫者；它是**相關鍵，不是授權憑證**。Receipt/Operation Result 在相同交易內持久化、唯一 `operation_id`＋輸入摘要綁定。查到同 ID 同 digest 的已提交結果可唯讀恢復；查無**不能證明交易未提交**，應保持 `UNVERIFIABLE`，不得盲目重授權／重消費 JTI／重發送。
-- **外部副作用**：World Mutation、Medusa／Cart API 執行與 Admission 不保證跨交易 exactly-once；由 Owner 核准「業務提交、回應沒開始」語意。必要時以可查回 Result／Outbox／冪等業務操作；不可查回者必須記錄 at-most-once、人工對帳或補償限制。
+- **未知 COMMIT**：Operation ID 必須在副作用前可重建或由受保護來源發給呼叫者；它是**相關鍵，不是授權憑證**。Operation Identity 在副作用前受保護建立 `UNIQUE(authority_namespace,namespace_epoch,operation_id)`，不可變 `input_digest`／演算法／`external_effect_key`；不同 Digest 必須 `OPERATION_DIGEST_CONFLICT`，不得 UPSERT 改寫。同 ID 同 Digest 只可唯讀查回／對帳；多 DB／外部效果沒有共同原子交易。查到同 ID 同 digest 的已提交結果可唯讀恢復；查無**不能證明交易未提交**，應保持 `UNVERIFIABLE`，不得盲目重授權／重消費 JTI／重發送。
+- **外部副作用**：World Mutation、Medusa／Cart API、Admission、HTTP 不保證跨交易 exactly-once；首次 Operation 建立時固定外部 `external_effect_key`，**不因 Namespace Epoch、Retry、Restore 或新 JWS 自動旋轉**。外部不能對帳則 at-most-once／人工對帳或永久阻擋，不得自動重做。`WORLD_COMMITTED_ADMISSION_UNAVAILABLE` 僅是 reconciliation classification。
 - **Restore Quarantine**：單主機建議採 World DB 還原後強制隔離，正式發送關閉；只有在 Replay／Receipt／Key Revocation／Session／Generation 不倒退能被核實，或所有受影響舊 Token 都已確定超出可接受窗口後，才可解除。換公鑰**不能自動代替撤銷舊 Token**。備份／還原必須驗證隔離開關不可因快照回退而消失；無權威證明時持續 NO-GO。
 
 ## 8. 版本相容、部署與回滾
 
 1. **Expand**：在隔離 DB 建立新受保護資料、角色、Receipt／Binding／Operation Receipt 與窄介面，原正式發送保持 OFF。`production trusted-send mode: DISABLED` 是**要求的安全政策**，在查明實際控制面／功能開關、可寫身分、還原後狀態與強制執行證據前，**不能宣稱它是已經存在、不可繞過的開關**。
 2. **Dual-read／Observe-only**：比對新舊策略，但不得因新策略失敗降級成信任 Runtime 宣告的放行路徑。
-3. **Preflight Gate**：部署前與 Runtime 啟動時檢查 Schema／Function Signature／Role ACL／Version／Credential 安置，任一不相容則不能進入正式發送模式；CI 與實例內真實非特權連線共同驗收。
+3. **Preflight Gate／Mixed Binary Fence**：舊／新 Runtime 必須有**不同 DB Role／Credential**；先撤銷舊 Role 的關鍵 DML／privileged EXECUTE、終止舊連線／清空 Pool，再允許新版 Writer。由部署控制器核對 Schema／Function／Role ACL／Credential 及恢復隔離，**Runtime 自填版本或 session variable 不算可信版本證明**；不相容／舊 Worker 重啟立即 Fail-Closed，Rollback 不得重開舊權限。
 4. **Cutover**：由 Mirage Owner、DBA、Security、Release Approver 明確簽核後才允許安排；若鎖鍵或不可兼容狀態機更動，不承諾零停機滾動，應停流排空再切換。
 5. **Rollback**：可回復程式的 Observe-only／正式發送 OFF；**不可**自動撤銷 Receipt/Replay 墓碑、放鬆 ACL、恢復已撤銷金鑰或讓舊 Epoch 復活。回滾程序需在隔離 PG 與還原演練中驗證。
 
@@ -166,7 +254,7 @@ DB 須在取得必要鎖後，以**實際檢查時間**評估（可用 `clock_ti
 | --- | --- | --- | --- |
 | BD-01 | Verifier 獨立部署、密鑰、DB／網路存取與最小可用授權通路 | Mirage Owner＋Security＋DBA | OPEN |
 | BD-02 | 各交易實際鎖順序／隔離級別，Session epoch & Revocation 勝負，受限函式介面 | Mirage Owner＋DBA | OPEN |
-| BD-03 | Token 過期後是否允許短 Transmission Window、grace／skew／時間語意 | Mirage Owner＋Security | OPEN |
+| BD-03 | 現行 Claim／Authorize／StartSend deadline **保持 Freeze v1**；Token grace／skew 參數、DB clock 最大偏差及外部 IO 限制仍須 Owner 批准，不得自行更改 Freeze | Mirage Owner＋Security | OPEN（不可在 StartSend 加第二授權） |
 | BD-04 | World Commit 成功但 Admission 失敗的 API 與 Recovery；外部副作用是否可查回 | Mirage Owner＋API Owner | OPEN |
 | BD-05 | JTI/Receipt/Binding 保留公式、Restore Quarantine 的外部安全錨點、實際恢復操作 | DBA＋Security＋Operations | OPEN |
 | BD-06 | R3/R4/R5 風險接受界線、Credential Rotation、實際發送不可變 snapshot | Security＋Mirage Owner | OPEN |
@@ -177,7 +265,7 @@ DB 須在取得必要鎖後，以**實際檢查時間**評估（可用 `clock_ti
 
 **關閉條件**：上述政策決策經審查、部署／密鑰邊界經驗證、負面與正向真實 PG 測試及恢復證據完整、Owner/Security/Release 核准；之後才能考慮將 `MIR-SEC-WORLD-001` 由 OPEN 轉為已修復。PR 合併、CI 綠燈或沒有外部攻擊回報**均不足以關閉**。
 
-**維持**：`Architecture: Proposed | MIR-SEC-WORLD-001: OPEN | MSDSS P2: NO-GO | production trusted-send mode: DISABLED (policy requirement; enforcement evidence pending)`。
+**維持**：`Architecture: Proposed | Protocol Freeze: v1 unchanged | MIR-SEC-WORLD-001: OPEN | World DB authority remediation: NOT_IMPLEMENTED | New acceptance tests: NOT_RUN | MSDSS P2: NO-GO | Production DECEIVE: OFF (policy requirement; enforcement evidence pending)`。
 
 ## 11. 文件及版本追溯
 
@@ -196,3 +284,4 @@ DB 須在取得必要鎖後，以**實際檢查時間**評估（可用 `clock_ti
 | v0.1 | 2026-11-21 | 首次將前幾輪審查整理成可審查 Architecture Draft；所有 proposed 控制、未決政策與未執行測試均明確標示 |
 | v0.2 | 2026-11-21 | 收斂 Trusted Request 語意 A、Verifier Context／單一連線協調、Candidate 驗證與 Promotion、Rollback／Unknown COMMIT、角色矩陣與正式發送停用控制；**仍為 Proposed** |
 | v0.2 審查增補 | 2026-11-21 | VerifiedContext 程序／DB 分界、Role SET membership、受限 Promotion 證據與政策撤銷、完整 Scope FK／原始 Payload 保留、全域鎖 DAG、Ingress rollback／已消費／未知 Commit 重試分類；無新實作或測試結果 |
+| **v0.2 Contract Freeze candidate** | 2026-11-21 | 與 MSDSS Freeze v1 對齊、Operation/Snapshot Write-Once、時間、兩種 Purge、完整鎖圖、外部效果、Mixed Runtime；**僅文件，全部新驗收 NOT_RUN** |

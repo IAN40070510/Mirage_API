@@ -20,7 +20,10 @@
 | Verifier 真正重新驗章與 scope／policy | Runtime 自填證據無效 | **必須有效** | 視被竊密鑰類型 | 完整控制 Verifier 可偽造 |
 | Replay＋Receipt 同交易與唯一 Binding | 必須有效 | 必須有效 | 視身分權限 | 不阻擋 Runtime 程序自行發送 |
 | Candidate 不可改與 Envelope Hash | 必須有效 | 不直接涉及 | 不直接涉及 | 只能保障授權快照；不能防已受控 HTTP 直接發惡意 bytes |
-| Session／Key／Profile／Generation 現時查核 | 必須有效 | 必須有效 | 視取得身分 | 無法回收已送出的 bytes |
+| Session／Key／Profile／Generation 現時查核（**最終 Authorize COMMIT 前**） | 必須有效 | 必須有效 | 視取得身分 | Freeze v1 保留已完成 SEND_AUTHORIZED，StartSend 不重新做政策授權 |
+| Snapshot Write-Once／GC Non-Retryable Fence | 必須由受保護 Role/DB Transition 強制 | 跨 scope 不能重用 | 外部 object 必須驗證固定 version/hash | R4 可自行用 ASGI 發未授權 bytes，R5 可繞過 DB／storage 保護 |
+| Mixed Runtime Credential／Role Fence | 舊 Role 不得繼續 protected DML／EXECUTE；不同 Credential | 間接 | 憑證竊取需另行輪替 | 舊 Runtime 自填 protocol_version 不是身份證明 |
+| 外部 Effect Key／Restore Quarantine | 新 Epoch 不重置原本外部 Key；不自動重做已提交效果 | 間接 | 需獨立外部系統對帳 | 對外 exactly-once 不在本 ADR 保證範圍 |
 | Restore Quarantine／外部安全錨點 | 降低 DB 還原後錯誤放行 | 不直接涉及 | 部分 | 主機或控制面被控制無完整保證 |
 | connection limit／timeout／reserved connections | 可降低阻斷面 | 不直接涉及 | 部分 | **可用性措施，不是單獨的安全隔離保證** |
 
@@ -53,3 +56,10 @@
 安全事故處理：無法透過 DB 自動強制的 Secret 外洩、主機控制、掛載錯誤，須由部署監控／人工判定觸發 production 發送 OFF、憑證撤銷或輪替、隔離、證據留存和重驗證。
 
 **合法呼叫不等於合理速率**：在 R3-A／語意 A 下，擁有合法 JWS 的惡意 Caller 可嘗試提前消耗 JTI。Verifier 入口須有 Caller 認證、Caller／Session／Scope 的總量防護、異常消費審計與受限重新簽發；單一 JTI 的限速無法阻止大量不同合法 JTI 的消耗。這些是可用性控制，不可宣稱已證明真實 HTTP 入口來源（R4）。
+
+## Freeze v1 和資料庫身份界線（v0.2 文件提案）
+
+- `mirage_http_runtime` 的 `SESSION_USER` 只證明 DB LOGIN，不證明 Tenant／Claim Owner／部署版本。特權函式須沿 Ingress Receipt → Operation Identity → Subject/Scope → Binding 驗證，拒絕跨 admission/owner/scope 的參數越權；`SET LOCAL app.tenant_id` 或版本字串非安全證據。
+- `SECURITY DEFINER` Owner 為獨立 NOLOGIN，可信 fixed search_path（pg_temp 最後），撤銷 PUBLIC EXECUTE、一般 Runtime 的直接 protected DML／membership／SET ROLE 能力。DB R1 防護不等於能阻止已被完全控制的 R4 HTTP Sender。
+- Policy／Emergency／Epoch／Key **只在 SEND_AUTHORIZED COMMIT 前**可否決新授權；StartSend 只檢查 Snapshot／deadline／owner／single-use／Purge Fence。原 Candidate 已 Purge 但 Snapshot 完整不構成新撤銷。
+- 真 PostgreSQL ACL／多 Backend／External Object／Restore／Mixed Binary 新測試一律 `NOT_RUN`；MSDSS P2 `NO-GO`，production DECEIVE `OFF`。

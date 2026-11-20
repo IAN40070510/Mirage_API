@@ -18,7 +18,7 @@
 | D-08 | 同一 PostgreSQL IngressTx 原子消費 JTI 並建立可信 Receipt | 不承諾跨 DB 原子性；已消費 JTI 不因後續 Grant 失敗而重新開放 |
 | D-09 | **IngressTx** 先建立 Replay Tombstone＋Receipt；**GrantTx** 僅鎖定並檢查既有 Receipt／Candidate／Generation／撤銷，原子建立唯一 Binding＋Admission，**不重新建立 Receipt** | 修正 v0.1 不精確措辭；兩階段在不同交易提交，不能假裝同一建立交易 |
 | D-10 | 授權使用 Envelope v1 的實際應用層 bytes，Candidate 受保護不可改 | Hash 不證明 ASGI／TLS 客戶端實際收到；任何後置內容變動使 Admission 失效 |
-| D-11 | AuthorizeTx／StartSendTx 用 Receipt/Binding 身分作當前 Epoch、Key、Profile、Generation 的動態查核 | Receipt 是歷史驗證事實，不是永久授權；同一 Receipt 已綁當前 Admission 並非重放 |
+| D-11 | **已由 D-32／Freeze v1 取代**：只在 AuthorizeTx 以受保護 Receipt／Binding 做最新 Epoch／Key／Policy 查核；StartSendTx 不二次授權 | 原敘述要求 StartSend 重查 Policy／Epoch，與 MSDSS Freeze v1 衝突，故明確廢止 |
 | D-12 | 不要求「整個 HTTP 請求單一交易」；僅要求「每個安全狀態轉移單一交易」 | World Commit／外部 side effect 與 Admission 分階段，有故障不一致，需對帳 |
 | D-13 | Operation ID＋Input Digest 供唯讀 reconciliation；COMMIT 未知不得盲目重試 | 查無 Receipt 無法排除仍在途或未知提交；不得用逾時推定失敗 |
 | D-14 | 不擴張 Admission State 表達稽核原因；失配前使用 `ABANDONED`＋原子 audit | SEND_STARTED 之後不能假設沒發送，不自動重送 |
@@ -35,10 +35,41 @@
 | D-25 | `VerifiedContext` 只作同一可信 Verifier 程序內部資料；Receipt DB 信任由實際驗章、專用 Role、ACL、受限 Writer 與受控交易建立 | 不以 Python 型別／序列化 claims JSON 作 PostgreSQL 安全證明；跨服務 Context 傳送需獨立認證與防重放協定 |
 | D-26 | `NOINHERIT` 不能取代 Role Membership／`SET ROLE` 驗收 | PG17 `pg_auth_members` 的 `set_option`／`inherit_option`／`admin_option`、間接角色鏈、`PUBLIC EXECUTE`、schema `USAGE` 都須從真實 Runtime 身分檢查 |
 | D-27 | 長耗時 Candidate Validation 可在交易外，但 Promotion 必須短交易、鎖版本並重核不可變 Evidence／目前政策 | 版本須由 DB 受保護生成，Evidence 綁 Scope／Envelope／Contract／Policy／Source／Validator；避免長交易持鎖阻礙 Emergency Revoke |
-| D-28 | Policy Revision 更新不等於撤銷；Grant／Authorize／StartSend 需依受保護 Policy Authority 的有效／禁止新授權／撤銷規則查核 | 新版本不自動使舊版本失效；Revocation 在 Start 前已生效則拒絕，Start 後不回溯竄改發送事實 |
-| D-29 | Candidate GC 首選完整 Scope FK／UNIQUE 加全域相容鎖，且區分短期 Payload 與必要的不可變稽核 Evidence | 既有 Candidate 使用 Scope＋candidate_ref；永遠 RESTRICT 有效 Binding 可能造成 Raw Payload 無限保留，需核准 Terminal／UNRESOLVED 保留窗口 |
-| D-30 | Ingress rollback、JTI 已提交消費、未知 COMMIT 分開決定可否重試與是否須新 JWS | 確定 rollback 時原 JTI 未消費，同 JWS 可能可安全受限重試；已消費不得復活；未知 Commit 不得用換新 JWS 跳過對帳 |
+| D-28 | **已由 D-32／D-34 取代**：升版不等於撤銷；Policy Revocation 只在最終 SEND_AUTHORIZED COMMIT 前限制新授權 | StartSend 在授權後只檢查執行條件，不再因 Policy 改變拒絕已授權快照 |
+| D-29 | Candidate Evidence／原始 Payload／Snapshot／Binding／Pin 分離；GC 按完整 Scope／Version 與不可重試 Fence 決策 | 原 Candidate Purge 不自動否定已授權 Snapshot；Snapshot Purge 永遠取消起送資格，GC 不可只信 protected_refs |
+| D-30 | Ingress 明確 rollback、JTI 已提交、未知 COMMIT／外部副作用／SEND_STARTED 分階段對帳 | 查到 SEND_STARTED 只代表 DB 提交，不授權新的 HTTP 傳輸；未知結果不能換新 JWS／Admission |
 | D-31 | Candidate→Binding／Admission 只是局部依存順序，不能在未盤點 Session Head／Generation／Admission／Key／FK 鎖前宣告全域安全 | 目前 Grant 先取 Generation，Session Resolve 先取 Head；要交付無循環 DAG 與對抗測試後才能訂總序 |
+
+## v0.2 Contract Freeze 決策補充（均為 Proposed，未經 Owner 批准）
+
+以下 D-32～D-47 是**取代前述矛盾條文**的文件提案，不是已執行的 DB 改造；保留 D-11、D-28 的歷史記錄但不可據此要求 StartSend 二次授權。
+
+| ID | 規範性選擇 | 拒絕的捷徑／驗收 |
+| --- | --- | --- |
+| D-32 | `SEND_AUTHORIZED` COMMIT 為唯一授權線性化；Policy、Emergency、Epoch、Key 只在 Commit 前否決，授權後 StartSend 不二次查 | 需要更晚撤銷須 Freeze v2；依 `WORLD-POLICY-01`、`WORLD-POLICY-02`（NOT_RUN） |
+| D-33 | 各交易鎖定後一次 DB-derived `decision_time`；Claim → authorization_deadline，Authorize/Start → transmission_deadline；decision_time 非 commit 時刻 | Runtime 自填 now、lock wait 跨期限／clock skew；`WORLD-TIME-01`（NOT_RUN） |
+| D-34 | Policy `ACTIVE／NO_NEW_GRANTS／REVOKED` 的不可逆 Revision；歷史 Grant 不等於可新授權 | Policy 後撤銷不回溯 SEND_AUTHORIZED；`WORLD-POLICY-01`、`WORLD-POLICY-02`（NOT_RUN） |
+| D-35 | Operation Identity `UNIQUE(authority_namespace,namespace_epoch,operation_id)`，單一不可變 Digest／External Effect Key | 禁 UPDATE／UPSERT 更改 Digest，衝突拒絕；`WORLD-OPERATION-01`、`WORLD-OPERATION-03`（NOT_RUN） |
+| D-36 | 首次**持久化 Snapshot Proposal**、Materialize／Hash 驗證、`OperationSnapshotBinding` Write-Once 且與 Admission／Scope／Generation 綁定 | 不同 Snapshot 衝突，相同只能讀回；Commit ACK 未知先對帳；`WORLD-OPERATION-02`（NOT_RUN） |
+| D-37 | `CandidateEvidence`、`CandidatePayload`、`AuthorizedSnapshot`、`GrantBinding`、`PurgeTombstone` 分離 | 不用 FK 代替狀態機／清理政策；`WORLD-LIFECYCLE-01`、`WORLD-LIFECYCLE-02`、`WORLD-LIFECYCLE-03`（NOT_RUN） |
+| D-38 | Candidate 原 Payload Purged 但 Snapshot 有效時可依已授權執行；Snapshot Purged／Corrupt 則永久不可起送 | 不回 Candidate 取內容；`WORLD-PAYLOAD-01`、`WORLD-PAYLOAD-02`、`WORLD-PAYLOAD-03`（NOT_RUN） |
+| D-39 | Snapshot 對應既有 Envelope v1（status/headers/body），不把 Hash 說成 TCP wire bytes | ASGI／HTTP framing 分層、測試非法重寫；`WORLD-SNAPSHOT-01`（NOT_RUN） |
+| D-40 | Snapshot 安全保留、Role ACL、加密／備份、Purge 前 non-retryable fence，活躍 Sender 不可被 GC 非預期移除 | 敏感 raw Payload 不進 Debug/Audit；`WORLD-SNAPSHOT-ACL-01`、`WORLD-PURGE-01`（NOT_RUN） |
+| D-41 | 完整 FK 隱含鎖／advisory／row lock 與 Isolation、deadlock/timeout/外部效果一起驗收 | 不能單靠 Candidate→Binding 宣告全域無死鎖；`WORLD-LOCK-01`（NOT_RUN） |
+| D-42 | `SECURITY DEFINER` 以受保護 Receipt→Operation→Subject/Scope 導出權限；DB LOGIN／SESSION_USER 不是業務主體 | Role、owner、scope、generation 輸入偽造負面測試；`WORLD-IDENTITY-01`（NOT_RUN） |
+| D-43 | Operation Epoch 不代表外部副作用已 Rollback；Restore Quarantine 與 External Effect Key 先對帳 | 不得用新 Epoch／JWS 偷偷重做；`WORLD-RESTORE-OP-01`（NOT_RUN） |
+| D-44 | `SEND_STARTED` COMMIT ACK 未知不自動 Retry／新 HTTP／新 Snapshot；查到 DB 狀態不等於 Client 收到 | 沒有經核准續傳協定時 at-most-once；`WORLD-RECOVERY-03`、`WORLD-RECOVERY-04`（NOT_RUN） |
+| D-45 | Mixed Runtime 需不同 Credential／DB Role，舊 Role ACL 撤銷、舊 Pool 回收、Schema/Function Preflight | Runtime 自報 protocol_version 非安全憑證；`WORLD-COMPAT-01`（NOT_RUN） |
+| D-46 | 一切新控制先 NOT_IMPLEMENTED／NOT_RUN，原 PG 13/13 有 3 個漏洞重現案例 | 不以歷史測試或文件審查替代原生修補 |
+| D-47 | `WORLD_COMMITTED_ADMISSION_UNAVAILABLE` 永遠僅為 reconciliation classification | 不新增 Admission enum，不將回復條件變成重試權限 |
+
+**版本與責任**：Mirage_API 原生分析 `main` `88dc2008fd35a2d3873949a769653dc9f18e8980`；MSDSS Protocol Freeze v1 整合基準 `main` `5a1ee26dcf79f04cf29345a0403e3f3f8082358b`；此組文件由 Mirage `docs/mir-sec-world-001-adr-v0.1` 的 v0.2 草稿 HEAD `003c918f142296588d2fe14b70fafe3cc5cf8458` 延續，**新變更分支／提交以 Draft PR 中實際 SHA 為準**。全部新增驗收 **NOT_RUN**。
+
+### v0.2 新增／修訂測試 ID 交接清單（22 項，全部 NOT_RUN）
+
+`WORLD-IDENTITY-01`、`WORLD-OPERATION-01`、`WORLD-OPERATION-02`、`WORLD-OPERATION-03`、`WORLD-POLICY-01`、`WORLD-POLICY-02`、`WORLD-PAYLOAD-01`、`WORLD-PAYLOAD-02`、`WORLD-PAYLOAD-03`、`WORLD-SNAPSHOT-01`、`WORLD-SNAPSHOT-ACL-01`、`WORLD-LIFECYCLE-01`、`WORLD-LIFECYCLE-02`、`WORLD-LIFECYCLE-03`、`WORLD-PURGE-01`、`WORLD-TIME-01`、`WORLD-LOCK-01`、`WORLD-COMPAT-01`、`WORLD-RECOVERY-03`、`WORLD-RECOVERY-04`、`WORLD-RESTORE-OP-01`、`WORLD-AUDIT-02`。
+
+完整預期與 Scenario 以 [Verification Plan](verification-plan.md) 各唯一 ID 為準；ADR／Decision Log／Plan 的 ID 與狀態必須同步，這裡沒有 PASS 證據。`WORLD_COMMITTED_ADMISSION_UNAVAILABLE` 仍是 reconciliation classification，非 State enum。
 
 ## 曾討論但明確拒絕的捷徑
 
