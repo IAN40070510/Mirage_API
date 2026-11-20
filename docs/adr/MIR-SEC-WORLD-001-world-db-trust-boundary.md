@@ -58,14 +58,16 @@ T1／T1.5／T2 舊稱僅保留於 [決策歷史](../security/world-db/decisions-
 受保護授權鏈是 `Admission → Grant Binding → Ingress Receipt → Replay Tombstone`。四者是**不同證據**，任一張表存在都不能單獨證明整條鏈有效。
 
 1. **Ingress Verifier 的驗證責任／來源語意 A**：只收原始 JWS 與必要、可重新計算的請求資料；不得接受 Runtime 提供的 `verified=true`、issuer 覆寫、驗證結果、簽發時間、政策版本或已核准標記。自行驗證簽章、Claims、issuer、audience、deployment/environment、request fingerprint、時間、Session epoch、金鑰信任與撤銷。**本輪只承諾「JWS 與所提交的 Canonical Request Snapshot 相符」**，不宣稱 Runtime 提交的快照必然等於實際入口 HTTP 請求。獨立入口來源證明（Gateway 簽章、受控 IPC 或可信入口）是未來語意 B／R4 設計；不因此放寬後續 Grant／StartSend 的同一 Request Fingerprint Binding。
-2. **Receipt 的信任根與 Verified Context**：可選獨立 Verifier 服務及受限 DB Role，或受保護 DB 驗證程序；必須證明 Runtime DB 角色無法建造／改寫 Receipt、登入 Verifier 身分、取得其 Secret，亦無法藉過度寬泛的 SECURITY DEFINER 函式偽造結果。Immutable Verified Context 只能在 Verifier 內部由實際驗證結果建立，**不是 PostgreSQL 能自行辨識的密碼學證明**；DB 信任仍由 Verifier 實際驗證、獨立 DB 身分、窄函式與存取隔離共同成立。
+2. **Receipt 的信任根與 Verified Context**：可選獨立 Verifier 服務及受限 DB Role，或受保護 DB 驗證程序；必須證明 Runtime DB 角色無法建造／改寫 Receipt、登入 Verifier 身分、取得其 Secret，亦無法藉過度寬泛的 SECURITY DEFINER 函式偽造結果。Immutable `VerifiedContext` **只約束同一可信 Verifier 程序內部的呼叫路徑**，不是 PostgreSQL 能自行辨識的密碼學證明；DB 的強制邊界是驗證工作負責的專用登入 Role、ACL、受限 Writer Function 與受控 Transaction Context。Receipt Writer **不能**因物件型別／JSON 欄位符合預期就信任來源，亦不得接受外部提供的 `verified=true`、完整「已驗證 claims」、政策版本或自訂時間。`VerifiedContext` 不可直接序列化穿過不可信程序／服務邊界，Runtime 也不得重建同名 Context。**若未來拆成跨服務寫入**，須另立經認證與防重放的協定（例如 mTLS、簽章、唯一 request ID、固定版本與接收端驗證）；本輪不假定該協定已存在。
 3. **同資料庫原子性與唯一交易協調器**：同一 PostgreSQL **database、physical connection、IngressTx** 內取得 Key Revocation Guard、依 DB 權威時間重新檢查期限／撤銷、原子插入 Replay Tombstone 與 Ingress Receipt；僅交易協調器可 commit/rollback。靜態 JWS 驗證的不可變結果不得由呼叫者任意注入 Claims／JSON／policy／時間；Replay Store、Key Revocation Store、Receipt Writer 的受保護交易介面不得自行開第二條連線或在中途 commit。例外須 rollback 並清理連線池 Session 狀態。**現行** `TrustedSessionVerifier.verify()`、`PostgresReplayStore.consume()` 與 `KeyRevocationRegistry.guard()` 分別管理連線／消費，尚未達成本合約。若未來拆分 DB，必須另立安全協定，不可沿用此原子性聲明。
 4. **Ingress 與 Candidate 的時間順序**：Ingress 發生時 Candidate 通常**尚未生成**；Receipt 先綁定已驗證 Claims、request fingerprint 與候選意圖／允許的 Scope，**不得偽稱此時已驗證未來的 Candidate hash**。GrantTx 再將不可變的實際 Candidate、Envelope v1 hash、Session、Generation、Projection 與 Receipt **原子綁定**到 Admission。
 5. **不可挪用／唯一性**：`(issuer,audience,jti)` 確保 Token 一次性消費；Receipt ID、Operation ID、Admission ID 與 Candidate ID 各有不同語意與完整 Scope。Receipt 最多有一筆有效 Grant Binding；同一 Receipt 不得換 Candidate／Generation；同一 Operation ID 配不同 `input_digest` 必須拒絕。使用 DB FK、UNIQUE、鎖與權限強制，而非只相信 Python。
 6. **「已使用」定義**：StartSend 時 Receipt **原本就已綁定目前 Admission**。不得因 `used=true` 一律拒絕；必須拒絕的是**其他 Admission 的重綁、已撤銷或不符合當前授權窗口**。
-7. **Candidate Submission／Validation／Promotion／Binding**：Runtime 可提出低信任 Candidate，但不能自行指定可信 owner、generation、validation、promotion、授權狀態；可採 staging、受限函式或**既有** `PostgresCandidateStore` 加權限隔離，**不預先指定新資料表**。Candidate Validator 對實際 bytes 及完整 Scope、request fingerprint、Projection／Contract、政策與來源版本獨立驗證；Promotion 以不可變 bytes／hash／policy revision 建立可供 Grant 使用的 Candidate，不得留下半可信狀態。若 Validation 與 Promotion 分交易，必須以受保護證據綁定完全相同的不可變內容版本，Promotion 重新核對且重查當前政策；Staging 不可直接供 Grant 使用。GC 必須與 Bound Candidate 的 FK／鎖保護相容。
+7. **Candidate Submission／Validation／Promotion／Binding**：Runtime 可提出低信任 Candidate，但不能自行指定可信 owner、generation、validation、promotion、授權狀態；可採 staging、受限函式或**既有** `PostgresCandidateStore` 加權限隔離，**不預先指定新資料表**。Candidate Validator 對實際 bytes 及完整 Scope、request fingerprint、Projection／Contract、政策與來源版本獨立驗證。**首選短交易 Promotion**：先鎖定受 DB 保護的 Candidate 版本並讀取確定 bytes，依可信政策完成必要驗證，原子固定 Promotion；若昂貴的 Projection／Contract 檢查必須在鎖外完成，須由可信 Validator 產生綁定 DB 產生且不可變的 Candidate Version、Envelope hash、Scope、`projection_contract_hash`、`policy_revision`、`source_spec_sha256`、validator identity／algorithm version／驗證時間的證據；如跨信任邊界還需可驗的來源認證。Promotion 的**短**交易重新鎖定並核對版本、bytes hash、Scope 與政策可用性，再建立可信 Candidate。Runtime 提供的版本整數或 `validated=true` 不算安全證據。Staging 不可直接供 Grant 使用，失敗不留下半可信物件。
 8. **完整性、授權、傳輸是三個不同證明**：`SHA256(bytes)==candidate_hash` 只證明資料完整性；符合核准 Projection／Scope／Contract／來源才是政策授權；送入 ASGI 的 status／headers／body 不變快照才是傳輸邊界。任何後置 Middleware 變更使原 Admission 失效，不能以原 hash 重新授權，不能宣稱 TLS／Client exactly-once delivery。
 9. `domain_validation='passed'`／`contract_validation='passed'` 僅可作為 Runtime 觀察與稽核；若 Authorizer 無法取得獨立可信的必要驗證結果，必須 Fail-Closed，**不得採取「限速臨時信任 Runtime」作為正式通路**。
+10. **政策狀態與時間語意**：版本升級／Key Rotation **不自動等於撤銷**。由受保護 Policy Authority 明定 Revision 的 ACTIVE／禁止新 Grant／REVOKED 狀態及過渡相容規則；Promotion／Grant 必須依當下核准政策，AuthorizeTx／StartSendTx **重新查核同一已綁 Revision 是否仍准許發送**。若 Grant 後、StartSend 前撤銷，禁止後續 SEND_STARTED；已 SEND_STARTED 的外部傳輸不能回溯改寫。不能僅因數字上有「最新版」便擅自否定或放行既有 Candidate。
+11. **Candidate GC、參照及資料保留**：優先以受保護 FK／UNIQUE 與相容 Row Lock 防 GC 刪除被有效 Binding 引用的 Candidate，但現行 `candidate_records` 使用完整 Scope＋`candidate_ref`，**不應憑空假設全域唯一 `candidate_id`**。FK 必須指向實際權威複合鍵；`ON DELETE RESTRICT`／等效約束不得被 Runtime 改寫。**FK 不等於完整 GC 策略**：若 Binding 永久保留，無限期保存原始 Payload 將造成資料保留／容量風險；可分離不可變審計 Metadata／Hash 與短期 Payload，或依經核准的終態與保留窗口安排受限清理，絕不清除仍可 StartSend／UNRESOLVED／對帳所需的 bytes 或證據。`protected_refs` 僅供效能優化，不能作唯一刪除依據。
 
 來源、Writer、Reader、信任等級與 Source of Truth 細項見 [Evidence Authority Matrix](../security/world-db/evidence-authority-matrix.md)。
 
@@ -73,7 +75,7 @@ T1／T1.5／T2 舊稱僅保留於 [決策歷史](../security/world-db/decisions-
 
 **擬議角色**（名稱與精確 GRANT 尚待 DBA 核准）：`mirage_http_runtime`、`mirage_ingress_verifier`、`mirage_authorizer`、`mirage_replay_gc`、`mirage_control_admin`、`mirage_schema_owner`（NOLOGIN）。
 
-- Runtime／Verifier／Authorizer 以**獨立憑證、獨立 DSN、獨立連線池／執行身分**登入。禁止在共享 Runtime 連線池以 `SET ROLE` 切換特權；Runtime 不得是特權 Role 成員、不可透過角色繼承或 Pool 重用取得權限。
+- Runtime／Verifier／Authorizer 以**獨立憑證、獨立 DSN、獨立連線池／執行身分**登入。禁止在共享 Runtime 連線池以 `SET ROLE` 切換特權；Runtime 不得是 Verifier／Authorizer Role 成員、不可透過角色繼承或 Pool 重用取得權限。**`NOINHERIT` 不代表不能 `SET ROLE`**：必須查核 `pg_auth_members` 的 `set_option`、`inherit_option`、`admin_option` 及**間接 membership 鏈**，並在真實 Runtime 登入連線實測 `SET ROLE`、`SET SESSION AUTHORIZATION`、`PUBLIC EXECUTE` 與 schema `USAGE`；不能只看 `rolinherit`。
 - 使用 Secret 掛載／OS 身分限制與 `pg_hba.conf`／網路 ACL 的組合；單機環境可採受限檔案與不同 Linux 帳號。這些能降低 R1／部分 R3，**不能聲稱抵抗 R5**。
 - 逐項撤銷 Runtime 對 `response_admissions`、`generation_controls`、`session_heads`、受保護 Receipt／Binding／Replay／GC 等關鍵欄位的直接越權 DML；保留合理 World 原生交易所需的最低操作。沒有明確審核前不要執行破壞性 REVOKE。
 - 角色權限必須以 [Role × Operation × Read／Write／Execute／SET ROLE 矩陣](../security/world-db/threat-capability-matrix.md) 作為可驗收合約；Verifier 不可建立 Binding，Authorizer 不可寫入 Receipt，Candidate Validator 不能取得 Key／Receipt Writer 身分。`SECURITY INVOKER` **不會憑空提升** Runtime 寫入受保護資料表的權限。
@@ -100,7 +102,7 @@ T1／T1.5／T2 舊稱僅保留於 [決策歷史](../security/world-db/decisions-
 
 目前程式 `postgres_admission._lock_admission` 有 **Admission → Generation → Profile** 鎖序，`session._resolve_in_transaction` 有 **Session Head →（舊）Generation** 鎖序。若在 StartSend 的 Generation lock **之後**追加 Session Head lock，可能產生 `Session Head ↔ Generation` 循環等待，**不能盲目加一條 SQL 當作修復**。
 
-新的鎖順序、Isolation、Revocation 與 StartSend 誰先成立、Snapshot 時機、超時及可重試錯誤，均依 [交易／鎖矩陣](../security/world-db/transaction-lock-matrix.md) 完成 Owner／DBA 審查及真實 PostgreSQL 並行測試後定稿。任何切換 `hashtextextended('mirage-profile:'...)`、Key namespace 或 Advisory Lock Key 的變更都要獨立審核，不能在新舊版本混用鍵值時滾動升級。
+新的鎖順序、Isolation、Revocation 與 StartSend 誰先成立、Snapshot 時機、超時及可重試錯誤，均依 [交易／鎖矩陣](../security/world-db/transaction-lock-matrix.md) 完成 Owner／DBA 審查及真實 PostgreSQL 並行測試後定稿。**`Candidate → Binding／Admission` 只能先視為 Grant／GC 的局部排序建議**；既有 Grant 先鎖 Generation、Session 切換先鎖 Session Head，若把 Candidate 鎖硬塞到它們前面，可能另造循環；須確認全路徑 DAG 與 FK 自動鎖後再訂全域順序。任何切換 `hashtextextended('mirage-profile:'...)`、Key namespace 或 Advisory Lock Key 的變更都要獨立審核，不能在新舊版本混用鍵值時滾動升級。
 
 **建議政策**：較新 Session epoch 已提交後，舊 epoch 尚未 `SEND_STARTED` 的 Admission 不得開始發送；已 `SEND_STARTED` 的外部傳輸不可事後回收。撤銷與 StartSend 競爭時依正式鎖／提交順序定義勝負；無法確認目前安全狀態時禁止新的 `SEND_AUTHORIZED`、`SEND_STARTED`。
 
@@ -133,6 +135,7 @@ DB 須在取得必要鎖後，以**實際檢查時間**評估（可用 `clock_ti
 ## 7. Replay、未知 COMMIT、GC 與 Restore
 
 - **Replay**：`replay_entries` 僅保存**已消費** JTI；未消費 JTI 無需建立 GC 條目。有效 Receipt 必須對應同交易提交的墓碑，只有墓碑／只有 Receipt 都必須拒絕並告警，不能自行補寫授權證據。
+- **可用性與重試界線**：語意 A 下 Runtime 可提前提交一份與合法 JWS 相符的資料並消費 JTI；Verifier Caller 必須經服務認證，對 Caller／Session／Scope 設流量與消費異常監控並留存稽核，不能以單獨「每 JTI 限速」取代總量防護。**已提交消費**後的 Grant 失敗，不得復活同 JTI；若政策允許重新發起新業務意圖，須由合法簽發者產生新 JWS／JTI，並確保不重複執行既有副作用。**已確認 IngressTx rollback** 時原 JTI 未消費，同一仍有效 JWS 能否重新嘗試須依原 Operation ID／digest 與簽發政策決定，**不強制無條件換 JWS**。**未知 COMMIT** 則舊／新 JWS 都不能作為繞過對帳的自動重試理由。
 - **保留**：JTI、Receipt、Binding、Operation Receipt 應保留到 Token 最長可能可接受時間、skew、安全延遲、重試／對帳及備份還原安全界限全部結束；使用經核准公式與政策參數，例如驗證過的 `exp + skew + restore_margin` 與 `consume_time + max_lifetime + 2×skew + 2×uncertainty` 取保守上限。`UNRESOLVED` 不得僅以逾時自動視為 `ABORTED`。
 - **未知 COMMIT**：Operation ID 必須在副作用前可重建或由受保護來源發給呼叫者；它是**相關鍵，不是授權憑證**。Receipt/Operation Result 在相同交易內持久化、唯一 `operation_id`＋輸入摘要綁定。查到同 ID 同 digest 的已提交結果可唯讀恢復；查無**不能證明交易未提交**，應保持 `UNVERIFIABLE`，不得盲目重授權／重消費 JTI／重發送。
 - **外部副作用**：World Mutation、Medusa／Cart API 執行與 Admission 不保證跨交易 exactly-once；由 Owner 核准「業務提交、回應沒開始」語意。必要時以可查回 Result／Outbox／冪等業務操作；不可查回者必須記錄 at-most-once、人工對帳或補償限制。
@@ -152,6 +155,7 @@ DB 須在取得必要鎖後，以**實際檢查時間**評估（可用 `clock_ti
 
 - 以**真正 `SESSION_USER=mirage_http_runtime` 的獨立 SCRAM 連線**重跑原三項越權，全部須遭拒，並檢查 effective privileges／Role inheritance／`SET ROLE`／`BYPASSRLS`；單純使用 superuser fixture 的綠燈無效。
 - Runtime 無法偽造 Receipt 或直接把 Admission 改 `SEND_AUTHORIZED`；Verifier 不能為無效 JWS、錯請求、舊 epoch、已撤銷 Token 發有效 Receipt。
+- 驗收 Python Context 與資料庫授權**分層**：Context 不穿越低信任邊界；Runtime 不能以 SQL／特權函式參數偽造來源。測試 `pg_auth_members` `SET/INHERIT/ADMIN` 路徑、`SET SESSION AUTHORIZATION` 與 schema／function 有效權限，不只查 `NOINHERIT`。
 - Replay+Receipt 必須同一 PostgreSQL database、同一 physical connection、同一 IngressTx；Grant 的 Binding+Admission 同交易；已綁 Receipt 不可重用於其他 Candidate。鎖循環檢查、Epoch/Key rotation/revocation 的並行勝負、期限跨鎖等待及 Envelope mismatch 實測。
 - 未知 COMMIT、World 成功但 Admission 失敗、SEND_STARTED 之後失聯、GC／Restore Quarantine、Schema／ACL 不相容與故障恢復實測。
 - 失效**可由系統偵測**者立即 Fail-Closed；Secret 外洩、容器掛載錯誤、主機權限遭侵害等**需監控／人工判定**者應停止正式發送、撤銷／輪替憑證、隔離、保留證據，不可謊稱應用能自動證明未外洩。
@@ -166,9 +170,9 @@ DB 須在取得必要鎖後，以**實際檢查時間**評估（可用 `clock_ti
 | BD-04 | World Commit 成功但 Admission 失敗的 API 與 Recovery；外部副作用是否可查回 | Mirage Owner＋API Owner | OPEN |
 | BD-05 | JTI/Receipt/Binding 保留公式、Restore Quarantine 的外部安全錨點、實際恢復操作 | DBA＋Security＋Operations | OPEN |
 | BD-06 | R3/R4/R5 風險接受界線、Credential Rotation、實際發送不可變 snapshot | Security＋Mirage Owner | OPEN |
-| BD-07 | Candidate GC 與 Grant 的 FK／Row Lock／Advisory 具體方案、完整 Schema 相容 | DBA＋Mirage Owner | OPEN |
+| BD-07 | Candidate GC 與 Grant 的完整 Scope FK／Row Lock／全域 DAG、原始 Payload 與稽核證據分級保留／清理方案 | DBA＋Mirage Owner＋Security | OPEN |
 | BD-08 | 正式接受 Request Provenance 語意 A 的範圍與殘餘風險；語意 B 另案 | Security＋Mirage Owner | OPEN |
-| BD-09 | Candidate Validator 的可信身分／政策來源及 Validation→Promotion 空窗處理 | Mirage Owner＋Security＋DBA | OPEN |
+| BD-09 | Candidate Validator 的可信身分／政策來源、長耗時驗證的交易外證據、短 PromotionTx 與 Revision 撤銷／升級規則 | Mirage Owner＋Security＋DBA | OPEN |
 | BD-10 | 正式發送 DISABLED 的實際控制面、Runtime 權限、Restore 後不可倒退的隔離機制 | Release Approver＋Security＋Operations | OPEN |
 
 **關閉條件**：上述政策決策經審查、部署／密鑰邊界經驗證、負面與正向真實 PG 測試及恢復證據完整、Owner/Security/Release 核准；之後才能考慮將 `MIR-SEC-WORLD-001` 由 OPEN 轉為已修復。PR 合併、CI 綠燈或沒有外部攻擊回報**均不足以關閉**。
@@ -191,3 +195,4 @@ DB 須在取得必要鎖後，以**實際檢查時間**評估（可用 `clock_ti
 | --- | --- | --- |
 | v0.1 | 2026-11-21 | 首次將前幾輪審查整理成可審查 Architecture Draft；所有 proposed 控制、未決政策與未執行測試均明確標示 |
 | v0.2 | 2026-11-21 | 收斂 Trusted Request 語意 A、Verifier Context／單一連線協調、Candidate 驗證與 Promotion、Rollback／Unknown COMMIT、角色矩陣與正式發送停用控制；**仍為 Proposed** |
+| v0.2 審查增補 | 2026-11-21 | VerifiedContext 程序／DB 分界、Role SET membership、受限 Promotion 證據與政策撤銷、完整 Scope FK／原始 Payload 保留、全域鎖 DAG、Ingress rollback／已消費／未知 Commit 重試分類；無新實作或測試結果 |
