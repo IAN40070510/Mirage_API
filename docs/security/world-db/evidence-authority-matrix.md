@@ -11,15 +11,17 @@
 | **Ingress Receipt（擬議）** | 獨立可信 Verifier 驗證成功後在 IngressTx 建立 | Verifier 受限 DB Role | 歷史 verified claims、Canonically Submitted Request Fingerprint、驗證政策版本、金鑰身分；與 Replay **同 Database／Connection／Transaction**。語意 A 不等於真實 HTTP 入口來源已驗證 |
 | Request Observation／Domain & Contract Validation | `trusted_http.py`／`request_audit.py` | Runtime；原本的觀察與結果 | **低信任 Audit**，不可因存於 DB 就成為獨立授權根 |
 | **Candidate Submission（低信任）** | Runtime 提交 bytes／Scope／意圖 | Runtime 只能提交未授權輸入 | 不能自己提供權威 validation、trusted owner、promotion、authorization、Policy Revision；不論存在於 staging table 或既有 Store 都不得直接供 Grant 使用 |
-| **Validated Candidate（擬議證據）** | Candidate Validator 檢查 Envelope v1 與核准 Policy／Projection／Source | 可信 Validator 受限 Role | 綁定不可變 bytes hash、完整 Scope、Candidate Version、Policy Revision、Validation Identity；**內容完整性不等於安全政策核准** |
-| **Promoted Candidate（擬議）** | 受保護 Promotion 操作 | 可信 Validator／受限 Promotion Role | 在同交易固定已驗證 bytes／Scope／版本；若驗證與 Promotion 分交易，須鎖定／重核原版本與政策，失敗不得留下半可信資料 |
-| **Bound Candidate（擬議）** | GrantTx 使用 Promoted Candidate 與可信 Receipt | Authorizer 受限 Role | Binding＋Admission 同交易；Receipt 不可被第二個不相容 Candidate／Admission 重用，GC 不得刪除有效 Binding 引用的資料 |
+| **Validated Candidate（擬議證據）** | Candidate Validator 檢查 Envelope v1 與核准 Policy／Projection／Source | 可信 Validator 受限 Role | 以 DB 生成的不可變 Candidate Version 綁定 bytes／Envelope hash、完整 Scope、Contract hash、Policy Revision、Source Spec SHA-256、Validator Identity／Algorithm／Timestamp；若跨程序信任邊界還要認證證據來源。**內容完整性不等於安全政策核准** |
+| **Promoted Candidate（擬議）** | 受保護 Promotion 操作 | 可信 Validator／受限 Promotion Role | 在**短交易**固定已驗證 bytes／Scope／版本；若昂貴驗證在鎖外完成，Promotion 必須先鎖同版記錄、重核 Evidence／目前 Policy Authority 狀態，失敗不留下半可信資料 |
+| **Bound Candidate（擬議）** | GrantTx 使用 Promoted Candidate 與可信 Receipt | Authorizer 受限 Role | Binding＋Admission 同交易；Receipt 不可被第二個不相容 Candidate／Admission 重用，GC 不得刪除有效 Binding 引用的資料。**Candidate FK 指向完整 Scope 複合唯一鍵**，目前 Store 不保證單一 candidate_id 全球唯一 |
 | **Grant Binding（擬議）** | GrantTx 讀可信 Receipt 與實際 Candidate | Authorizer 受限 Role | 同一 Receipt 最多對應一筆有效 Admission；Grant Binding＋Admission 必須同交易；Binding 生成後不可換 Candidate／Generation |
 | ResponseAdmission | `models.py`、`postgres_admission.py` | Authorizer／StartSend 受限操作 | 僅受保護狀態機能進入 SEND_AUTHORIZED／SEND_STARTED；Runtime 不能直接 DML |
 | Generation Control／Profile Revocation | `generation_controls`、`projection_registry.py` | 獨立特權角色 | Authorize 與 StartSend 都要重新讀取最新控制狀態；不只信任 Grant 歷史快照 |
 | World Snapshot expiry | `WorldSnapshot.expires_at`／`world_snapshots` | World 受保護交易 | 現有此欄；**只有匹配同一 Admission 所綁完整 Session／Generation／Scope，且由受保護交易查得**，才可作 Transmission Deadline 上限；不是假定的 Generation-expiry |
 | Operation Receipt／World Commit Result | `commit-results.md` 既有結果與擬議特權操作 Receipt | 對應交易負責角色 | 回答「該操作是否已提交／業務是否已執行」，**不**代替 JWS 驗證或 Admission 成功 |
 | Response／Security Audit | `response_audit` 與擬議 pre-send 安全事件 | 特權轉移函式／稽核 writer | 發送前 Content Mismatch 應原子與 ABANDONED 保存；不得寫假的 send_started |
+| Policy Authority／Revision（擬議受保護狀態） | 受保護 Control/Policy 管理 | Owner／Policy Control；Runtime 無權修改 | 升級 ≠ 撤銷；Promotion／Grant／Authorize／StartSend 檢查當前允許的 Revision、禁止新 Grant 或立即撤銷之正式語意 |
+| Candidate Payload Retention（擬議 GC 合約） | 受保護 Candidate／Binding／Audit 資料 | 受限 GC／受保護保留政策 | FK 保留完整 Scope 參照與必要 Metadata；Raw Payload 依終態、安全期限／Unknown Send／對帳需求分層保留，不可因永久 Binding 產生無界留存，也不可刪除活躍所需 bytes |
 
 ## ID 及約束合約
 
@@ -29,25 +31,27 @@
 | `receipt_id` | 一次可信 ingress 驗證 | 全球唯一或 Scope＋ID 唯一；唯一有效 Grant Binding |
 | `operation_id` | 一次**特定** DB 操作與結果對帳 | 必須在副作用前有可重建關聯；重複 ID 與不同 digest 直接拒絕；ID 不是權限 |
 | `admission_id` | 一個授權／傳輸生命週期 | 不可重新綁其他 Receipt 或 Candidate；所有查詢要納入完整權威 Scope |
-| `candidate_id` | 一份固定候選封套 | 可用現有 scoped ID；不可因相同 body 就視為同一授權，受保護 hash／Scope／版本不可變 |
+| `candidate_id`／`candidate_ref` | 一份固定候選封套 | **既有** `candidate_records` 使用完整 Scope＋`candidate_ref`；提案若使用 `candidate_id` 須另經 migration 明確定義唯一性。FK／GC／Grant 都不可省略 Scope。受保護 hash／版本不變 |
 
 ## Ingress → Grant 的時間順序
 
 1. Verifier 驗原始 JWS 與**提交**的 Canonical Request Snapshot；先在內部固定不可變的 Verified Context，不能讓 Runtime 提供 verified flag、claims JSON 或比對 digest。**語意 A 只證明提交資料相符；不證明獨立的實際 HTTP 入口來源**。後續全程仍綁定同一 Request Fingerprint。
 2. 同一 PostgreSQL Database／Physical Connection／IngressTx 中鎖 Key Revocation、以 DB 時間重查期限／撤銷、插入 Replay 墓碑與 Receipt；Store 不得自開連線或自行 commit，僅 Coordinator 控制 commit/rollback。
-3. Candidate 在後續流程生成並提交低信任內容；Validator 檢查完整 Envelope bytes、Scope、Projection、Contract／Source／Policy Revision；Promotion 原子固定**同一已驗證內容版本**。**不能在 Ingress 階段聲稱已有尚不存在的 Candidate Hash。**
+3. Candidate 在後續流程生成並提交低信任內容；Validator 檢查完整 Envelope bytes、Scope、Projection、Contract／Source／Policy Revision；昂貴驗證可在鎖外進行，但憑據須綁 DB 版本和不可變資料。短 PromotionTx 原子固定**同一已驗證內容版本**並重查 Revision 狀態。**不能在 Ingress 階段聲稱已有尚不存在的 Candidate Hash。**
 4. GrantTx 在**另一個** PostgreSQL Transaction 中鎖定**既有** Receipt 與 Promoted Candidate，讀取當前 Session／Revocation／Generation，僅建立一次性 Binding 與 Admission；**不得重新建立 Receipt**。任一步失敗整筆 Grant rollback，不回復已提交的 Ingress JTI。
 5. AuthorizeTx／StartSendTx 後續只沿同一 Binding 與 Receipt 重新查核**當前**權威狀態；不得接受 Runtime 提供替代 issuer/kid/session/epoch。
 
-**關鍵語意**：Receipt 已綁定**目前** Admission 是正常後續使用；只有綁定另一個 Admission 或不符合目前安全條件才是拒絕原因。Grant 失敗不恢復已消費的 JTI；合法重試需要新的、完整合法的請求與 JTI。
+**關鍵語意**：Receipt 已綁定**目前** Admission 是正常後續使用；只有綁定另一個 Admission 或不符合目前安全條件才是拒絕原因。**已提交 JTI 消費**之後 Grant 失敗不恢復 JTI；另起合法業務意圖才需要新 JWS／JTI，且不可重做已提交外部副作用。**已確認 IngressTx rollback** 時 JTI 未消費，是否可沿同 ID/digest 與未過期的原 JWS 受限重試由政策決定；**未知 Commit** 時不得用任何新舊 Token 盲目重試。
 
 ## 一致性、時間與來源認證分層
 
 - **密碼學／來源證明**：Verifier 自己核驗 JWS 與提交的請求資料；語意 A 下不得宣稱已獨立證明真實入口來源，只有欄位完整不代表簽發者可信。
-- **內部 Verified Context**：Python immutable class／JSON 不是 PostgreSQL 的來源認證；Receipt Writer 信任的是經驗證流程建立內容並具受限 DB 身分的可信 Verifier，不是物件形狀。
+- **內部 Verified Context**：Python immutable class／JSON 不是 PostgreSQL 的來源認證；只在同一可信 Verifier 程序內使用，**不得把完整 Claims JSON／verified=true 當作 Writer 可直接接受的安全憑據或穿越不可信序列化邊界**。DB Writer 的強制來源由專用 Role／受限 Function／Transaction Context 決定；跨服務另需認證、防重放協定。
 - **DB 寫入主體證明**：只有 Verifier Role 能建立 Receipt＋Replay；Schema/Role/ACL/SECURITY DEFINER 不能把 Runtime 自填 claim 提升為可信來源。
 - **狀態轉移證明**：Grant Binding、Admission、一致性鎖、Revocation、deadline 經受保護 DB 交易強制。
 - **Candidate 三種證明**：Hash Integrity（同 bytes）／Policy Authorization（同 Scope／Contract／Source／Revision）／Transport Snapshot（同 ASGI 應用層內容）必須獨立核對。
+- **Policy Revision 撤銷**：Version Upgrade 不等於 REVOKED；受保護 Policy Authority 定義 ACTIVE／禁止新 Grant／立即撤銷語意。Grant 前及 StartSend 前分別核准，發送開始後不回溯變更真實輸送事件。
+- **GC 不是保留策略**：`ON DELETE RESTRICT`／等價 FK 可阻止破壞活躍參照，但無法單獨界定 Raw Payload 的資料最小保留期限；若 Binding 長期保留，需先核准 Audit Metadata 與原始內容分層設計，保留未決操作的可對帳證據。
 - **發送快照證明**：Envelope v1 與送入 ASGI 的應用層快照一致，不延伸宣稱 TLS 或 Client exactly-once delivery。
 
 ## 來源證據
