@@ -1,6 +1,6 @@
 # MIR-SEC-WORLD-001 — 威脅能力與控制覆蓋
 
-**v0.1 — Proposed**。舊 T1／T1.5／T2 只是對話簡稱，正式 ADR 使用可直接測試的能力 R1–R5。
+**v0.2 — Proposed**。舊 T1／T1.5／T2 只是對話簡稱，正式 ADR 使用可直接測試的能力 R1–R5。
 
 | 能力 | 最強假設 | 本輪安全主張 |
 | --- | --- | --- |
@@ -23,6 +23,24 @@
 | Session／Key／Profile／Generation 現時查核 | 必須有效 | 必須有效 | 視取得身分 | 無法回收已送出的 bytes |
 | Restore Quarantine／外部安全錨點 | 降低 DB 還原後錯誤放行 | 不直接涉及 | 部分 | 主機或控制面被控制無完整保證 |
 | connection limit／timeout／reserved connections | 可降低阻斷面 | 不直接涉及 | 部分 | **可用性措施，不是單獨的安全隔離保證** |
+
+## 目標有效權限：Role × Read／Write／Execute／SET ROLE
+
+以下是**須以真實 PostgreSQL 驗收的 Proposed Matrix**，不是目前已存在的 GRANT。表內「受限」代表只可經過審核、按完整 Scope、驗證資訊與狀態機的窄介面；不得用一般表級 UPDATE 取代。
+
+| DB 身分 | Receipt 讀取 | Receipt INSERT | Receipt UPDATE／DELETE | Replay／Key Guard | Binding／Admission 轉移 | Candidate Submission／Promotion | SET ROLE／其他角色繼承 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `mirage_http_runtime` | 不可讀原始 Claims；僅必要去識別狀態 | **拒絕** | **拒絕** | 不得自行消費／GC／改寫 | **拒絕直接 DML**；僅准受限申請／結果查回 API | 只准提交**低信任** Candidate；不能 Promotion | **拒絕** |
+| `mirage_ingress_verifier` | 自己的驗證結果／必要查回 | **限同一 IngressTx Writer** | **拒絕** | 同一交易 Key Guard／Replay Consume；不得任意 GC | **拒絕** | **拒絕** | **拒絕** |
+| `mirage_authorizer` | 受限讀已提交 Receipt 與 Binding | **拒絕** | **拒絕** | 受限唯讀最新撤銷／Replay 關聯；無一般 DELETE | **受限 Grant／Authorize／StartSend 函式** | 讀可信 Promoted Candidate；無任意 Promotion | **拒絕** |
+| Candidate Validator／Promotion Role（名稱待決） | 無需原始 JWS／Receipt Writer 權限 | **拒絕** | **拒絕** | **拒絕** | **拒絕** | **限可信驗證與 Promotion**；不可改既有 Promoted bytes | **拒絕** |
+| `mirage_replay_gc` | 僅必要保留資訊 | **拒絕** | Receipt GC 僅經正式安全保留程序 | 僅可對逾期且不受保護的墓碑 GC | **拒絕** | 僅可依正式條件 GC | **拒絕** |
+| `mirage_control_admin` | 必要稽核／狀態讀 | **拒絕** | **拒絕** | 受限 Key／Profile／Emergency Revocation | 只能走管理撤銷介面 | **拒絕 Promotion** | 不繼承 Runtime／Verifier／Authorizer |
+| `mirage_schema_owner`（NOLOGIN） | Migration 所需 | Migration 所需 | Migration 所需 | Migration 所需 | 管理 Schema／函式；**不可常駐登入** | Migration 所需 | 不可供 Runtime 取得、登入或 SET ROLE |
+
+**函式／Schema Owner 仍需 DBA 逐項裁決**：使用 `SECURITY DEFINER` 時，Definer Owner 應採 NOLOGIN 與足以完成該狹窄操作的最小權限；不得因單一 Owner 擁有整庫 DML 就讓所有特權函式變成通用寫入入口。必須撤銷不必要的 `PUBLIC EXECUTE`、Runtime CREATE、Role Membership，對所有 Function Signature／Overload 做有效權限測試。
+
+**時間／Scope／政策欄位**：所有角色都不得藉由直接提交任意 `now`、`issuer`、`kid`、`generation`、`trusted_hash`、`validation_result` 或 `policy_version` 取得不屬其身分的安全決策。Runtime 參數只能作核對輸入；真正權威資料應從保護表、可信 Context 或 DB 時間取得。
 
 ## 部署驗收不能以單一 Role 名稱代替
 
