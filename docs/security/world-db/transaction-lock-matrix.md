@@ -1,6 +1,6 @@
 # MIR-SEC-WORLD-001 — 交易、鎖與錯誤契約
 
-**v0.1／Proposed／OPEN**。目的：避免把「單一安全狀態轉移交易」誤寫成「整個請求單一交易」，以及防止為了新增 Epoch／Key Freshness 而引入死鎖。本矩陣的**現有路徑**來自 Mirage `main` `88dc2008fd35a2d3873949a769653dc9f18e8980`；**目標交易**仍待實作及測試。
+**v0.2／Proposed／OPEN**。目的：避免把「單一安全狀態轉移交易」誤寫成「整個請求單一交易」，以及防止為了新增 Epoch／Key Freshness 而引入死鎖。本矩陣的**現有路徑**來自 Mirage `main` `88dc2008fd35a2d3873949a769653dc9f18e8980`；**目標交易**仍待實作及測試。
 
 ## 1. 現有鎖證據與循環風險
 
@@ -12,6 +12,8 @@
 | `claim`／`authorize_send`／`start_send` | `response_admissions FOR UPDATE` → `generation_controls FOR UPDATE` → Profile 受保護檢查／advisory guard | StartSend 有 owner／deadline／emergency；**沒有完整 Head／Key Receipt 鏈** |
 | `KeyRevocationRegistry.guard/revoke` | 相同 `(environment,deployment,issuer,kid)` 的 transaction advisory lock → Tombstone read/write | 需與 StartSend 的 Key Lock 共同定義順序與 `READ COMMITTED` 查核 |
 | Profile Revocation | Profile namespace 的 transaction advisory lock、受保護狀態讀寫 | 需與 Admission／Generation／Session 交互動態查核，沿用現有鍵演算法 |
+| `TrustedSessionVerifier.verify`／`PostgresReplayStore.consume`／`KeyRevocationRegistry.guard` | Verifier 呼叫 Replay consume；Replay 與 Key Guard **各自開 DB connection** | **現有程式不滿足**「Key Guard＋Replay＋Receipt 同一 physical connection／transaction」；外層單加 BEGIN 無效 |
+| `PostgresCandidateStore.put/gc` | `put` 由 body 算 SHA-256 保存完整 Scope；`gc` 依呼叫者傳入 `protected_refs` 刪除已過期紀錄 | 單靠呼叫者清單不是 Grant／GC 的 DB-level 原子性保證；需 FK／鎖／受限 GC |
 
 **潛在循環示例（不是已重現的死鎖）**：
 
@@ -31,8 +33,9 @@ Tx B (Session epoch rollover)：
 
 | 目標操作 | 單一交易必須原子完成 | 鎖／時間義務 | 失敗結果 |
 | --- | --- | --- | --- |
-| **IngressTx** | Trusted Verifier 驗證後，JTI 唯一 INSERT＋Ingress Receipt INSERT | Key Revocation guard 與 JWS 核對必須有一致的線性化規則；同一 DB、同一 physical connection | 明確 rollback：兩者都不可見；未知 commit：保留 UNVERIFIABLE，不重新消費同 JTI |
-| **GrantTx** | 鎖 Receipt、Candidate；核對 scope／完整 Envelope hash／Projection／session／generation／deadline；Binding UNIQUE＋Admission INSERT 同交易 | 必須定義 Receipt→Candidate→Head→Generation 等實際總鎖序，不可與舊交易相反 | 任一檢查失敗整筆 rollback；JTI 已消費事實不回復 |
+| **IngressTx** | Trusted Verifier 靜態驗簽後，單一 Coordinator 以**同 DB／同 Physical Connection／同 Transaction**取得 Key Guard、以 DB 時間重查權限、JTI 唯一 INSERT＋Ingress Receipt INSERT | 固定不可變內部驗證 Context；Store 不自行 connect/commit；例外 rollback／Pool reset；Key 與 Replay 線性化規則 | 明確 rollback：兩者都不可見；Commit ACK 未知：Client 初始 UNKNOWN，唯讀對帳，不重新消費同 JTI |
+| **CandidatePromotionTx** | 同一受保護交易固定經可信 Validator 驗證的 bytes／完整 Scope／Policy Revision，Promoted Candidate 對 Grant 可見 | 若 Validation 與 Promotion 分階段，重新核對不可變內容版本、政策當前有效性、與 GC/Grant 的鎖協定 | Promotion 失敗不允許半可信 Candidate；Staging 留存僅供審計／受限 GC |
+| **GrantTx** | 鎖**已提交的** Receipt、**已提升的** Candidate；核對 scope／完整 Envelope hash／Projection／session／generation／deadline；**只建立** Binding UNIQUE＋Admission INSERT 同交易 | 必須定義 Receipt→Candidate→Head→Generation 等實際總鎖序，不可與舊交易相反 | 任一檢查失敗整筆 rollback；已提交的 Ingress JTI 消費不回復 |
 | **AuthorizeTx** | 將同一 Admission 由 CLAIMED 升 SEND_AUTHORIZED；核對同一 Receipt／Binding、目前 Key／Profile／Epoch／Generation／期限 | 所有動態檢查與改寫在相容鎖及當前 DB Snapshot 內；使用 DB 實際檢查時間 | 業務拒絕不可用同 Operation 盲目重授權 |
 | **StartSendTx** | owner、原 hash、Receipt／Key／Head／Profile／Generation、deadline 重查；唯一進入 SEND_STARTED 並記錄送出起點 | 與 Revocation／Epoch cutover 對同一 Scope 有可證明勝負順序 | 已撤銷／失配／逾時：拒絕；不能假設已開始的 bytes 可撤回 |
 | **PreSendAbandonTx** | 尚未 Start 的 Admission 狀態從 SEND_AUTHORIZED → ABANDONED；不可改 hash；安全 Audit `CONTENT_MISMATCH` 同交易 | 受限函式核 owner／state；不得將假 send_started 記入普通 Response Audit | 已 SEND_STARTED 必須拒絕此「未開始」語意 |
@@ -44,6 +47,8 @@ Tx B (Session epoch rollover)：
 **建議起點**：評估 `READ COMMITTED` 搭配固定的 Row／Transaction Advisory Lock，並在取得全部必要鎖後才讀目前 Revocation／Epoch 與實際 DB 時間；不能單憑 Isolation 名稱宣稱可序列化。若採 `SERIALIZABLE`，要明確處理 SQLSTATE `40001` 與 read/write 故障重試；不得隱藏 `40P01` deadlock。
 
 - `pg_advisory_xact_lock`／`pg_advisory_xact_lock_shared` 是 **transaction-level**，transaction rollback／commit 即釋放；連線池污染與 lock wait、long transaction 仍需測試。
+- **Verifier Context 不等於 DB 權限證明**：Verifier 內部固定 JWS 靜態驗證結果；Receipt Writer 必須由實際受限 DB 連線身分執行。所有 Key／Replay／Receipt API 使用受控 Transaction Context，且不得再開另一條 Connection 或中途 commit；連線池歸還前 rollback／session reset。
+- **Candidate Validator／Promotion 交界**：若 Validation 後 staging bytes 或 Policy Revision 可以改變，Promotion 必須以相同不可變 digest＋scope/版本驗證並拒絕不符；必要時在 Promotion transaction 內重新執行受保護檢查。不能以普通 `validated=true` 作授權證據。
 - 每次 acquiring lock 前／後時間政策：`now()` 為 transaction start；等待鎖可能跨 deadline，因此安全判定在鎖後用 DB `clock_timestamp()` 或明確等價的實際時間來源，`current >= deadline` 拒絕。不得相信 Runtime 參數 `now` 作最終權威。
 - 選擇相容 `SELECT FOR UPDATE`／`FOR SHARE` 模式，避免 share→upgrade 的雙向等待；對 Emergency Revoke、Key Revoke、Epoch Switch 與 StartSend 施加並行故障注入。
 - `lock_timeout`、`statement_timeout`、`idle_in_transaction_session_timeout` 與角色 CONN LIMIT 是**可用性限制**，數值須由容量與延遲測試訂定；不是替代狀態機正確性的證據。
@@ -54,7 +59,7 @@ Tx B (Session epoch rollover)：
 | --- | --- | --- |
 | 已明確 rollback，確認無外部副作用且 ID＋Digest 相同 | **可受限重試** | 同 ID、同 Input Digest、有限次數＋退避；不能擅自換新身分 |
 | `40P01` Deadlock／`40001` Serialization Failure **且已確認 rollback** | **可受限重試** | 上限／退避／監控；若懷疑副作用先做對帳 |
-| COMMIT ack 遺失或 Commit 中斷 | **不可直接重試** | Operation ID 唯讀查回、等待已知在途結束／人工對帳，不等同事務 rollback |
+| COMMIT ack 遺失或 Commit 中斷 | **不可直接重試** | Client 先標 `UNKNOWN`；依 Operation ID／digest 唯讀查回。可信同 ID 成功結果可改為 `CONFIRMED_COMMITTED`；仍不可驗證則保持 `UNVERIFIABLE`，不等同 rollback |
 | DB 斷線／故障／結果查無 | **不可據此推定安全重試** | Fail-Closed、UNVERIFIABLE；缺 Receipt 不證明未提交 |
 | 授權業務拒絕或 JTI 已消費 | **不得重用同一 JTI 授權** | 保留拒絕／消費原因；新嘗試需新的合法簽發者及 JTI |
 | SEND_STARTED 後程序失聯 | **不得自動 HTTP 重送** | 保留 SEND_STARTED＋結果未知的 reconciliation record |
@@ -66,7 +71,7 @@ Operation ID 要在副作用前確定且能可靠關聯；**ID 是相關鍵而�
 | 狀態 | 可允許的後續行為 |
 | --- | --- |
 | World Commit 未確認 | 唯讀 reconciliation；不盲目重做 Mutation |
-| `WORLD_COMMITTED_ADMISSION_UNAVAILABLE`（**擬議 API 語意**） | 可查回 World Operation Result；不得因 HTTP 重試再做業務交易／重新消費原 JTI |
+| `WORLD_COMMITTED_ADMISSION_UNAVAILABLE`（**擬議 Reconciliation Classification；不是正式 World／Admission State**） | 可查回 World Operation Result；不得因 HTTP 重試再做業務交易／重新消費原 JTI |
 | GRANTED／CLAIMED | 只可沿同一可信 Binding 進行下一步；期限／撤銷失效不可強制放行 |
 | SEND_AUTHORIZED | 最後一刻重查最新安全狀態與 Envelope，才可 StartSend |
 | ABANDONED＋CONTENT_MISMATCH | 永久不得重新開始；需新的合法 Candidate 與授權流程 |
@@ -76,7 +81,7 @@ Operation ID 要在副作用前確定且能可靠關聯；**ID 是相關鍵而�
 ## 6. 開放的實作證明
 
 - 每個交易必須提交**實際**鎖相依矩陣及可由腳本讀取的 `lock_dependency.json`（可於實作 PR 新增），證明**所有**取得 Session Head／Generation／Admission／Profile／Key 的路徑沒有環。本文只是起始盤點，**不是現成 DAG 證明**。
-- 要交付 schema：Binding FK/UNIQUE、Candidate Immutable／GC 協定、Operation Receipt UNIQUE＋Input Digest、Receipt 與 Replay 同交易約束；定義 migrations 與 rollback。
+- 要交付 schema：Binding FK/UNIQUE、Candidate Submission／Validation／Promotion 與 GC 協定、Operation Receipt UNIQUE＋Input Digest、Receipt 與 Replay 同 DB／Connection／IngressTx 約束；定義 migrations 與 rollback。Validator／Promotion 須防止內容或 Contract／Policy Revision TOCTOU。
 - 要用真實 PostgreSQL、**不同 DB Role**、多連線故障注入、clock crossing、未知 COMMIT、快照還原與安全禁用模式，才可宣稱保護成立。
 
 參考 PostgreSQL 官方文件：[Explicit Locking](https://www.postgresql.org/docs/17/explicit-locking.html)、[Data Consistency Checks](https://www.postgresql.org/docs/17/applevel-consistency.html)、[Date/Time Functions](https://www.postgresql.org/docs/17/functions-datetime.html)。
