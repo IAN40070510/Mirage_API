@@ -20,7 +20,7 @@ ProjectionRegistry 與 PostgresProjectionRegistry 的 revoke_profile 停用精�
 
 一般撤銷只阻止新 Grant、契約登錄及啟動登錄。撤銷前已取得的 Admission 保留原證據，可在原有期限內完成 Claim、Send Authorization 與發送，遵守 README 的 admission-scoped 政策。
 
-emergency=True 另外阻止尚未 Claim、尚未取得發送授權或尚未起送的回應；在下次控制邊界轉成 ABANDONED。Send Authorization 與緊急撤銷以同一 Profile 控制鎖排序：授權先提交時保留 SEND_AUTHORIZED 事實；撤銷先提交時授權拒絕。已授權但尚未起送者仍在 start_send 再查墓碑，以最佳努力停止。
+emergency=True 阻止尚未 Claim 或尚未取得發送授權的回應，在下一控制邊界轉成 ABANDONED。Send Authorization 與緊急撤銷以同一 Profile 控制鎖排序：授權先提交時保留 SEND_AUTHORIZED 且撤銷不能追溯取消；撤銷先提交時授權拒絕。已授權的 start_send 不二次查墓碑，只核對 Claim owner、已提交狀態與 transmission_deadline。
 
 SEND_STARTED 之後不假稱可以追回 bytes。發送者仍保存真實完成／失敗終態，不把已起送改寫成從未發送，也不宣稱客戶端已收到。一般模式不自動升級，管理呼叫端須明確指定緊急模式。
 

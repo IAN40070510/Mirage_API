@@ -8,7 +8,7 @@
 
 只有可信部署者提供私有 `lookup(assessment_id) -> AttackAssessment | None` 並明確設定 `require_original_assessment=True`，才會在 JWS 驗證後查回原始判定，核對 assessment ID、request ID、fingerprint、環境／部署／來源／服務／站點、malicious verdict、時效，以及 `sha256(original.model_dump_json().encode("utf-8"))` 與簽章 `assessment_digest` 是否一致（固定時間摘要比較）。不得從訪客 URL、header 或未驗證 HTTP 回應提供 lookup。缺資料、錯誤型別、scope／摘要不符或私有儲存失效一律拒絕，不降級回 claims 重建；嚴格模式缺 lookup 或 lookup／模式搭配錯誤會在建構時拋出 `ValueError`。
 
-此介面**只支援接收端核對**；不包含 Gateway 發送前可靠落盤、跨 Instance 原判定持久化、資料不可變保證、原子查回／消耗，亦不代表 production DECEIVE 已核准。私有儲存的交易、權限、版本與生命週期仍需獨立設計。測試：`python -m pytest -q tests/test_original_assessment_binding.py tests/test_trusted_ingress.py tests/test_trusted_error_vectors.py tests/test_trusted_session.py`；跨語言案例需 Node.js 22，skip 不應算通過。沿用現有 Python hashlib／hmac、cryptography、pytest，不新增外部執行服務；套件授權沿用[授權表](licensing.md)。
+此基礎 OriginalAssessmentLookup 介面只支援接收端核對；新增的獨立 PostgreSQL ledger 實作可在部署者明確啟用 strict、提供 Consumer DSN 並先由 DBA 套用專用 migration 後，執行跨 Instance 一次性領取。Gateway persist-before-sign 仍是 MSDSS 所有的整合流程；正式資料庫、CA/TLS、failover、entitlements 和 production DECEIVE 均未核准。私有儲存的交易、權限、版本與生命週期仍需獨立設計。測試：`python -m pytest -q tests/test_original_assessment_binding.py tests/test_trusted_ingress.py tests/test_trusted_error_vectors.py tests/test_trusted_session.py`；跨語言案例需 Node.js 22，skip 不應算通過。沿用現有 Python hashlib／hmac、cryptography、pytest，不新增外部執行服務；套件授權沿用[授權表](licensing.md)。
 
 
 ### 獨立客戶端的請求摘要

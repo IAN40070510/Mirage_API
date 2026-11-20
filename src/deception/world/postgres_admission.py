@@ -17,11 +17,14 @@ from .request_audit import PostgresRequestAudit, RequestAuditLink
 class PostgresAdmissionControl:
     """以 Generation row lock 實作跨 Instance 的准入狀態機。"""
 
-    def __init__(self, dsn: str) -> None:
-        """建立共享准入控制器；連線在每次交易開始時建立。"""
-        if not dsn.strip():
+    def __init__(self, dsn: str, *, require_session_binding: bool = False) -> None:
+        """啟用嚴格模式時，每次發送授權必須有仍有效的 Session epoch 綁定。"""
+        if not isinstance(dsn, str) or not dsn.strip():
             raise ValueError("dsn must not be empty")
+        if type(require_session_binding) is not bool:
+            raise ValueError("require_session_binding must be bool")
         self._dsn = dsn
+        self._require_session_binding = require_session_binding
 
     def grant(
         self,
@@ -199,9 +202,15 @@ class PostgresAdmissionControl:
         now: int,
         revoked: bool = False,
     ) -> AdmissionOperationResult:
-        """在共享 Send Authorization 邊界檢查期限與撤銷。"""
+        """在 Session Head → Admission → Generation → Profile 同一交易鎖序內授權。
+
+        Epoch advance 先鎖 Session Head 再切換 Generation。此處也先鎖 Head，
+        讓兩個 COMMIT 有確定順序；已提交 SEND_AUTHORIZED 後不追溯取消。
+        """
         with self._connection() as connection:
             with connection.cursor() as cursor:
+                if not self._lock_current_session_epoch(cursor, admission_id):
+                    return AdmissionOperationResult.REJECTED
                 row = self._lock_admission(cursor, admission_id, for_send=True)
                 if row is None or row[1] != AdmissionState.CLAIMED.value:
                     return AdmissionOperationResult.REJECTED
@@ -229,19 +238,24 @@ class PostgresAdmissionControl:
         return None if row is None else ResponseAdmission.model_validate(row[0])
 
     def start_send(self, admission_id: str, *, owner: str, now: int) -> AdmissionOperationResult:
-        """在共享鎖內確認唯一 owner、發送期限與緊急撤銷，持久化傳輸起點。"""
+        """以持久化 Authorization 作最終邊界，確認 owner／deadline／單次起送。
+
+        Emergency/Profile 控制只在 authorize_send 的共用鎖內線性化；
+        此處不重新取 Generation/Profile 撤銷鎖，以免追溯取消已授權的回應。
+        """
         with self._connection() as connection:
             with connection.cursor() as cursor:
-                row = self._lock_admission(cursor, admission_id, for_send=True)
-                if row is None or row[1] != AdmissionState.SEND_AUTHORIZED.value:
+                cursor.execute(
+                    "SELECT state,claim_owner,transmission_deadline FROM response_admissions "
+                    "WHERE admission_id=%s FOR UPDATE",
+                    (admission_id,),
+                )
+                row = cursor.fetchone()
+                if row is None or row[0] != AdmissionState.SEND_AUTHORIZED.value or row[1] != owner:
                     return AdmissionOperationResult.REJECTED
-                cursor.execute("SELECT claim_owner FROM response_admissions WHERE admission_id=%s", (admission_id,))
-                if cursor.fetchone()[0] != owner:
-                    return AdmissionOperationResult.REJECTED
-                if row[3] or now >= row[2]:
-                    state = AdmissionState.ABANDONED if row[3] else AdmissionState.EXPIRED
-                    self._set_state(cursor, admission_id, state.value)
-                    return AdmissionOperationResult.REJECTED
+                if now >= row[2]:
+                    self._set_state(cursor, admission_id, AdmissionState.EXPIRED.value)
+                    return AdmissionOperationResult.EXPIRED
                 self._set_state(cursor, admission_id, AdmissionState.SEND_STARTED.value)
                 cursor.execute(
                     "INSERT INTO response_audit(admission_id,sequence,event_name,final_response_hash) "
@@ -364,6 +378,47 @@ class PostgresAdmissionControl:
             """,
             (generation_id,),
         )
+
+    def _lock_current_session_epoch(self, cursor: Any, admission_id: str) -> bool:
+        """只以 DB 綁定反查 Session，不信任 request/JWS 自填的 epoch。
+
+        唯讀查 admission/generation 後先鎖 Session Head FOR SHARE，再鎖對應
+        session_world_bindings FOR SHARE。防止與 resolve(epoch+1) 的 Head
+        FOR UPDATE 交錯；最後才由 caller 取得 Admission/Generation/Profile 鎖。
+        找不到 mapping 的原型只在明確非嚴格模式允許；找到但失效一律拒絕。
+        """
+        cursor.execute(
+            "SELECT world_generation_id FROM response_admissions WHERE admission_id=%s",
+            (admission_id,),
+        )
+        record = cursor.fetchone()
+        if record is None:
+            return False
+        generation = record[0]
+        cursor.execute(
+            "SELECT environment_id,deployment_id,session_id,session_epoch "
+            "FROM session_world_bindings WHERE world_generation_id=%s",
+            (generation,),
+        )
+        binding = cursor.fetchone()
+        if binding is None:
+            return not self._require_session_binding
+
+        cursor.execute(
+            "SELECT session_epoch FROM session_heads WHERE environment_id=%s "
+            "AND deployment_id=%s AND session_id=%s FOR SHARE",
+            binding[:3],
+        )
+        head = cursor.fetchone()
+        if head is None or head[0] != binding[3]:
+            return False
+        # Verify the lookup did not change between the initial read and the lock.
+        cursor.execute(
+            "SELECT environment_id,deployment_id,session_id,session_epoch "
+            "FROM session_world_bindings WHERE world_generation_id=%s FOR SHARE",
+            (generation,),
+        )
+        return cursor.fetchone() == binding
 
     @staticmethod
     def _lock_admission(cursor: Any, admission_id: str, *, for_send: bool = False) -> tuple[str, str, int, bool] | None:
