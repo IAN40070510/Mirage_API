@@ -6,11 +6,11 @@
 
 - 基準原始碼：Mirage `main` `88dc2008fd35a2d3873949a769653dc9f18e8980`；針對修復 PR 再記錄 branch SHA、Migration Hash、PostgreSQL 版本、Role ACL 與 feature flags。
 - 使用**真實 PostgreSQL 17 系列隔離實例**與 SCRAM 身分。建立真正 `mirage_http_runtime`、`mirage_ingress_verifier`、`mirage_authorizer`、`mirage_replay_gc`、`mirage_control_admin`；Schema Owner NOLOGIN。不可用 postgres／owner 登入執行 Runtime 權限負面測試。
-- 每個 fixture 建立**物理上的獨立連線與 DSN**，先查 `SELECT session_user, current_user;`；同時查 effective grants、Role inheritance、`rolbypassrls`／`rolsuper`／`rolcreaterole`、`has_table_privilege`、`has_function_privilege`、`pg_has_role`、`pg_hba.conf` 實際登入來源與 Pool role reuse。
+- 每個 fixture 建立**物理上的獨立連線與 DSN**，先查 `SELECT session_user, current_user;`；同時查 effective grants、Role inheritance、`rolbypassrls`／`rolsuper`／`rolcreaterole`、`pg_auth_members`（`set_option`／`inherit_option`／`admin_option`，包含間接成員鏈）、`has_table_privilege`／`has_schema_privilege`／`has_function_privilege`／`pg_has_role`、`pg_hba.conf` 實際登入來源與 Pool role reuse。**NOINHERIT 不能代替 SET ROLE 的拒絕實測**。
 - DML／函式越權應明確斷言 PostgreSQL `SQLSTATE 42501`（或在受限函式中的固定**業務拒絕**碼）；**兩者不可混用**。若操作本應因狀態機拒絕，不可要求必然是 42501。
 - 驗證 `SECURITY DEFINER` 的 owner、`search_path`、PUBLIC EXECUTE、Schema CREATE、pg_temp shadowing、函式多載、Extension、Large Object、`SET ROLE`／Role membership、`COPY FROM PROGRAM` **實際權限**；不可僅查 role 名稱。
 - Fault injection 要能控制 PostgreSQL Transaction 的「before commit」「after commit but before ACK」「read-only lookup fail」、Executor restart、Network timeout、clock skew、restore 及 concurrency/barrier。測試 Harness 知道的真實 COMMIT 結果不得被假設為 Verifier Client 當時也能知道。測試日誌必須脫敏，不外洩 DB Secret／JWS 私鑰。
-- Verifier／Key Guard／Replay／Receipt 在**同一 DB、同一 Physical Connection、同一受控 IngressTx** 驗收。Runtime 不得傳入可偽造的 Verified Context／Claims／Signature Validation Result；`SECURITY DEFINER`／函式 Writer 必須按 Role 與 Scope 做負面測試。Candidate Submission／Validation／Promotion／Binding 的 hash、Policy Revision、Scope、GC 不變量需分開驗證。
+- Verifier／Key Guard／Replay／Receipt 在**同一 DB、同一 Physical Connection、同一受控 IngressTx** 驗收。Runtime 不得傳入可偽造的 Verified Context／Claims／Signature Validation Result，內部 Context 不得直接序列化交給不可信服務；`SECURITY DEFINER`／函式 Writer 必須按 Role 與 Scope 做負面測試。Candidate Submission／Validation／Promotion／Binding 的 hash、**DB 生成版本**、Policy Revision、Source/Validator Evidence、Scope、GC 不變量需分開驗證。
 - 每項結果保留 JUnit／命令／SQLSTATE／出錯注入點／原始碼 commit／DB migration／角色有效權限／實際輸出；未執行以 `NOT_RUN`，錯誤拒絕也不算正常 PASS。
 
 ## 2. ACL、Verifier 與 Evidence Binding
@@ -21,7 +21,7 @@
 | `WORLD-ACL-02` | Runtime 將 Session Head epoch 倒退或任意跳躍 | DML denied；受限切換只接受合法狀態 | NOT_RUN |
 | `WORLD-ACL-03` | Runtime 提早 DELETE 未過期 Replay Tombstone | DML denied；受限 GC 不清理 | NOT_RUN |
 | `WORLD-ACL-04` | Runtime 直接修改 Generation／Key Revocation／已核准 Candidate | DML denied；重要內容無變化 | NOT_RUN |
-| `WORLD-ACL-05` | Runtime 經 Role 繼承、SET ROLE、Pool 重用、SECURITY DEFINER 假輸入取權 | 全部 denied；最小必要 EXECUTE 無任意提升 | NOT_RUN |
+| `WORLD-ACL-05` | Runtime 經 Role 繼承、間接 membership `SET`、`SET ROLE`、`SET SESSION AUTHORIZATION`、Pool 重用、SECURITY DEFINER 假輸入取權 | 全部 denied；`pg_auth_members` grant option／函式 `PUBLIC EXECUTE`／schema `USAGE` 不可使其任意提升 | NOT_RUN |
 | `WORLD-ACL-06` | Runtime 真實 SCRAM 連線並掃 effective permissions | 符合審核角色矩陣，非 superuser／BYPASSRLS | NOT_RUN |
 | `WORLD-VERIFIER-01` | Runtime 提交無效 JWS、錯 signature、錯 audience／scope | Verifier 不寫 Receipt／有效 Replay Binding | NOT_RUN |
 | `WORLD-VERIFIER-02` | Runtime 覆寫 verified、issuer、kid、policy version、issued/expires | Verifier 不採信自填值；無有效 Receipt | NOT_RUN |
@@ -30,7 +30,7 @@
 | `WORLD-FP-01A` | JWS fingerprint=F1，提交原始 Request R2 算得 F2 | 驗證器自行 Canonicalize 後拒絕；不得直接採信 Runtime 傳來的 F1 | NOT_RUN |
 | `WORLD-FP-01B` | 提交請求可由 Runtime 製造，但**與有效 JWS 所簽 fingerprint 一致** | 語意 A 只可證明提交資料一致；不宣稱真實 HTTP 來源已證明，也不能對不同 Request 的 Admission 放行 | NOT_RUN |
 | `WORLD-FP-01C` | 已有 Receipt，後續 Grant／StartSend 替換 Request Fingerprint | Binding／授權拒絕，不能挪用至其他請求 | NOT_RUN |
-| `WORLD-CONTEXT-01` | Runtime 自造 Verified Context／Claims JSON 或直接呼叫 Receipt Writer | DB Role／窄函式拒絕，沒有有效 Receipt | NOT_RUN |
+| `WORLD-CONTEXT-01` | Runtime 自造 Python Verified Context、跨序列化「驗證 JSON」、直接呼叫 Receipt Writer、向窄 `SECURITY DEFINER` 注入 claims、繞過 ACL INSERT／UPDATE／DELETE 或 `SET ROLE` | 不信任形狀／欄位；按真實 Runtime DB Role／函式 ACL 拒絕，沒有有效 Receipt；`SESSION_USER`／`CURRENT_USER` 差異可證明 | NOT_RUN |
 | `WORLD-ROLE-01` | Verifier 嘗試建立 Binding；Authorizer 嘗試建立 Receipt；Runtime 嘗試 SET ROLE | 依角色矩陣拒絕，不得繼承其他特權 | NOT_RUN |
 | `WORLD-RECEIPT-01` | Replay Tombstone 存在但 Receipt 缺失 | Grant denied 並告警，不能補寫授權 | NOT_RUN |
 | `WORLD-RECEIPT-02` | Receipt 存在但 Replay 墓碑不存在 | Grant denied 並告警；不接受孤兒 Receipt | NOT_RUN |
@@ -44,8 +44,8 @@
 | `WORLD-CAND-03` | Runtime INSERT Candidate 時自填 trusted hash／owner／generation／authorization 欄 | 不接受為可信結果，僅允許低信任 submission 或由受保護程序核算 | NOT_RUN |
 | `WORLD-CAND-04` | Candidate bytes/hash 一致，但違反核准 Projection／Source／Scope／Policy | 拒絕 Validation／Promotion 或 Grant；Hash 不能替代政策授權 | NOT_RUN |
 | `WORLD-CAND-05` | Submission 成功，Validation 失敗或 Promotion 中斷 | 不存在可供 Grant 使用的半可信 Candidate；Staging 只供隔離／稽核／GC | NOT_RUN |
-| `WORLD-CAND-06` | Validator 通過後，Staging bytes／Candidate Version 被替換才 Promotion | Promotion 重新核對不可變 digest/版本，拒絕挪用舊驗證證據 | NOT_RUN |
-| `WORLD-POLICY-01` | Candidate 在 Policy v1 驗證後，v1 於 Promotion／Grant 前被撤銷 | 受保護流程重新查核版本／撤銷，不能沿用舊核准 | NOT_RUN |
+| `WORLD-CAND-06` | Validator 通過後分別替換 bytes、DB Candidate Version、完整 Scope、Validator Evidence、Policy Revision；包含**同 hash、不同 Revision** | 短 PromotionTx 逐項重新核對可信證據與現行政策；拒絕變更，不能使用 Runtime 自填 version/validated | NOT_RUN |
+| `WORLD-POLICY-01` | (A) Validation 後 v1 被撤銷；(B) v1 → v2 升版但 v1 未撤銷；(C) Grant 後、Start 前撤銷；(D) SEND_STARTED 後撤銷 | A 拒絕不相容 Promotion/Grant；B 依核准相容政策決定，不把升版自動當撤銷；C 不能新 Start；D 不回溯竄改傳輸結果，保存稽核 | NOT_RUN |
 | `WORLD-SCOPE-01` | 使用其他 Session／Generation 的 Candidate 或 World Snapshot expiry | Grant／StartSend 拒絕；只有同 Admission 完整受保護 Scope 的 Snapshot expiry 可用 | NOT_RUN |
 | `WORLD-PAYLOAD-01` | 受保護 Candidate Hash 通過後 Runtime 換 bytes／Middleware 修改 | 前送拒絕、原 hash 不修改、保護 audit | NOT_RUN |
 | `WORLD-PAYLOAD-02` | Runtime 提交相同 body 不同 Scope/header/status/encoding | 不可跨 Candidate／Admission 挪用 | NOT_RUN |
@@ -76,14 +76,17 @@
 | `WORLD-FAIL-04` | SEND_STARTED 之後 Runtime Crash／TCP 失聯 | 結果 UNKNOWN／UNRESOLVED；無自動重送 | NOT_RUN |
 | `WORLD-RECOVERY-01` | 未知 COMMIT（before／after ACK loss） | 有相同 ID／digest 可信結果才唯讀查回；不能盲目重試 | NOT_RUN |
 | `WORLD-RECOVERY-02` | Operation ID 相同但 input digest 改變／ID 碰撞 | 明確拒絕而不轉移別的 Operation 結果 | NOT_RUN |
+| `WORLD-RECOVERY-03` | (A) Ingress 已證明 rollback、JTI 未消費且原 JWS 有效；(B) JTI 已提交消費而 Grant 被拒；(C) Commit 未知卻換新 JWS 重試 | A 只在同 ID/digest／政策可重試時受限重試；B 不復活 JTI，新意圖才可受控重新簽發；C 不可換 Token 規避唯讀對帳 | NOT_RUN |
 | `WORLD-GC-01` | GC 對未過期 JTI／在途 Binding／UNRESOLVED 操作嘗試清理 | 全部保留；超過所有保留窗口才有權 GC | NOT_RUN |
-| `WORLD-GC-02` | Candidate GC 與 GrantTx 同時進行，protected_refs 可能過時 | 成功建立 Binding 後 Candidate 不能被刪除；依資料庫 FK／Row Lock／等效協定證明 | NOT_RUN |
+| `WORLD-GC-02` | GC 先鎖 Candidate／Grant 先鎖 Candidate／同時執行／已綁 Admission 後嘗試刪除／Rollback 後 GC；`protected_refs` 過時，注入 deadlock／lock timeout | 完整 Scope FK `ON DELETE RESTRICT` 或等價 DB 約束阻止活躍刪除或 GC 安全跳過；無孤兒 Binding、無半提交、lock timeout Fail-Closed，無反向鎖循環 | NOT_RUN |
+| `WORLD-GC-03` | 永久 Audit Binding 仍存在，但舊 Candidate Raw Payload 已超過核准保留期；對照 Active／UNRESOLVED／等待 StartSend 的記錄 | 活躍／未知者必須保留實際發送／對帳所需 bytes；已安全終態可依核准政策移除 Payload、保留必要不可變證據；不得永久無界保存或誤刪完整 Scope 關聯 | NOT_RUN |
 | `WORLD-RESTORE-01` | World DB 還原到舊 Replay／Revocation／Epoch 快照 | 發送 Quarantine；舊 Receipt／Token 不重新有效 | NOT_RUN |
 | `WORLD-RESTORE-02` | 還原後清理計算、Clock Skew、Key Rotation 不確定 | 不自動提前解除隔離；有可驗證的完整恢復證據 | NOT_RUN |
 | `WORLD-MIGRATION-01` | Schema／ACL／函式版本不匹配 | Startup/Release Preflight Fail-Closed；正式發送不能開始 | NOT_RUN |
 | `WORLD-MIGRATION-02` | 新舊版本混用不同 lock key 或 Rollback 權限較寬 | 阻止不安全混用；不能回復過寬 Runtime DML | NOT_RUN |
 | `WORLD-DISABLE-01` | 實際 Trusted-send 控制面無法確認、Runtime 可自行啟用、或 Restore 使禁用狀態倒退 | Release Preflight 失敗、正式發送停止；不得以未經證實的 `DECEIVE OFF` 字樣代替控制證據 | NOT_RUN |
 | `WORLD-AVAIL-01` | Runtime 佔滿自身連線、持鎖／慢交易 | Control／Revoke 仍可連線或明確停用服務；記錄延遲與不符項 | NOT_RUN |
+| `WORLD-AVAIL-02` | R3-A Caller 搶先提交合法且與 JWS 一致的資料、批量消耗不同 JTI；Verifier Caller 身分／Session／Scope 限流 | 不得宣稱已驗證真實入口；依受保護 Caller 認證及總量防護拒絕／告警；已消費 JTI 不復活，未知 Commit 不重試 | NOT_RUN |
 
 ## 5. 已有回歸與本輪證據不可混淆
 
