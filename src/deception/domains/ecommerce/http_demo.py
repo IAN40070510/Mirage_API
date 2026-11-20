@@ -106,7 +106,9 @@ def _recovery_policy(config, scenarios, generator) -> RecoveryPolicy:
     """只為本次合成契約建立同結果固定值，綁定情境與生成政策的完整摘要。"""
     rules = []
     for rule in generator.policy.rules:
-        selector = rule.model_dump(mode="json", exclude={"rule_id", "fields", "protected_pointers",
+        if rule.response_mode == "authoritative_404":
+            continue
+        selector = rule.model_dump(mode="json", exclude={"rule_id", "fields", "protected_pointers", "response_mode",
                                                          "generation_mode", "planning_mode", "fact_keys"})
         field = rule.fields[0].field_id
         if rule.outcome_id == "found":

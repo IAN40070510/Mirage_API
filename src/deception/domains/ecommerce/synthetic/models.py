@@ -1,5 +1,6 @@
 """電商商品、變體、價格與可重建資料集模型。"""
 
+from datetime import datetime, timezone
 from typing import Literal
 
 from pydantic import Field, field_validator, model_validator
@@ -22,6 +23,23 @@ class SyntheticConfig(SyntheticModel):
     price_max_minor: int = Field(default=100000, ge=0, le=10**12)
     inventory_min: int = Field(default=0, ge=0, le=10**9)
     inventory_max: int = Field(default=100, ge=0, le=10**9)
+    # Explicit logical creation event for synthetic Medusa records; absent
+    # outside a reviewed synthetic simulation. Never invent a deletion date.
+    synthetic_created_at: str | None = None
+
+    @field_validator("synthetic_created_at")
+    @classmethod
+    def valid_synthetic_created_at(cls, value):
+        """Require a canonical aware RFC3339 logical event, not an invented deletion."""
+        if value is None:
+            return None
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            raise ValueError("Invalid synthetic lifecycle timestamp") from None
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise ValueError("Synthetic lifecycle time must include a timezone")
+        return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
     @model_validator(mode="after")
     def check_limits(self):

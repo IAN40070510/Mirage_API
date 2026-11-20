@@ -22,7 +22,7 @@ def encoded(value) -> bytes:
 
 def namespace_for(config: SyntheticConfig) -> str:
     """把完整設定及生成器／provider 版本納入身份，避免規則改變卻共用資料。"""
-    return hashlib.sha256(encoded({"config": config.model_dump(mode="json"),
+    return hashlib.sha256(encoded({"config": config.model_dump(mode="json", exclude_none=True),
                                   "generator_version": GENERATOR_VERSION,
                                   "provider_version": PROVIDER_VERSION})).hexdigest()
 
