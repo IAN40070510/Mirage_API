@@ -15,6 +15,18 @@ def binding(epoch=1):
     return SessionBinding(environment_id="test", deployment_id="local", session_id="session", session_epoch=epoch)
 
 
+def test_reserved_recovery_epoch_is_always_refused_without_database() -> None:
+    """Retired Session IDs must never restart at the reserved max BIGINT."""
+    import pytest
+
+    from deception.world.session import RECOVERY_RETIRED_SESSION_EPOCH
+
+    with pytest.raises(WorldStoreError, match="session_recovery_fenced"):
+        PostgresSessionWorlds._binding_params(binding(RECOVERY_RETIRED_SESSION_EPOCH))
+    with pytest.raises(WorldStoreError, match="session_recovery_fenced"):
+        PostgresSessionWorlds._binding_params(binding(RECOVERY_RETIRED_SESSION_EPOCH + 1))
+
+
 def test_concurrent_session_creation_preserves_world_after_restart(isolated_test_dsn):
     """兩個 Instance 同時初始化只建立同一世界，重建物件與新 JTI 不改身份。"""
     first = PostgresSessionWorlds(isolated_test_dsn)
