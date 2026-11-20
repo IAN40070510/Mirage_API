@@ -1,0 +1,63 @@
+# P2-6A contract alignment ONLY. DO NOT ENABLE: response templates are incomplete.
+# Source: Medusa 2.22.4 pinned Store API spec; deployment NOT reviewed.
+# Path is /store/products/{id}, not Mirage's synthetic /api/products/{id}.
+# A future change to enabled: true requires approved platform source, live
+# deployment binding, required product fields, successful OpenAPI gate and
+# authenticated end-to-end revalidation. Never copy a demo approval marker.
+schema_version: 1
+domain: ecommerce
+policy_id: p2-6a-medusa-product-lookup
+policy_version: '1'
+enabled: false
+trusted_sources: [sentinel-approved]
+max_age_seconds: 30
+rules:
+  - rule_id: p2-6a-get-store-product
+    enabled: false
+    priority: 100
+    environment_id: pending-review-env
+    deployment_id: pending-review-deploy
+    service_id: pending-review-service
+    site_id: pending-review-site
+    platform_id: medusa
+    platform_version: 2.22.4
+    spec_sha256: ced300a2de92b9829e6e600964588e894b760f07f8d79c1df657e1abe0529058
+    operation_id: GetProductsId
+    method: GET
+    path: /store/products/{id}
+    scenario_id: product-lookup
+    # P2-6B: pinned deterministic synthetic projection, not deployment approval.
+    response_adapter: medusa-store-2.22.4
+    attack_types: [sql-injection]
+    query_contexts: [{}]
+    id_parameter: id
+    id_decoding: raw
+    product_id_target: /product/id
+    found:
+      status_code: 200
+      media_type: application/json
+      template_id: medusa-p2-6a-found-incomplete
+    missing:
+      status_code: 404
+      media_type: application/json
+      template_id: medusa-p2-6a-missing-unreviewed
+templates:
+  # Deliberately minimal to expose the mismatch; MUST FAIL official 200 gate.
+  - template_id: medusa-p2-6a-found-incomplete
+    headers: {}
+    body:
+      product:
+        id: ''
+        title: ''
+    bindings:
+      - source_field: id
+        target_pointer: /product/id
+      - source_field: title
+        target_pointer: /product/title
+  # This error shape is NOT YET approved or validated against the actual 404 contract.
+  - template_id: medusa-p2-6a-missing-unreviewed
+    headers: {}
+    body:
+      type: not_found
+      message: Synthetic product is unavailable
+    bindings: []

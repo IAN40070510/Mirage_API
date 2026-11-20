@@ -87,6 +87,8 @@ class ScenarioRule(ScenarioRuleBase):
     id_parameter: str = Field(default="id", min_length=1)
     id_decoding: Literal["raw", "percent_decode_once"] = "raw"
     product_id_target: str = "/product/id"
+    # Explicit platform-specific projection; disabled for every existing policy.
+    response_adapter: Literal["none", "medusa-store-2.22.4"] = "none"
     found: OutcomeDefinition
     missing: OutcomeDefinition
 
@@ -98,6 +100,22 @@ class ScenarioRule(ScenarioRuleBase):
         if "{" + self.id_parameter + "}" not in self.path:
             raise ValueError("id_parameter must exist in the path template")
         pointer_tokens(self.product_id_target)
+        if self.response_adapter == "medusa-store-2.22.4":
+            from .medusa_product import MEDUSA_PRODUCT_PATH, MEDUSA_STORE_SHA256, MEDUSA_VERSION
+
+            if (
+                self.platform_id != "medusa"
+                or self.platform_version != MEDUSA_VERSION
+                or self.spec_sha256 != MEDUSA_STORE_SHA256
+                or self.operation_id != "GetProductsId"
+                or self.method != "GET"
+                or self.path != MEDUSA_PRODUCT_PATH
+                or self.scenario_id != "product-lookup"
+                or self.query_contexts != [{}]
+                or self.id_parameter != "id"
+                or self.id_decoding != "raw"
+            ):
+                raise ValueError("Medusa adapter requires the exact pinned Store GET contract")
         return self
 
 
@@ -162,6 +180,12 @@ class EcommerceDomain:
         plan = CompositionPlan(scope=prepared.scope, method=prepared.method, path=prepared.path,
                                status_code=outcome.status_code, media_type=outcome.media_type,
                                headers=template.headers, body=template.body, bindings=bindings)
+        if rule.response_adapter == "medusa-store-2.22.4":
+            from .medusa_product import adapt_medusa_product_plan
+
+            plan = adapt_medusa_product_plan(
+                plan, checked, product_id=prepared.domain_context["product_id"]
+            )
         raw = json.dumps(checked.model_dump(mode="json"), ensure_ascii=False, sort_keys=True,
                          separators=(",", ":"), allow_nan=False).encode("utf-8")
         return DomainOutcome(outcome_id=outcome_id, composition_plan=plan, template_id=template.template_id,

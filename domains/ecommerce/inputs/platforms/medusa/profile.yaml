@@ -4,15 +4,16 @@ profile_id: medusa-store-v2.22.4
 platform_id: medusa
 source_repository: https://github.com/medusajs/medusa
 source_tag: v2.22.4
-source_file: www/apps/api-reference/specs/store/openapi.yaml
-spec_info_version: '2.22.4'
+source_file: www/apps/api-reference/specs/store/openapi.full.yaml
+# Medusa v2.22.4 的官方 OpenAPI 保留 info.version 2.22.3；兩者正常配對。
+spec_info_version: '2.22.3'
 test_target_version: '2.22.4'
-source_status: tag_verified_spec_version_requires_review
+source_status: tag_verified_deployment_requires_review
 approved: false
 api_area: store
 base_url: https://shop.example
 openapi_file: openapi.yaml
-contract_status: existing_local_file_is_not_yet_verified_against_v2.22.4
+contract_status: static_source_verified_runtime_contract_pending_review
 allowed_operations:
   - operation_id: GetProductsId
     method: GET
