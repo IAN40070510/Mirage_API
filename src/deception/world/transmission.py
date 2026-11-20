@@ -76,7 +76,7 @@ class AdmissionTransmission:
         self._require(self.control.authorize_send(admission.admission_id, now=self.clock()))
 
     def start(self) -> None:
-        """在任何 ASGI 訊息前持久化起送，確認期限、owner 與撤銷。"""
+        """在任何 ASGI 訊息前確認已持久化的授權、owner 和期限，不二次撤銷。"""
         self._require(self.control.start_send(self.admission.admission_id, owner=self.owner, now=self.clock()))
 
     def check_deadline(self) -> None:
@@ -94,5 +94,3 @@ class AdmissionTransmission:
         """拒絕所有未明確成功的 Store 操作。"""
         if result is not AdmissionOperationResult.SUCCESS:
             raise TransmissionError("transmission_not_authorized")
-
-

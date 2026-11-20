@@ -40,7 +40,8 @@ def _digest(value) -> str:
 def create_app(*, settings: TrustedDeploymentSettings, postgres_dsn: str,
                config: DemoConfig, output_root=None, world_ttl: int = 3600, enable_business: bool = False,
                enable_medusa_store: bool = False, medusa_publishable_key: str | None = None,
-               medusa_source: Path | None = None):
+               medusa_source: Path | None = None,
+               original_assessment_dsn: str | None = None):
     """建立共享 Session、假名化觀察與持久化 Admission 的合成 HTTP app。
 
     配置只核准本專案的 synthetic-store 契約，支援 GET getProduct 的 200／404。
@@ -55,9 +56,13 @@ def create_app(*, settings: TrustedDeploymentSettings, postgres_dsn: str,
     if enable_medusa_store and not medusa_publishable_key:
         raise ValueError("native store requires a fixed publishable key")
     settings = TrustedDeploymentSettings.model_validate(settings.model_dump())
-    provider = settings.build_provider(postgres_dsn=postgres_dsn)
+    provider = settings.build_provider(
+        postgres_dsn=postgres_dsn, original_assessment_dsn=original_assessment_dsn
+    )
     candidates = PostgresCandidateStore(postgres_dsn)
-    control = PostgresAdmissionControl(postgres_dsn)
+    # Production HTTP always binds final Send Authorization to the persisted
+    # current Session epoch. Standalone conformance controls may opt out explicitly.
+    control = PostgresAdmissionControl(postgres_dsn, require_session_binding=True)
     registry = PostgresProjectionRegistry(postgres_dsn)
     request_audit = PostgresRequestAudit(postgres_dsn)
     ingress_audit = PostgresIngressAudit(postgres_dsn, environment_id=settings.environment_id,
@@ -322,5 +327,6 @@ def from_environment():
         output_root=Path(os.environ.get("MIRAGE_OUTPUT_ROOT", "generated/domains/ecommerce")),
         enable_business=os.environ.get("MIRAGE_ENABLE_BUSINESS", "false") == "true",
         enable_medusa_store=native, medusa_publishable_key=publishable_key,
+        original_assessment_dsn=os.environ.get("MIRAGE_ORIGINAL_ASSESSMENT_CONSUMER_DSN"),
         medusa_source=Path(os.environ.get("MIRAGE_MEDUSA_SOURCE_FILE",
             "domains/ecommerce/inputs/sources/medusa/openapi.yaml")))

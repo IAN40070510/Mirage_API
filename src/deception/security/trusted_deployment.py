@@ -22,8 +22,10 @@ class TrustedDeploymentSettings(SyntheticModel):
     public_keys: dict[str, str] = Field(min_length=1)
     max_clock_skew: int = Field(default=30, ge=0, le=30)
     max_lifetime: int = Field(default=60, ge=1, le=60)
+    require_original_assessment: bool = False
 
-    def build_provider(self, *, postgres_dsn: str) -> TrustedSessionAssessmentProvider:
+    def build_provider(self, *, postgres_dsn: str,
+                       original_assessment_dsn: str | None = None) -> TrustedSessionAssessmentProvider:
         """以 kid→32-byte hex 公鑰建立 provider；無效設定拒絕，DSN 不寫入設定。
 
         回傳值可注入 pipeline.create_app；有效簽章後先查共享 key 墓碑並持鎖至
@@ -33,6 +35,17 @@ class TrustedDeploymentSettings(SyntheticModel):
                 for kid, value in self.public_keys.items()}
         if any(not kid for kid in self.public_keys):
             raise ValueError("kid must not be empty")
+        original_lookup = None
+        if self.require_original_assessment:
+            from .original_assessment_store import PostgresOriginalAssessmentStore
+
+            if not isinstance(original_assessment_dsn, str) or not original_assessment_dsn.strip():
+                raise ValueError("original assessment consumer DSN required")
+            original_lookup = PostgresOriginalAssessmentStore(original_assessment_dsn, mode="consumer",
+                environment_id=self.environment_id, deployment_id=self.deployment_id,
+                source_id=self.source_id, service_id=self.service_id, site_id=self.site_id)
+        elif original_assessment_dsn is not None:
+            raise ValueError("original consumer DSN requires strict mode")
         return TrustedSessionAssessmentProvider(
             TrustedSessionVerifier(
                 keys=TrustedKeyRegistry(keys),
@@ -45,4 +58,6 @@ class TrustedDeploymentSettings(SyntheticModel):
             expected_issuer=self.issuer, expected_audience=self.audience,
             environment_id=self.environment_id, deployment_id=self.deployment_id,
             source_id=self.source_id, service_id=self.service_id, site_id=self.site_id,
+            original_lookup=original_lookup,
+            require_original_assessment=self.require_original_assessment,
         )

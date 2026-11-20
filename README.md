@@ -1,3 +1,7 @@
+**P2 原始判定／最終發送授權原生安全增量（待正式簽收）：**
+[專用 PostgreSQL ledger、最小權限／未知 COMMIT／Session epoch 驗收](docs/p2-original-assessment-store.md)。
+這只提供 opt-in 元件測試與稽核入口，不授予正式欺敵開關許可。
+
 # Mirage_API — 通用型 API 誘餌平台
 
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)

@@ -189,24 +189,22 @@ class AdmissionControl:
             return None if record is None else record.admission.model_copy(deep=True)
 
     def start_send(self, admission_id: str, *, owner: str, now: int) -> AdmissionOperationResult:
-        """同一 Claim owner 在期限內啟動一次傳輸，撤銷時以最佳努力停止未起送回應。"""
+        """已提交的 Send Authorization 可依 deadline 起送；不得二次追溯撤銷。
+
+        Emergency/Profile 撤銷必須在 authorize_send 同一控制序列中檢查；
+        SEND_AUTHORIZED 之後只確認 owner、唯一狀態與期限，不重開授權判定。
+        """
         with self._lock:
             record = self._records.get(admission_id)
             if record is None or record.claim_owner != owner or record.state is not AdmissionState.SEND_AUTHORIZED:
                 return AdmissionOperationResult.REJECTED
-            with record.projection_registry.profile_guard(
-                    record.admission.projection_evidence.compatibility_profile.profile_sha256) as profile:
-                if now >= record.admission.transmission_deadline:
-                    record.state = AdmissionState.EXPIRED
-                    return AdmissionOperationResult.EXPIRED
-                if ((profile is not None and profile.emergency)
-                        or record.admission.world_generation_id in self._emergency_revisions):
-                    record.state = AdmissionState.ABANDONED
-                    return AdmissionOperationResult.REJECTED
-                record.state = AdmissionState.SEND_STARTED
-                record.transmission_events.append({"event_name": "send_started",
-                                                   "final_response_hash": record.admission.candidate_hash})
-                return AdmissionOperationResult.SUCCESS
+            if now >= record.admission.transmission_deadline:
+                record.state = AdmissionState.EXPIRED
+                return AdmissionOperationResult.EXPIRED
+            record.state = AdmissionState.SEND_STARTED
+            record.transmission_events.append({"event_name": "send_started",
+                                               "final_response_hash": record.admission.candidate_hash})
+            return AdmissionOperationResult.SUCCESS
 
     def finish_send(self, admission_id: str, *, owner: str, outcome: AdmissionState,
                     attempted: bool = False) -> AdmissionOperationResult:
