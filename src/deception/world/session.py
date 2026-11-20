@@ -14,6 +14,11 @@ from .postgres_store import PostgresWorldStore, psycopg
 from .store import WorldStoreError
 
 
+# Disaster-restore quarantine sentinel: a retired Session ID cannot be
+# restarted by presenting this maximum PostgreSQL BIGINT as a new signed epoch.
+RECOVERY_RETIRED_SESSION_EPOCH = (1 << 63) - 1
+
+
 class SessionBinding(SyntheticModel):
     """保存已由可信身份元件確認的 Session 與 epoch，呼叫端須先驗證身份。"""
 
@@ -66,6 +71,8 @@ class PostgresSessionWorlds(PostgresWorldStore):
     def _binding_params(binding: SessionBinding) -> tuple:
         """以固定 SQL 順序取得已驗證 binding 的四個欄位。"""
         checked = SessionBinding.model_validate(binding.model_dump())
+        if checked.session_epoch >= RECOVERY_RETIRED_SESSION_EPOCH:
+            raise WorldStoreError("session_recovery_fenced")
         return (checked.environment_id, checked.deployment_id, checked.session_id, checked.session_epoch)
 
     def resolve(self, binding: SessionBinding, state: dict, *, now: int, ttl: int) -> WorldSnapshot:
@@ -92,6 +99,11 @@ class PostgresSessionWorlds(PostgresWorldStore):
         epoch, = connection.execute(
             "SELECT session_epoch FROM session_heads WHERE environment_id=%s AND deployment_id=%s "
             "AND session_id=%s FOR UPDATE", params[:3]).fetchone()
+        # Unlike normal epoch advance, a disaster-restore retirement is
+        # terminal for the old Session ID. Do not create a fresh generation
+        # even when a compromised/old issuer signs the reserved max epoch.
+        if epoch == RECOVERY_RETIRED_SESSION_EPOCH:
+            raise WorldStoreError("session_recovery_fenced")
         if epoch > binding.session_epoch:
             raise WorldStoreError("session_epoch_stale")
         if epoch < binding.session_epoch:
