@@ -32,6 +32,13 @@
 | D-22 | Candidate Promotion 失敗不得留下半可信物件；GC 不能刪除受保護 Bound Candidate | 需檢查真正 FK／Row Lock／GC，不能只憑 Runtime 提交的 protected_refs 清單 |
 | D-23 | `WORLD_COMMITTED_ADMISSION_UNAVAILABLE` 是跨交易 **Reconciliation Classification** | 禁止擅自加入既有 AdmissionState／World Commit Enum |
 | D-24 | 正式發送 OFF 須有獨立強制、可驗證且 Restore 後不倒退的控制面 | `production DECEIVE OFF` 目前作為政策要求，不宣稱存在已驗證的全域功能開關 |
+| D-25 | `VerifiedContext` 只作同一可信 Verifier 程序內部資料；Receipt DB 信任由實際驗章、專用 Role、ACL、受限 Writer 與受控交易建立 | 不以 Python 型別／序列化 claims JSON 作 PostgreSQL 安全證明；跨服務 Context 傳送需獨立認證與防重放協定 |
+| D-26 | `NOINHERIT` 不能取代 Role Membership／`SET ROLE` 驗收 | PG17 `pg_auth_members` 的 `set_option`／`inherit_option`／`admin_option`、間接角色鏈、`PUBLIC EXECUTE`、schema `USAGE` 都須從真實 Runtime 身分檢查 |
+| D-27 | 長耗時 Candidate Validation 可在交易外，但 Promotion 必須短交易、鎖版本並重核不可變 Evidence／目前政策 | 版本須由 DB 受保護生成，Evidence 綁 Scope／Envelope／Contract／Policy／Source／Validator；避免長交易持鎖阻礙 Emergency Revoke |
+| D-28 | Policy Revision 更新不等於撤銷；Grant／Authorize／StartSend 需依受保護 Policy Authority 的有效／禁止新授權／撤銷規則查核 | 新版本不自動使舊版本失效；Revocation 在 Start 前已生效則拒絕，Start 後不回溯竄改發送事實 |
+| D-29 | Candidate GC 首選完整 Scope FK／UNIQUE 加全域相容鎖，且區分短期 Payload 與必要的不可變稽核 Evidence | 既有 Candidate 使用 Scope＋candidate_ref；永遠 RESTRICT 有效 Binding 可能造成 Raw Payload 無限保留，需核准 Terminal／UNRESOLVED 保留窗口 |
+| D-30 | Ingress rollback、JTI 已提交消費、未知 COMMIT 分開決定可否重試與是否須新 JWS | 確定 rollback 時原 JTI 未消費，同 JWS 可能可安全受限重試；已消費不得復活；未知 Commit 不得用換新 JWS 跳過對帳 |
+| D-31 | Candidate→Binding／Admission 只是局部依存順序，不能在未盤點 Session Head／Generation／Admission／Key／FK 鎖前宣告全域安全 | 目前 Grant 先取 Generation，Session Resolve 先取 Head；要交付無循環 DAG 與對抗測試後才能訂總序 |
 
 ## 曾討論但明確拒絕的捷徑
 
@@ -53,6 +60,10 @@
 | 以 Python `VerifiedContext` 類別作為資料庫身分認證 | **拒絕** | Class／JSON 不是 DB 可信來源證明，需受保護 DB 身分與寫入介面 |
 | 強制 Candidate 新增 staging table 作為唯一設計 | **不預先指定** | 可沿用既有儲存並加權限、Validator／Promotion 或受限函式；以安全驗收證據裁決 |
 | Validation 已 PASS 就不再核對 bytes／Policy Revision，直接 Promotion | **拒絕** | 內容或政策可能在兩階段之間改變，需不可變證據及重新驗證 |
+| `NOINHERIT` 等於沒有 `SET ROLE` 權限 | **校正** | `SET ROLE` 由 Role Membership 的 SET 選項與間接鏈決定，需實際 ACL／登入測試 |
+| 規定所有 Candidate Validation 必須持鎖做完 | **拒絕一刀切** | 昂貴驗證若長期占鎖會影響安全撤銷可用性；應先驗不可變快照、在短 PromotionTx 查核證據與當前政策 |
+| 只要有 FK RESTRICT，就能永久保留全部 Candidate 原始 bytes 而無需 GC | **拒絕** | FK 是參照完整性；需對 Raw Payload／稽核 Metadata 設分層保留，Active／UNRESOLVED 不能誤刪 |
+| 任何失敗一律必須簽發新 JWS 再試 | **拒絕** | 明確 rollback 可在原 ID/digest 與政策下受限重試；已消費不復活、未知 Commit 不得以新 Token 規避對帳 |
 | `SEND_STARTED` 表示 Client 收到，或網路失聯等於沒送 | **拒絕** | DB 起送、ASGI 嘗試、Socket 寫入與客戶端接收是不同事件 |
 
 ## 仍須正式裁決（不得隱藏成既定事實）
@@ -62,12 +73,12 @@
 | Verifier 位置與信任根 | 獨立服務＋獨立 DB Role；若不同 DB 必須重做 Ingress 原子協定 | **OPEN** |
 | Authorize／StartSend／Epoch／Revocation 的總鎖序 | 先盤點全部路徑並產生無循環圖，再定量測試 | **OPEN** |
 | StartSend 期限政策 | `G=0` 嚴格 Token 未過期；或短、不可延長的已核准 Grace Window | **OPEN** |
-| Candidate GC 與 Grant 互斥方式 | FK＋Row Lock／受限 GC；仍須選型與測試 | **OPEN** |
+| Candidate GC 與 Grant 互斥方式 | 完整 Scope FK＋Row Lock／受限 GC；須含保留分層、全域鎖 DAG 與並行測試 | **OPEN** |
 | World Commit 成功但 Admission 無法取得 | API 可查回／at-most-once／可補償與對外回應 | **OPEN** |
 | Replay／Receipt 保留、還原隔離與釋放條件 | 單機 Quarantine 與外部安全錨點／保守到期窗口 | **OPEN** |
 | R4/R5 額外安全需求 | 分開威脅模型或正式殘餘風險接受 | **OPEN** |
 | Request Provenance 語意 A 風險接受 | 若未來要求實際入口來源驗證，採語意 B 並另行威脅分析 | **OPEN（提案採 A）** |
-| Candidate Validator 身分與 Promotion 具體交易 | 鎖定內容版本、可信 Policy Revision、Scope、不可挪用驗證證據 | **OPEN** |
+| Candidate Validator 身分與 Promotion 具體交易 | 受控交易外 Validation／短交易 Promotion，DB 不可變版本、可信政策撤銷與版本相容規則 | **OPEN** |
 | 正式發送禁用控制面 | 查明開關與 Credential／Restore／Runtime 權限，驗證 fail-closed | **OPEN** |
 
 ## 紀錄原則
