@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 from collections.abc import Callable
-from datetime import datetime, timezone
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Protocol
 
-from deception.api.ingress import NormalizedRequest
 from deception.api.fingerprint import fingerprint_request
+from deception.api.ingress import NormalizedRequest
 
 from .trusted_session import TrustedSessionClaims, TrustedSessionError, TrustedSessionVerifier
 
@@ -16,12 +18,20 @@ if TYPE_CHECKING:
     from deception.scenarios.models import AttackAssessment
 
 
+class OriginalAssessmentLookup(Protocol):
+    """由可信部署者注入的私有原判定查回；不得使用訪客可控 URL。"""
+
+    def __call__(self, assessment_id: str) -> AttackAssessment | None:
+        """以 assessment_id 查回原始不可變判定；缺失須回傳 None 或拋錯。"""
+        ...
+
+
 @dataclass(frozen=True)
 class VerifiedAssessment:
     """同一請求驗證後的 claims 與判定；傳遞給 Runtime 時不再消費 JTI。"""
 
     claims: TrustedSessionClaims
-    assessment: "AttackAssessment"
+    assessment: AttackAssessment
 
 
 class TrustedSessionAssessmentProvider:
@@ -42,6 +52,8 @@ class TrustedSessionAssessmentProvider:
         header_name: str = "x-trusted-session",
         now: int | None = None,
         clock: Callable[[], int] | None = None,
+        original_lookup: OriginalAssessmentLookup | None = None,
+        require_original_assessment: bool = False,
     ) -> None:
         """建立只接受部署者設定的 JWS assessment provider；不得由請求覆寫身份。"""
         values = {
@@ -73,8 +85,16 @@ class TrustedSessionAssessmentProvider:
         self._header_name = header_name.lower()
         self._now = now
         self._clock = clock
+        if type(require_original_assessment) is not bool:
+            raise ValueError("original assessment strict mode must be boolean")
+        if require_original_assessment and not callable(original_lookup):
+            raise ValueError("original assessment lookup required in strict mode")
+        if original_lookup is not None and not require_original_assessment:
+            raise ValueError("original assessment lookup requires strict mode")
+        self._original_lookup = original_lookup
+        self._require_original_assessment = require_original_assessment
 
-    def __call__(self, request: NormalizedRequest) -> "AttackAssessment":
+    def __call__(self, request: NormalizedRequest) -> AttackAssessment:
         """驗證請求中的唯一 JWS，核對部署身份後回傳既有 malicious 判定。"""
         return self.verify_with_claims(request).assessment
 
@@ -90,7 +110,7 @@ class TrustedSessionAssessmentProvider:
         token = self._header(request)
         current = self._current_time()
         if current is None:
-            current = int(datetime.now(timezone.utc).timestamp())
+            current = int(datetime.now(UTC).timestamp())
         claims = self._verifier.verify(
             token,
             expected_issuer=self._expected_issuer,
@@ -105,6 +125,37 @@ class TrustedSessionAssessmentProvider:
             self._deployment_id,
         ):
             raise TrustedSessionError("trusted_session_context_mismatch")
+        if self._require_original_assessment:
+            # 只有可信部署者提供的原始資料才可通過；驗章不代表 digest 已驗證。
+            try:
+                lookup = self._original_lookup
+                if lookup is None:
+                    raise TrustedSessionError("original_assessment_lookup_missing")
+                original = lookup(claims.assessment_id)
+            except Exception as exc:
+                raise TrustedSessionError("original_assessment_unavailable") from exc
+            if original is None:
+                raise TrustedSessionError("original_assessment_missing")
+            if not isinstance(original, AttackAssessment):
+                raise TrustedSessionError("original_assessment_invalid")
+            if (
+                original.assessment_id != claims.assessment_id
+                or original.request_id != request.request_id
+                or original.request_fingerprint != claims.request_fingerprint
+                or original.environment_id != claims.environment_id
+                or original.deployment_id != claims.deployment_id
+                or original.source_id != self._source_id
+                or original.service_id != self._service_id
+                or original.site_id != self._site_id
+                or original.verdict != "malicious"
+                or original.expires_at.timestamp() <= current
+                or original.observed_at.timestamp() > current + 30
+            ):
+                raise TrustedSessionError("original_assessment_scope_mismatch")
+            digest = hashlib.sha256(original.model_dump_json().encode("utf-8")).hexdigest()
+            if not hmac.compare_digest(digest, claims.assessment_digest):
+                raise TrustedSessionError("original_assessment_digest_mismatch")
+            return VerifiedAssessment(claims, original)
         assessment = AttackAssessment(
             assessment_id=claims.assessment_id,
             source_id=self._source_id,
@@ -116,8 +167,8 @@ class TrustedSessionAssessmentProvider:
             site_id=self._site_id,
             verdict="malicious",
             attack_types=list(self._attack_types),
-            observed_at=datetime.fromtimestamp(min(claims.iat, current), tz=timezone.utc),
-            expires_at=datetime.fromtimestamp(claims.exp, tz=timezone.utc),
+            observed_at=datetime.fromtimestamp(min(claims.iat, current), tz=UTC),
+            expires_at=datetime.fromtimestamp(claims.exp, tz=UTC),
         )
         return VerifiedAssessment(claims, assessment)
 
