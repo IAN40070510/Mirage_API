@@ -74,11 +74,11 @@ Tx B (Session epoch rollover)：
 
 | 情況 | 可以重新執行原 Operation 嗎？ | 安全處置 |
 | --- | --- | --- |
-| 已明確 rollback，確認無外部副作用且 ID＋Digest 相同 | **可受限重試** | 同 ID、同 Input Digest、有限次數＋退避；不能擅自換新身分 |
+| **DB 明確證實 rollback**、有 World／External／HTTP 零不可逆副作用證據、同一 Operation Identity＋Digest 已確認未執行 | **才可考慮受限重試** | 同 ID、同 Digest、有限次數＋退避；重新查證 JWS `exp`、Session、Generation、Policy 仍有效；不可從單一 Receipt 查無推斷 rollback |
 | `40P01` Deadlock／`40001` Serialization Failure **且已確認 rollback** | **可受限重試** | 上限／退避／監控；若懷疑副作用先做對帳 |
 | COMMIT ack 遺失或 Commit 中斷 | **不可直接重試** | Client 先標 `UNKNOWN`；依 Operation ID／digest 唯讀查回。可信同 ID 成功結果可改為 `CONFIRMED_COMMITTED`；仍不可驗證則保持 `UNVERIFIABLE`，不等同 rollback |
 | DB 斷線／故障／結果查無 | **不可據此推定安全重試** | Fail-Closed、UNVERIFIABLE；缺 Receipt 不證明未提交 |
-| **IngressTx 明確 rollback**，JTI 未消費，原 JWS 仍有效 | **同一 JWS 可否受限重試，依原 Operation ID/digest 與 Policy** | 先確定沒有未知 Commit／外部副作用；不可無條件要求簽發新 JWS |
+| **IngressTx 明確 rollback**，JTI 未消費，原 JWS 仍有效 | **同一 JWS 可否受限重試，依原 Operation ID/digest 與 Policy** | 必須由 DB 明確證明 rollback，並對 World Commit／外部效果／HTTP 取得零副作用證據；原 Operation 不可另起一筆，授權／Epoch／時間仍有效；不可只靠 JTI 未消費 |
 | **IngressTx 已提交消費**，其後 Grant 業務拒絕 | **不得重新消費原 JTI** | 保留原因；若合法開始**新的意圖**，才由可信簽發者提供新 JWS/JTI，且不得重做已提交副作用 |
 | 授權業務拒絕（無新合法輸入） | **不可盲目重試** | 停止該意圖；不能以換新 Token 當作規避拒絕的方法 |
 | SEND_STARTED COMMIT/ACK UNKNOWN | **不得新起 HTTP 傳輸或重試** | 查回 SEND_STARTED 只確認 DB 狀態；原 Sender 若尚有同一 TCP/ASGI 上下文可依期限完成；無批准續傳協定則 at-most-once，不得因對帳開新連線 |
