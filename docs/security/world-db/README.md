@@ -4,11 +4,13 @@
 
 **目前狀態：Proposed／Security Weakness OPEN／MSDSS P2 NO-GO。沒有執行任何修復或正式發送啟用。**
 
-**v0.2 Contract Freeze candidate（2026-11-21）**：唯一授權點為 `SEND_AUTHORIZED` COMMIT（Freeze v1 不變）；StartSend 只核對 Snapshot／owner／deadline／single-use／Purge Fence，沒有第二次 Policy 或 Emergency 授權；Candidate Payload 與 Snapshot Purge 分開。Operation Identity、外部 effect key、未知 `SEND_STARTED`、Restore Quarantine、Old Role Mixed Binary Fence 已有 Proposed MUST 與 22 個 NOT_RUN 測試 ID。**新控制 NOT_IMPLEMENTED，無安全修補通過證據**。
+**v0.2 Contract Freeze candidate（2026-11-21）**：MSDSS 已固定 `SEND_AUTHORIZED` COMMIT 為唯一授權點；**Mirage native 尚未採納／其固定上游版本有已知差異，完整符合性 NOT_RUN**。目標 StartSend 只核對 Snapshot／owner／deadline／single-use／真實不可逆的 Purge Fence，不作第二次 Policy 或 Emergency 授權。Operation Identity、外部 effect key、未知 `SEND_STARTED`、Restore Quarantine、Old Role Mixed Binary Fence 已有 Proposed MUST 與 **31 個必檢 ID（其中 `WORLD-RECOVERY-03` 是群組索引、A～F 各為單獨案例）**。**新控制 NOT_IMPLEMENTED、全部新安全驗收 NOT_RUN**。
 
 **來源追溯**：Mirage upstream `main` `88dc2008fd35a2d3873949a769653dc9f18e8980`；MSDSS `main` `5a1ee26dcf79f04cf29345a0403e3f3f8082358b` 的 Protocol Freeze v1；Mirage 文件歷史分支名 `docs/mir-sec-world-001-adr-v0.1`／**前置** Commit `003c918f142296588d2fe14b70fafe3cc5cf8458`。**前置 SHA 不是最新文件提交**，v0.1 分支名也不是 v0.2 版本權威；當前 SHA 需以 GitHub／`git rev-parse HEAD` 實查，文件版號、兩個 Source SHA、Git Commit、NOT_IMPLEMENTED、NOT_RUN 分開記錄。**Mirage main 尚未收錄此 ADR**。
 
 **既有版本差異**：Mirage upstream 固定 SHA 的 `start_send` 仍含 Generation/Profile Emergency 再查；MSDSS Freeze v1 則規定最終 `SEND_AUTHORIZED` COMMIT 後不二次查核。這是**待 Mirage Owner 採納的原生協定差異**，不是目前 upstream 已符合新要求的證明。
+
+**Restore 與 BD-11 安全預設**：同一 World DB 備份可倒退後續 Candidate Tombstone；錨點與 Quarantine 強制控制必須由還原範圍外的權威主體維持，缺失時持續禁用正式發送。鎖後 `decision_time` 不證明 COMMIT 早於期限；Owner／DBA／Security 未裁決（BD-11）前，若產品要求 commit-before-deadline 不得開啟正式發送。快照不可用才可阻擋已授權執行，**不得將 Purge Fence 作為第二次 Policy Revocation**。
 
 
 | 文件 | 說明 | 建議閱讀順序 |
@@ -18,7 +20,7 @@
 | [權威證據矩陣](evidence-authority-matrix.md) | JWS、Replay、Receipt、Candidate Submission／Validation／Promotion／Binding、Admission、Operation Result 各自可信來源 | 3 |
 | [交易／鎖矩陣](transaction-lock-matrix.md) | 現有鎖順序、可能循環、交易責任、未知 COMMIT 與失敗恢復 | 4 |
 | [威脅能力矩陣](threat-capability-matrix.md) | R1–R5、Runtime/Verifier/主機威脅與每項控制覆蓋能力 | 5 |
-| [驗收計畫](verification-plan.md) | 真 PostgreSQL／非特權 Role、Snapshot/Purge、Policy Race、外部 side effect／Restore、Mixed Runtime、未知 COMMIT（22 個精確化 ID 全 NOT_RUN） | 6 |
+| [驗收計畫](verification-plan.md) | 真 PostgreSQL／非特權 Role、Snapshot/Purge、Policy Race、外部 side effect／Restore、Mixed Runtime、未知 COMMIT（31 個必檢 ID，全 NOT_RUN） | 6 |
 
 ## 交接原則
 
@@ -29,5 +31,16 @@
 5. 詳細攻擊操作、Runtime 真實憑證、Host Path、私人 PoC 不應放進公開文件；公開保存高層級安全 invariant 與修復證據索引，實際秘密與原始敏感日誌交由受限安全流程管理。
 6. **持續紀錄約定**：每輪討論若形成新架構結論，優先更新這組既有文件與 [Decisions Log](decisions-log.md)，以相同文件分支的新 Git Commit 保存更動與版本；不因對話新開便另起一套草案。未核准為 Proposed、未測試為 NOT_RUN；此約定不授權自動合併 main、修改 staging 或啟用正式發送。跨會話更新需由當次有 Repo 存取權的執行者實際執行，並非無人值守自動化。
 7. **文件檢查留證**：從**完整專案 checkout** 執行 `python tools/check_documentation.py`，並另核對 Verification Plan 的所有 `WORLD-*` ID 唯一性與子案例語意；PR／提交紀錄應保存執行環境、退出碼、完整 HEAD SHA 和實際變更路徑。靜態文件 PASS 不等於 PostgreSQL 安全測試 PASS；本文件不可自我內嵌「現在的自身 Commit SHA」。
+
+## 驗證狀態必須分流
+
+| 類別 | 狀態與證明範圍 |
+| --- | --- |
+| 文件索引／連結與必檢 ID 靜態檢查 | 實際執行結果由 PR／Git Commit 的命令輸出證明；即使 PASS 也只是**文件完整性** |
+| Verification Plan 全部 ID 唯一性 | 可單獨檢查；即使 PASS 也只是**命名一致性**，不證明案例安全語意 |
+| 六份／其他跨文件 byte consistency、`git diff --check` | 即使 PASS 也只是內容／格式一致；**不是修補驗證** |
+| Mirage 原生 Freeze v1 符合性 | **NOT_RUN**；固定 upstream `start_send` 已知與目標有差異 |
+| 真 PostgreSQL ACL／並行／COMMIT Recovery | **NOT_RUN** |
+| Restore／外部 Tombstone 錨點／解禁 | **NOT_RUN** |
 
 參考原文件：[World Runtime](../../world-runtime.md)、[Trusted Session](../../trusted-session.md)、[Profile Revocation](../../profile-revocation.md)、[Key Revocation](../../key-revocation.md)、[World Commit Result](../../commit-results.md)。
