@@ -35,6 +35,8 @@ services:
     restart: "no"
     read_only: true
     cap_drop: [ALL]
+    # 一次性資料庫建置須讀取不同 UID 持有的 0600 Secret；只增加唯讀／搜尋能力。
+    cap_add: [DAC_READ_SEARCH]
     security_opt:
       - no-new-privileges:true
     mem_limit: 256m
