@@ -68,12 +68,6 @@ BEGIN
     ELSIF kind = 'read_admission' THEN
         PERFORM 1 FROM read_admissions WHERE read_admission_id=identity->>'read_admission_id'
           FOR SHARE;
-    ELSIF kind = 'world_operation' THEN
-        PERFORM 1 FROM world_operations WHERE environment_id=identity->>'environment_id'
-          AND deployment_id=identity->>'deployment_id' AND session_id=identity->>'session_id'
-          AND world_generation_id=identity->>'world_generation_id'
-          AND result_digest=identity->>'result_digest'
-          FOR SHARE;
     ELSIF kind = 'registry' THEN
         PERFORM 1 FROM projection_registry WHERE projection_contract_hash=identity->>'contract_hash'
           FOR SHARE;

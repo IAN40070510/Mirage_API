@@ -66,6 +66,7 @@ def inspect_runtime_world_acl(dsn: str, *, schema: str = "public") -> WorldAclAs
                     ("generation_controls", ("INSERT", "UPDATE", "DELETE", "TRUNCATE")),
                     ("session_heads", ("INSERT", "UPDATE", "DELETE", "TRUNCATE")),
                     ("session_world_bindings", ("INSERT", "UPDATE", "DELETE", "TRUNCATE")),
+                    ("read_admissions", ("INSERT", "UPDATE", "DELETE", "TRUNCATE")),
                     ("replay_entries", ("INSERT", "UPDATE", "DELETE", "TRUNCATE")),
                     ("trusted_key_revocations", ("INSERT", "UPDATE", "DELETE", "TRUNCATE")),
                     ("projection_registry", ("INSERT", "UPDATE", "DELETE", "TRUNCATE")),

@@ -9,7 +9,7 @@ from uuid import uuid4
 import pytest
 
 from deception.world import (
-    AdmissionOperationResult, PostgresCandidatePromoter, PostgresCandidateStore,
+    AdmissionOperationResult, CommitSource, PostgresCandidatePromoter, PostgresCandidateStore,
     PostgresProtectedAuthorizer, PostgresProjectionRegistry, ProtectedGrantError,
     SnapshotSource,
 )
@@ -163,6 +163,21 @@ def test_protected_grant_rejects_fingerprint_and_scope_substitution(isolated_tes
         assert connection.execute("SELECT count(*) FROM protected_grant_bindings").fetchone()[0] == 0
 
 
+def test_runtime_world_commit_row_is_not_trusted_source(isolated_test_dsn):
+    """舊 World Runtime 可寫的 Commit 結果不得在受保護 Executor 未完成前提升為來源權威。"""
+    seeded = _seed(isolated_test_dsn)
+    selected, _, evidence, _, ref, hashes, _ = seeded
+    source = CommitSource(world_generation_id=selected.world_generation_id,
+                          operation_result_digest=digest("e"), committed_state_version=1,
+                          committed_state_hash=digest("f"))
+    with pytest.raises(ProtectedGrantError, match="candidate_source_unverifiable"):
+        PostgresCandidatePromoter(isolated_test_dsn, expected_login=_login(isolated_test_dsn)).promote(
+            scope=selected, candidate_ref=ref, request_fingerprint=digest("a"),
+            envelope_hash=hashes[0], immutable_body_hash=hashes[1],
+            semantic_headers_hash=hashes[2], evidence=evidence, source=source,
+        )
+
+
 def test_protected_grant_requires_promotion_and_db_role(isolated_test_dsn):
     """未 Promotion／錯誤實體 Login／舊 Admission 均不能進入 Protected Grant。"""
     seeded = _seed(isolated_test_dsn)
@@ -255,7 +270,7 @@ def test_protected_grant_real_role_acl_and_authorizer(isolated_test_dsn):
             validator = sql.Identifier(users["validator"][0])
             authorizer = sql.Identifier(users["authorizer"][0])
             runtime = sql.Identifier(users["runtime"][0])
-            admin.execute(sql.SQL("GRANT SELECT ON candidate_records,read_admissions,world_operations,"
+            admin.execute(sql.SQL("GRANT SELECT ON candidate_records,read_admissions,"
                                   "projection_registry,projection_profile_revocations TO {}").format(validator))
             admin.execute(sql.SQL("GRANT INSERT,SELECT ON protected_candidate_promotions TO {}").format(validator))
             admin.execute(sql.SQL("GRANT EXECUTE ON FUNCTION protected_lock_reference(text,jsonb) TO {}").format(
@@ -296,6 +311,7 @@ def test_protected_grant_real_role_acl_and_authorizer(isolated_test_dsn):
                     "UPDATE response_admissions SET state='SEND_AUTHORIZED' WHERE false",
                     "INSERT INTO protected_grant_bindings(operation_id) VALUES(gen_random_uuid())",
                     "UPDATE session_heads SET session_epoch=0 WHERE false",
+                    "INSERT INTO read_admissions(read_admission_id) VALUES('forged')",
                     "SELECT protected_lock_reference('session_head','{}'::jsonb)",
                     )), (logins["validator"], (
                     "UPDATE response_admissions SET state='SEND_AUTHORIZED' WHERE false",

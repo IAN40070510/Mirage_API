@@ -214,18 +214,9 @@ class PostgresCandidatePromoter(_ProtectedConnection):
             )
             return cursor.fetchone() is not None
         if source.kind == "committed_operation":
-            if not _protected_lock(cursor, "world_operation", {
-                    **scope.model_dump(), "result_digest": source.operation_result_digest}):
-                return False
-            cursor.execute(
-                """SELECT 1 FROM world_operations WHERE environment_id=%s
-                   AND deployment_id=%s AND session_id=%s AND world_generation_id=%s
-                   AND result_digest=%s AND state_version=%s AND state_hash=%s
-                   AND status='committed'""",
-                (*_scope_values(scope), source.operation_result_digest,
-                 source.committed_state_version, source.committed_state_hash),
-            )
-            return cursor.fetchone() is not None
+            # world_operations 仍由原本 World Runtime 交易介面寫入；單讀資料列
+            # 不能獨立證明 T1 下的來源權威，受保護 World Executor 完成前禁用。
+            return False
         # 無受保護來源的安全錯誤模板不得借 Candidate Promotion 混入授權。
         return False
 
