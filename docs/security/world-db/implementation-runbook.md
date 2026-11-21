@@ -23,7 +23,7 @@
 | G5 | Restore Quarantine、外部 Anchor 連續涵蓋、雙方向發布未知及 Operator Release Certificate | 舊備份及事件缺口無法復活 Tombstone／JTI／Snapshot；未知涵蓋不得解禁 | NOT_RUN |
 | G6 | 混合版本／Rollback／CI／正式簽核 | 非特權 PG Integration、失敗注入、既有 Mirage 全套回歸、Owner／DBA／Security／Release Approver 簽核 | NOT_RUN |
 
-**G1 子切面（待獨立驗證）**：獨立分支新增 `deception.security.world_acl`，以正式 Runtime 實體 DSN 唯讀檢查 Session Login、有效權限、特權 Role Membership 與四張關鍵表。現有 `trusted_http.from_environment()` 在服務／權限重構未完成前有不可由環境開關跳過的 **Release Fuse**：即使 ACL 檢查通過仍拒絕正式 Trusted Send 啟動。`create_app()` 仍供隔離 Python 正向測試使用，**不能以此推論正式入口可啟用**。此切面不等於已建立獨立服務、Secret、登入角色或執行過 `WORLD-ACL-*` 負面 SQL 驗收，G1 保持 `NOT_RUN`。
+**G1 子切面（待獨立驗證）**：獨立分支新增 `deception.security.world_acl`，以正式 Runtime 實體 DSN 唯讀檢查 Session Login、有效權限、特權 Role Membership 與關鍵表。現有 `trusted_http.from_environment()` 在服務／權限重構未完成前有不可由環境開關跳過的 **Release Fuse**：即使 ACL 檢查通過仍拒絕正式 Trusted Send 啟動。`create_app()` 仍供隔離 Python 正向測試使用，**不能以此推論正式入口可啟用**。新增 `WORLD-ACL-06` 子案例在一次性 PostgreSQL CI service 建立真實 SCRAM LOGIN，驗證無法改寫 Admission、Session epoch、Replay 或 `SET ROLE`；一般開發環境未設 `MIRAGE_WORLD_ROLE_TEST_ISOLATED=true` 不准修改 PostgreSQL cluster roles。這只驗證**隔離 ACL fixture**，並非正式 Oracle 部署角色、Secret、來源或 IPC 的證據，G1 保持 `NOT_RUN`。
 
 ## 不得由工程師自行猜測的決策
 

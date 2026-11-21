@@ -1,4 +1,7 @@
-"""WORLD-ACL-PREFLIGHT-01：現有共用 DB 身分不得誤開正式 Trusted Send。"""
+"""WORLD-ACL-06 子案例：現有共用 DB 身分不得誤開正式 Trusted Send。"""
+
+import os
+import secrets
 
 import pytest
 
@@ -53,3 +56,49 @@ def test_world_acl_assessment_only_claims_checked_capabilities():
     exposed = WorldAclAssessment(login="mirage_http_runtime", effective_role="mirage_http_runtime",
                                  unsafe_capabilities=("direct_update:response_admissions",))
     assert safe.restricted and not exposed.restricted
+
+
+def test_world_acl_real_scram_login_denies_protected_dml(isolated_test_dsn):
+    """WORLD-ACL-06 子案例：隔離 PG 17 真實 LOGIN 能 SELECT，但關鍵 DML 與 SET ROLE 必須拒絕。"""
+    if os.environ.get("MIRAGE_WORLD_ROLE_TEST_ISOLATED") != "true":
+        pytest.skip("global PostgreSQL role test requires disposable CI database")
+
+    import psycopg
+    from psycopg import sql
+    from psycopg.conninfo import conninfo_to_dict, make_conninfo
+
+    options = conninfo_to_dict(isolated_test_dsn).get("options", "")
+    assert "search_path=" in options
+    schema = options.split("search_path=", 1)[1].split(" ", 1)[0]
+    password = secrets.token_urlsafe(36)
+    runtime_login = make_conninfo(isolated_test_dsn, user="mirage_http_runtime", password=password)
+    with psycopg.connect(isolated_test_dsn, autocommit=True) as admin:
+        admin.execute(sql.SQL("CREATE ROLE mirage_http_runtime LOGIN NOINHERIT PASSWORD {}").format(
+            sql.Literal(password)))
+        admin.execute("CREATE ROLE mirage_ingress_verifier NOLOGIN NOINHERIT")
+        try:
+            admin.execute(sql.SQL("GRANT USAGE ON SCHEMA {} TO mirage_http_runtime").format(
+                sql.Identifier(schema)))
+            for table in ("response_admissions", "generation_controls", "session_heads",
+                          "session_world_bindings", "replay_entries", "trusted_key_revocations",
+                          "projection_registry", "candidate_records"):
+                admin.execute(sql.SQL("GRANT SELECT ON {}.{} TO mirage_http_runtime").format(
+                    sql.Identifier(schema), sql.Identifier(table)))
+            assessment = inspect_runtime_world_acl(runtime_login, schema=schema)
+            assert assessment.login == assessment.effective_role == "mirage_http_runtime"
+            assert assessment.restricted, assessment.unsafe_capabilities
+            for statement in (
+                "UPDATE response_admissions SET state='SEND_AUTHORIZED' WHERE false",
+                "UPDATE session_heads SET session_epoch=0 WHERE false",
+                "DELETE FROM replay_entries WHERE false",
+                "SET ROLE mirage_ingress_verifier",
+            ):
+                with psycopg.connect(runtime_login) as runtime:
+                    with pytest.raises(psycopg.errors.InsufficientPrivilege) as error:
+                        runtime.execute(statement)
+                    assert error.value.sqlstate == "42501"
+        finally:
+            # 限定於專用 disposable CI PG，精確移除本案例建立的帳號及授權。
+            admin.execute("DROP OWNED BY mirage_http_runtime")
+            admin.execute("DROP ROLE mirage_http_runtime")
+            admin.execute("DROP ROLE mirage_ingress_verifier")
