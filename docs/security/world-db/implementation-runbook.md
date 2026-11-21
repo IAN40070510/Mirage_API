@@ -29,6 +29,8 @@
 
 **G2 Receipt Schema 子切面（2026-11-21 修補候選，尚待真 PostgreSQL／CI 驗證）**：新增 `migrations/017_trusted_ingress_receipts.sql`，只建立 `ingress_receipts` 的受保護儲存欄位、`(issuer,audience,jti)` 一次性約束及回指既有 `replay_entries` 的 `ON DELETE RESTRICT` FK；`tests/test_ingress_receipt_schema.py` 驗證同交易 rollback、孤兒 Receipt 拒絕、JTI 重用／提前 Replay 刪除失敗，以及隔離真 SCRAM Runtime／Verifier Role 的 `42501` 與有限合法 INSERT。這個 Migration **沒有**提供驗章服務、可信 Caller Context、綁定 Candidate 的 GrantTx、受限資料庫函式或未知 COMMIT 對帳。為維持 Fail-Closed，仍被 Receipt 引用的 Replay 不可被舊 GC 刪除；正式 Receipt/Replay 同步 Retention／GC、還原隔離方案須另行實作，不能將此 Schema 視為已完成 G2 或准予正式發送。
 
+**G2 Receipt Schema — Oracle 實機局部證據（2026-11-21）**：固定分支提交 `efe84d3a061669c995bcb10df0d8f31e5c99b835`，既有專用 PostgreSQL 17.6 僅追加 `017_trusted_ingress_receipts.sql`，`job_01M7Y2CQC000ZT89KSCMWY3WMX` 回報 `LAB_RECEIPT_MIGRATION_OK new_migrations=1 roles=3`；實體 Verifier `job_01M7Y2D30Z004M5KXMQ31S5DAQ` 通過孤兒 Receipt `23503`、Verifier 直接 UPDATE/DELETE／偽造 verified_at 的 `42501`、Replay＋Receipt 同交易 Rollback；實體 Runtime `job_01M7Y2D1X900M8VMP2YPQ2YP9Y` 直接 INSERT/UPDATE/DELETE 均 `42501`。進一步把 `ingress_receipts` 加入正式 `world_acl` 預檢拒絕清單，包含 Runtime 讀取權限。**此為合成資料與 Schema/Role 測試，不是 JWS 真實驗章、可信 Receipt 簽發、Grant／Snapshot、未知 COMMIT 或完整 G2 PASS**；CI 同提交的完整結果必須另行查核。
+
 ## 不得由工程師自行猜測的決策
 
 1. **Mirage Owner adoption／Protocol Freeze v1：ACCEPTED（2026-11-21 使用者明確決策）。** `SEND_AUTHORIZED` 提交後不以 Policy／Emergency 做第二次授權；`StartSend` 保留 owner、deadline、single-use 與真實 Snapshot 執行前置條件。這只解除協定選擇阻塞，**不代表** DB 角色分離、Snapshot 完整性、未知 COMMIT 或原生端到端符合性已經驗證。

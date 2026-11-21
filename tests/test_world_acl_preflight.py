@@ -31,6 +31,8 @@ def test_world_acl_preflight_detects_existing_privileged_connection(isolated_tes
     assert "direct_update:response_admissions" in assessment.unsafe_capabilities
     assert "direct_update:session_heads" in assessment.unsafe_capabilities
     assert "direct_delete:replay_entries" in assessment.unsafe_capabilities
+    assert "direct_insert:ingress_receipts" in assessment.unsafe_capabilities
+    assert "direct_select:ingress_receipts" in assessment.unsafe_capabilities
     with pytest.raises(WorldAclPreflightError, match="world_acl_runtime_not_restricted"):
         require_restricted_world_runtime(isolated_test_dsn, schema=schema)
 
@@ -87,6 +89,10 @@ def test_world_acl_real_scram_login_denies_protected_dml(isolated_test_dsn):
             assessment = inspect_runtime_world_acl(runtime_login, schema=schema)
             assert assessment.login == assessment.effective_role == "mirage_http_runtime"
             assert assessment.restricted, assessment.unsafe_capabilities
+            with psycopg.connect(runtime_login) as runtime:
+                assert not runtime.execute(
+                    "SELECT has_table_privilege(current_user,'ingress_receipts','SELECT')"
+                ).fetchone()[0]
             for statement in (
                 "UPDATE response_admissions SET state='SEND_AUTHORIZED' WHERE false",
                 "UPDATE session_heads SET session_epoch=0 WHERE false",
