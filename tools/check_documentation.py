@@ -133,6 +133,8 @@ WORLD_ADR_REQUIRED_IDS = (
     "WORLD-PROTOCOL-01", "WORLD-PROTOCOL-02", "WORLD-RESTORE-TOMBSTONE-01",
     "WORLD-RECOVERY-03A", "WORLD-RECOVERY-03B", "WORLD-RECOVERY-03C",
     "WORLD-RECOVERY-03D", "WORLD-RECOVERY-03E", "WORLD-RECOVERY-03F",
+    "WORLD-RESTORE-FENCE-01", "WORLD-PURGE-BOUNDARY-01",
+    "WORLD-PROTOCOL-MATRIX-01",
 )
 
 
@@ -195,6 +197,7 @@ def check_world_adr_contract(root: Path) -> list[str]:
             "Protocol Freeze v1", "NOT_RUN", "MIR-SEC-WORLD-001",
             "MSDSS P2", "OperationSnapshotBinding", "decision_time",
             "SNAPSHOT_BINDING_CONFLICT", "WORLD_COMMITTED_ADMISSION_UNAVAILABLE",
+            "Protocol baseline", "Mirage Owner adoption", "Mirage native conformance",
         ),
         "verification": (
             "NOT_RUN", "WORLD_COMMITTED_ADMISSION_UNAVAILABLE",
