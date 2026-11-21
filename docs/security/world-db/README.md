@@ -2,13 +2,13 @@
 
 此目錄與 [Architecture Draft ADR v0.2](../../adr/MIR-SEC-WORLD-001-world-db-trust-boundary.md) 保存多輪世界資料庫權限與發送授權架構審查，供 Mirage Owner、DBA、Security 與 MSDSS 跨服務驗收交接。v0.1 可透過同分支 Git 歷史追溯，不用維護兩份互相分叉的草案。
 
-**目前狀態：Proposed／Security Weakness OPEN／MSDSS P2 NO-GO。沒有執行任何修復或正式發送啟用。**
+**目前狀態：Proposed／Security Weakness OPEN／MSDSS P2 NO-GO。獨立分支已開始原生協定修補；完整權限修復、驗收與正式發送啟用均未完成。**
 
-**v0.2 Contract Freeze candidate（2026-11-21）**：`MSDSS Protocol baseline = ACCEPTED (MSDSS)`；`Mirage Owner adoption = PENDING`；`Mirage native conformance = NOT_RUN`。固定上游 `start_send()` 有**局部已觀察差異**，不據此聲稱全契約符合性已測。目標 StartSend 只核對 Snapshot／owner／deadline／single-use／真實不可逆的 execution-ineligibility fence，不作第二次 Policy 或 Emergency 授權。Operation Identity、外部 effect key、未知 `SEND_STARTED`、Restore Quarantine、Old Role Mixed Binary Fence 已有 Proposed MUST 與 **37 個必檢 ID（其中 `WORLD-RECOVERY-03` 是群組索引、A～F 各為單獨案例）**。**新控制 NOT_IMPLEMENTED、全部新安全驗收 NOT_RUN**。
+**v0.2 Contract Freeze candidate（2026-11-21）**：`MSDSS Protocol baseline = ACCEPTED (MSDSS)`；`Mirage Owner adoption = ACCEPTED (D-68, 2026-11-21)`；`Mirage native conformance = NOT_RUN`。固定上游 `start_send()` 有**局部已觀察差異**，獨立分支修補不等於整套協定通過。目標 StartSend 只核對 Snapshot／owner／deadline／single-use／真實不可逆的 execution-ineligibility fence，不作第二次 Policy 或 Emergency 授權。Operation Identity、外部 effect key、未知 `SEND_STARTED`、Restore Quarantine、Old Role Mixed Binary Fence 已有 Proposed MUST 與 **37 個必檢 ID（其中 `WORLD-RECOVERY-03` 是群組索引、A～F 各為單獨案例）**。**新 DB 權限控制 NOT_IMPLEMENTED、全部新安全驗收 NOT_RUN**。
 
 **來源追溯**：Mirage upstream `main` `88dc2008fd35a2d3873949a769653dc9f18e8980`；MSDSS `main` `5a1ee26dcf79f04cf29345a0403e3f3f8082358b` 的 Protocol Freeze v1；Mirage 文件歷史分支名 `docs/mir-sec-world-001-adr-v0.1`／**前置** Commit `003c918f142296588d2fe14b70fafe3cc5cf8458`。**前置 SHA 不是最新文件提交**，v0.1 分支名也不是 v0.2 版本權威；當前 SHA 需以 GitHub／`git rev-parse HEAD` 實查，文件版號、兩個 Source SHA、Git Commit、NOT_IMPLEMENTED、NOT_RUN 分開記錄。**Mirage main 尚未收錄此 ADR**。
 
-**既有版本差異**：Mirage upstream 固定 SHA 的 `start_send` 仍含 Generation/Profile Emergency 再查；MSDSS Freeze v1 則規定最終 `SEND_AUTHORIZED` COMMIT 後不二次查核。這是**待 Mirage Owner 採納的原生協定差異**，不是目前 upstream 已符合新要求的證明。
+**既有版本差異**：Mirage upstream 固定 SHA 的 `start_send` 仍含 Generation/Profile Emergency 再查；MSDSS Freeze v1 則規定最終 `SEND_AUTHORIZED` COMMIT 後不二次查核。**Mirage Owner 已採納 Freeze v1**，目前只有獨立分支在修補差異；上游 main 並未證明符合。
 
 **Restore 與 BD-11 安全預設**：同一 World DB 備份可倒退後續 Candidate Tombstone；錨點與 Quarantine 強制控制必須由還原範圍外的權威主體維持，缺失時持續禁用正式發送。鎖後 `decision_time` 不證明 COMMIT 早於期限；Owner／DBA／Security 未裁決（BD-11）前，若產品要求 commit-before-deadline 不得開啟正式發送。快照不可用才可阻擋已授權執行，**不得將 Purge Fence 作為第二次 Policy Revocation**。
 

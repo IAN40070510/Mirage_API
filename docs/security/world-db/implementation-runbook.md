@@ -1,6 +1,6 @@
 # MIR-SEC-WORLD-001 — 安全修補執行與驗收順序
 
-**狀態：IMPLEMENTATION PLANNING／尚未實作安全修補／正式發送不得開啟**。此文件供獨立修補分支追蹤，不是 PostgreSQL ACL、原生符合性或正式部署的 PASS 證據。
+**狀態：IMPLEMENTATION IN PROGRESS／World DB 權限修補尚未完成／正式發送不得開啟**。此文件供獨立修補分支追蹤，不是 PostgreSQL ACL、原生符合性或正式部署的 PASS 證據。
 
 ## 固定起點及證據
 
@@ -8,7 +8,7 @@
 - `trusted_http.create_app()` 對 Trusted Session Provider、Candidate、Admission、Registry、Audit／World 共用 `postgres_dsn`。
 - `TrustedSessionVerifier.verify()` 在簽章驗證後透過 `PostgresTrustedKeyRevocations.guard()` 與 `PostgresReplayStore.consume()` 操作**兩條獨立交易連線**；現況不具備 Replay＋Receipt 同交易。
 - `PostgresAdmissionControl.grant/claim/authorize_send/start_send/emergency_revoke` 直接對 `response_admissions`、`generation_controls` DML；`PostgresReplayStore.gc()` 直接 `DELETE replay_entries`。
-- 現有 `start_send()` 經 `_lock_admission(..., for_send=True)` 再讀 Generation/Profile Emergency；與 MSDSS Freeze v1 目標行為存在已觀察差異；**Owner 採納未經確認前不修改該語意**。
+- Mirage 固定上游版 `start_send()` 經 `_lock_admission(..., for_send=True)` 再讀 Generation/Profile Emergency；與 MSDSS Freeze v1 有局部差異。**2026-11-21 使用者已正式選定 Mirage 採納 Freeze v1**；獨立實作分支開始修正該差異，完整原生協定與安全驗收仍未通過。
 - 本工作使用獨立分支，不得合併 `main` 或變更 staging／production；文件紀錄、程式修補和真實資料庫驗收必須各自標示。
 
 ## 實作順序（每一步前後保留負面與正常路徑證據）
@@ -25,7 +25,7 @@
 
 ## 不得由工程師自行猜測的決策
 
-1. **Mirage Owner adoption／Protocol Freeze v1：PENDING。** MSDSS 已接受的目標協定，不代表 Mirage 已簽核；不能先移除原生 StartSend 的 Emergency 再查。
+1. **Mirage Owner adoption／Protocol Freeze v1：ACCEPTED（2026-11-21 使用者明確決策）。** `SEND_AUTHORIZED` 提交後不以 Policy／Emergency 做第二次授權；`StartSend` 保留 owner、deadline、single-use 與真實 Snapshot 執行前置條件。這只解除協定選擇阻塞，**不代表** DB 角色分離、Snapshot 完整性、未知 COMMIT 或原生端到端符合性已經驗證。
 2. **受信任 Verifier／Authorizer 的獨立身分與 DSN：使用者已同意方向。** 具體程序連線、介面 ACL 與部署服務來源仍需真實驗收；不得把兩個 Python 物件當成兩個信任域。
 3. **BD-05 Restore Anchor 發布協定／Retention／Quarantine release、BD-11 Deadline COMMIT 語意：OPEN。** 未核准前正式發送維持禁用。
 

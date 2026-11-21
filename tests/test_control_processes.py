@@ -56,8 +56,8 @@ def ordered_process_worker(dsn, action, payload, ready, results, start, release)
         results.put((os.getpid(), "error", type(error).__name__))
 
 
-def order_in_processes(dsn, first_action, second_action, payload):
-    """確認兩個不同 worker 與 backend PID 存活，實際看到第二交易被第一交易阻塞後依序提交。"""
+def order_in_processes(dsn, first_action, second_action, payload, expect_blocking=True):
+    """驗證獨立後端進程並依協定判斷第二交易應等待或可不依賴第一交易完成。"""
     import psycopg
 
     context = multiprocessing.get_context("spawn")
@@ -78,17 +78,19 @@ def order_in_processes(dsn, first_action, second_action, payload):
         first = ready.get(timeout=30)
         assert first[:2] == ("done", workers[0].pid), first
         starts[1].set()
-        with psycopg.connect(dsn, autocommit=True) as observer:
-            deadline = time.monotonic() + 15
-            while True:
-                blockers, = observer.execute("SELECT pg_blocking_pids(%s)", (backend[workers[1].pid],)).fetchone()
-                if backend[workers[0].pid] in blockers:
-                    break
-                assert all(worker.is_alive() for worker in workers) and time.monotonic() < deadline, "no actual lock wait"
-                time.sleep(0.02)
-        releases[0].set()
+        if expect_blocking:
+            with psycopg.connect(dsn, autocommit=True) as observer:
+                deadline = time.monotonic() + 15
+                while True:
+                    blockers, = observer.execute("SELECT pg_blocking_pids(%s)", (backend[workers[1].pid],)).fetchone()
+                    if backend[workers[0].pid] in blockers:
+                        break
+                    assert all(worker.is_alive() for worker in workers) and time.monotonic() < deadline, "no actual lock wait"
+                    time.sleep(0.02)
+            releases[0].set()
         second = ready.get(timeout=30)
         assert second[:2] == ("done", workers[1].pid), second
+        releases[0].set()
         releases[1].set()
         committed = [results.get(timeout=30) for _ in workers]
         assert {row[0] for row in committed} == set(backend)
@@ -139,7 +141,7 @@ def test_distinct_processes_order_grant_and_cutover(isolated_test_dsn, grant_fir
 @pytest.mark.parametrize("send_first", [True, False])
 @pytest.mark.parametrize("boundary", ["authorize_send", "start_send"])
 def test_distinct_processes_order_emergency_and_send_boundary(isolated_test_dsn, send_first, boundary):
-    """不同程序的緊急撤銷與授權／起送排序可查回；已起送僅保留真實回報終態，不假稱網路已送達。"""
+    """跨程序驗證緊急撤銷僅攔阻最終授權前狀態，已授權起送不重讀政策鎖。"""
     evidence, generation = projection_evidence(uuid4().hex * 2), uuid4().hex
     registry, control = PostgresProjectionRegistry(isolated_test_dsn), PostgresAdmissionControl(isolated_test_dsn)
     registry.register(evidence, registry_revision=1)
@@ -149,10 +151,12 @@ def test_distinct_processes_order_emergency_and_send_boundary(isolated_test_dsn,
         assert control.authorize_send(admission.admission_id, now=100) is AdmissionOperationResult.SUCCESS
     payload = dict(generation=generation, admission=admission.admission_id)
     actions = (boundary, "emergency") if send_first else ("emergency", boundary)
-    first, second = order_in_processes(isolated_test_dsn, *actions, payload)
-    assert (first if send_first else second) == ("SUCCESS" if send_first else "REJECTED")
+    first, second = order_in_processes(isolated_test_dsn, *actions, payload,
+        expect_blocking=(boundary == "authorize_send"))
+    assert (first if send_first else second) == (
+        "REJECTED" if boundary == "authorize_send" and not send_first else "SUCCESS")
     observer = PostgresAdmissionControl(isolated_test_dsn)
-    if boundary == "start_send" and send_first:
+    if boundary == "start_send":
         assert observer.state(admission.admission_id) is AdmissionState.SEND_STARTED
         assert observer.finish_send(admission.admission_id, owner="process-sender",
             outcome=AdmissionState.SEND_COMPLETED, attempted=True) is AdmissionOperationResult.SUCCESS
@@ -160,8 +164,11 @@ def test_distinct_processes_order_emergency_and_send_boundary(isolated_test_dsn,
     else:
         if send_first:
             assert observer.state(admission.admission_id) is AdmissionState.SEND_AUTHORIZED
-        assert observer.start_send(admission.admission_id, owner="process-sender", now=101) is AdmissionOperationResult.REJECTED
-        assert observer.state(admission.admission_id) is AdmissionState.ABANDONED
+            assert observer.start_send(admission.admission_id, owner="process-sender", now=101) is AdmissionOperationResult.SUCCESS
+            assert observer.state(admission.admission_id) is AdmissionState.SEND_STARTED
+        else:
+            assert observer.start_send(admission.admission_id, owner="process-sender", now=101) is AdmissionOperationResult.REJECTED
+            assert observer.state(admission.admission_id) is AdmissionState.ABANDONED
 
 
 @pytest.mark.parametrize("grant_first", [True, False])

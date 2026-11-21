@@ -13,7 +13,7 @@
 | 關聯驗收 | **MSDSS P2 — NO-GO**；P2 是 MSDSS 的驗收代號，不是 Mirage 的漏洞識別碼 |
 | Protocol baseline（MSDSS Freeze v1） | **ACCEPTED as MSDSS baseline**；MSDSS `main` `5a1ee26dcf79f04cf29345a0403e3f3f8082358b` 的 `docs/P2_SEND_AUTHORIZATION_FREEZE.md`；本欄**不是** Mirage Owner 簽核 |
 | Implementation baseline（Mirage source） | **固定原始碼分析 SHA**：Mirage upstream `main` `88dc2008fd35a2d3873949a769653dc9f18e8980`；正式 Owner 採納時須另外核准適用版本。文件前置 HEAD `003c918f142296588d2fe14b70fafe3cc5cf8458` 不是 Mirage source baseline |
-| Mirage Owner adoption | **PENDING**；尚未記錄 Mirage Owner 正式採納 MSDSS Freeze v1 的決策 |
+| Mirage Owner adoption | **ACCEPTED（2026-11-21）**；使用者已正式選擇授權一致性優先及採納 MSDSS Protocol Freeze v1，見 [D-68](../security/world-db/decisions-log.md)；**不代表**原生符合性或 DBA／Security 簽核 |
 | Mirage native conformance | **NOT_RUN**（`WORLD-PROTOCOL-MATRIX-01`／`WORLD-PROTOCOL-01`）；固定 `start_send()` 有**已觀察到的局部差異**，不得以該單點推論完整合約測試已執行或已有全域符合性結論 |
 | 來源 | 多輪安全審查及兩個不同 Repo/SHA 的唯讀核對；**非已實作／通過的安全驗證** |
 | 變更界線 | 文件提案；**不代表已修改 Runtime、資料庫 ACL、staging、金鑰或 production 開關** |
@@ -142,9 +142,11 @@ start_send_deadline = min(
 
 ## 6.5 v0.2 Contract Freeze：決定性受保護合約（其餘舊措辭不得抵觸）
 
-本節是 **Proposed／NOT_IMPLEMENTED** 的 v0.2 規範性內容，並以 MSDSS `main` `5a1ee26dcf79f04cf29345a0403e3f3f8082358b` 的 Protocol Freeze v1 為控制邊界。**不得**以 Mirage 上游 `main` `88dc2008fd35a2d3873949a769653dc9f18e8980` 的舊實作推定本合約已修復、已核准或已部署。**已觀察到來源差異**：該 Mirage 上游版 `postgres_admission.start_send()` 仍讀取 Generation/Profile Emergency；MSDSS Freeze v1 則將其移至最後的 `authorize_send()`，授權後不二次查核。正式移交前需 Mirage Owner 明確採納相容協定與對應原生修正／回歸，**不能只修改 ADR 就算兩邊同版**。
+本節是 **Proposed／整體安全修補 NOT_IMPLEMENTED** 的 v0.2 規範性內容，並以 MSDSS `main` `5a1ee26dcf79f04cf29345a0403e3f3f8082358b` 的 Protocol Freeze v1 為控制邊界。**不得**以 Mirage 上游 `main` `88dc2008fd35a2d3873949a769653dc9f18e8980` 的舊實作推定本合約已修復、已核准或已部署。**已觀察到來源差異**：該 Mirage 上游版 `postgres_admission.start_send()` 仍讀取 Generation/Profile Emergency；MSDSS Freeze v1 則將其移至最後的 `authorize_send()`，授權後不二次查核。Mirage Owner 已於 2026-11-21 正式採納此目標（D-68）；原生修正及完整安全回歸尚需獨立驗證，**不能只修改 ADR 就算兩邊同版**。
 
 ### 6.5.1 Policy、Revocation、Deadlines 和 Send Freeze
+
+**採納更新（D-68，2026-11-21）**：上述「需 Mirage Owner 明確採納」的前提現已由使用者正式決定；原始 upstream 差異仍是歷史證據，獨立實作分支已開始修補。以下 MUST 為目標契約，**原生符合性與 DB 權限安全驗收仍未核准／尚未完成**。
 
 1. **MUST**：`CLAIMED → SEND_AUTHORIZED` 的 **DB COMMIT** 是唯一授權線性化點；Policy／Emergency／Epoch／Generation／Key 撤銷先提交則拒絕之後的授權，授權先提交則**不得回溯撤銷**。如需授權後撤銷，須正式升版 **Protocol Freeze v2** 並另跑競態驗收。
 2. **MUST**：Policy Authority 由獨立受保護控制者管理 `ACTIVE`、`NO_NEW_GRANTS`、`REVOKED`；NO_NEW_GRANTS 禁止**新** Grant，舊有效 Grant 在其他條件符合下仍可取得 Send Authorization；REVOKED 禁新 Grant 及尚未提交的 Authorize。`REVOKED` 不可改回 ACTIVE，恢復必須新 Revision；Candidate Validation 只記錄 Revision，不代表已授權。
@@ -299,7 +301,7 @@ start_send_deadline = min(
 - Replay+Receipt 必須同一 PostgreSQL database、同一 physical connection、同一 IngressTx；Grant 的 Binding+Admission 同交易；已綁 Receipt 不可重用於其他 Candidate。鎖循環檢查、Epoch/Key rotation/revocation 的並行勝負、期限跨鎖等待及 Envelope mismatch 實測。
 - 未知 COMMIT、World 成功但 Admission 失敗、SEND_STARTED 之後失聯、GC／Restore Quarantine、Schema／ACL 不相容與故障恢復實測。
 - Mirage 固定來源 `start_send()` 與 MSDSS Freeze v1 的**差異分析**、Mirage Owner 正式採納紀錄及 `WORLD-PROTOCOL-01/02`；未修改 Mirage 原生實作前不得宣稱 conformant。
-- `WORLD-PROTOCOL-MATRIX-01` 分三份證據測試：**MSDSS Protocol baseline ACCEPTED／Mirage Owner adoption PENDING／Mirage native conformance NOT_RUN**。Native 符合性須逐項查 `SEND_AUTHORIZED` COMMIT 線性化、前後 Policy/Emergency、owner、deadline、single-use、Snapshot/ASGI bytes、未知 COMMIT 與 HTTP 結果分類；`start_send()` 只是一個已觀察差異，不是整套測試的判決。
+- `WORLD-PROTOCOL-MATRIX-01` 分三份證據測試：**MSDSS Protocol baseline ACCEPTED／Mirage Owner adoption ACCEPTED（2026-11-21，D-68）／Mirage native conformance NOT_RUN**。Native 符合性須逐項查 `SEND_AUTHORIZED` COMMIT 線性化、前後 Policy/Emergency、owner、deadline、single-use、Snapshot/ASGI bytes、未知 COMMIT 與 HTTP 結果分類；`start_send()` 修補只是一個切面，不是整套測試的判決。
 - World DB 舊備份不含後續 Candidate Tombstone 時，以**還原範圍外**之受保護錨點攔截舊身分復活；Anchor 不可讀／不可驗時持續 Quarantine（`WORLD-RESTORE-TOMBSTONE-01`）。
 - `WORLD-RESTORE-FENCE-01` 使用過期／重播／未涵蓋後續 Candidate Tombstone、Binding、Operation 的錨點；`WORLD-RESTORE-PUBLISH-01` 獨立測 DB-first／Anchor-first 故障；`WORLD-PURGE-BOUNDARY-01` 驗證 Snapshot eligibility 與 Admission authorization 互不覆寫；`WORLD-SNAPSHOT-SEPARATION-01` 測底層共用 Blob 的 Pin/GC；`WORLD-PURGE-RETRY-01` 測 Fence 已提交但 GC 失敗。全部未實作前維持 NOT_RUN。
 - 失效**可由系統偵測**者立即 Fail-Closed；Secret 外洩、容器掛載錯誤、主機權限遭侵害等**需監控／人工判定**者應停止正式發送、撤銷／輪替憑證、隔離、保留證據，不可謊稱應用能自動證明未外洩。
@@ -332,11 +334,11 @@ start_send_deadline = min(
 | BD-09 | Candidate Validator 的可信身分／政策來源、長耗時驗證的交易外證據、短 PromotionTx 與 Revision 撤銷／升級規則 | Mirage Owner＋Security＋DBA | OPEN |
 | BD-10 | 正式發送 DISABLED 的實際控制面、Runtime 權限、Restore 後不可倒退的隔離機制 | Release Approver＋Security＋Operations | OPEN |
 | BD-11 | `decision_time` 有效但 `SEND_AUTHORIZED` COMMIT 晚於 deadline 的政策；可驗證 DB 時鐘下界、可接受交易延遲與判斷點，**不得默默改 Freeze v1**。未定案：僅允許鎖後單一 DB `decision_time` 邏輯判定，**不宣稱** COMMIT-before-deadline；若產品必須保證後者，正式發送保持禁用；未知 Commit 不得開始新傳輸，已實際提交的授權不回溯改寫 | Mirage Owner＋Security＋DBA | **OPEN — 預設 Fail-Closed／no production send** |
-| BD-12 | Mirage Owner 是否正式採納 MSDSS Freeze v1 以及對應原生 `start_send()` 相容修正／回歸；現行差異不能只靠改 ADR 消除 | Mirage Owner＋Security＋MSDSS Contract Owner | **OPEN — Mirage native 未採納／完整驗收 NOT_RUN** |
+| BD-12 | Mirage Owner 是否正式採納 MSDSS Freeze v1 以及對應原生 `start_send()` 相容修正／回歸；現行差異不能只靠改 ADR 消除 | Mirage Owner＋Security＋MSDSS Contract Owner | **Owner 採納已決（D-68）；原生修正、Security 相容審查與完整驗收仍 OPEN／NOT_RUN** |
 
 **關閉條件**：上述政策決策經審查、部署／密鑰邊界經驗證、負面與正向真實 PG 測試及恢復證據完整、Owner/Security/Release 核准；之後才能考慮將 `MIR-SEC-WORLD-001` 由 OPEN 轉為已修復。PR 合併、CI 綠燈或沒有外部攻擊回報**均不足以關閉**。
 
-**維持**：`Architecture: Proposed | MSDSS Freeze v1 Protocol baseline: ACCEPTED in MSDSS | Mirage Owner adoption: PENDING | Mirage native conformance: NOT_RUN (known isolated source discrepancy) | MIR-SEC-WORLD-001: OPEN | World DB authority remediation: NOT_IMPLEMENTED | New security acceptance: NOT_RUN | MSDSS P2: NO-GO | Production DECEIVE: OFF (policy requirement; enforcement evidence pending)`。
+**維持**：`Architecture: Proposed | MSDSS Freeze v1 Protocol baseline: ACCEPTED in MSDSS | Mirage Owner adoption: ACCEPTED (D-68, 2026-11-21) | Mirage native conformance: NOT_RUN | MIR-SEC-WORLD-001: OPEN | World DB authority remediation: NOT_IMPLEMENTED | New security acceptance: NOT_RUN | MSDSS P2: NO-GO | Production DECEIVE: OFF (policy requirement; enforcement evidence pending)`。
 
 ## 11. 文件及版本追溯
 

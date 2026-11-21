@@ -97,6 +97,7 @@
 | D-65 | Restore Anchor 與 World DB 不具天然原子提交，必須覆蓋 **DB-first／Anchor-first** 兩種錯誤次序及未知 ACK | DB committed／Anchor missing → Quarantine；Anchor PREPARED／DB rollback 不構成業務提交；獨立最高可信 Head 不回退，Operation Digest 對帳；BD-05 OPEN，`WORLD-RESTORE-PUBLISH-01` NOT_RUN |
 | D-66 | `AuthorizedSnapshotPurgeFence` 已提交但 Object GC 失敗時只重試 cleanup，**永不恢復 eligibility** | 用固定 `gc_operation_id` 冪等清除／受控介入，保留原 ACL、Audit、Tombstone；不得產生替代 Snapshot／Admission；`WORLD-PURGE-RETRY-01` NOT_RUN |
 | D-67 | 安全測試結果必須經 `NOT_RUN → RUNNING → PASS/FAIL/BLOCKED`，阻塞解除／修復失敗後只能重跑；PASS 綁定不可變實測證據 | 固定 Mirage SHA、Migration/Schema、PG 版、Role、資料集、時間、Fault Injection 與脫敏日誌；文件檢查 PASS 不轉成 `WORLD-*` PASS；`WORLD-SNAPSHOT-SEPARATION-01`、`WORLD-RESTORE-PUBLISH-01`、`WORLD-PURGE-RETRY-01` 全部 NOT_RUN |
+| D-68 | **2026-11-21 使用者正式決定：Mirage 採納 MSDSS Protocol Freeze v1，授權一致性優先。** `SEND_AUTHORIZED` COMMIT 是唯一授權線性化點；`StartSend` 不以後續 Policy／Emergency 變動作第二次授權，但必須核對可信 owner、期限、single-use 與 Snapshot 執行前置條件 | 只更新 **Mirage Owner adoption=ACCEPTED**；Mirage native conformance 與 World DB authority remediation 仍分別為 **NOT_RUN／NOT_IMPLEMENTED**。本次只在獨立修補分支改原生行為與回歸，不修改 Mirage `main`、staging 或 production send 設定 |
 
 **版本與責任**：Mirage_API 原生分析 `main` `88dc2008fd35a2d3873949a769653dc9f18e8980`；MSDSS Protocol Freeze v1 整合基準 `main` `5a1ee26dcf79f04cf29345a0403e3f3f8082358b`；此組文件由 Mirage `docs/mir-sec-world-001-adr-v0.1` 的 v0.2 草稿舊提交 `003c918f142296588d2fe14b70fafe3cc5cf8458` 延續。**該 SHA 只是來源歷史，不是當前 ADR Commit**；後者與文件檢查結果須由 Draft PR／`git rev-parse HEAD` 的外部證據留存，不能在自身追蹤檔案內寫入自身 Commit SHA。全部新增安全驗收 **NOT_RUN**。
 
