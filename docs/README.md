@@ -10,6 +10,8 @@
 
 安全架構提案（**尚未實作／尚未驗收**）：[MIR-SEC-WORLD-001 World DB 信任邊界 ADR v0.2](adr/MIR-SEC-WORLD-001-world-db-trust-boundary.md)；[決策歷史、權威證據、交易鎖與負面測試索引](security/world-db/README.md)。狀態：Architecture Proposed／Weakness OPEN／MSDSS P2 NO-GO。
 
+**ADR 三層證據狀態**：MSDSS Freeze v1 baseline **ACCEPTED**、Mirage Owner adoption **PENDING**、Mirage native conformance **NOT_RUN**；新增 `WORLD-PROTOCOL-MATRIX-01`、`WORLD-RESTORE-FENCE-01`、`WORLD-PURGE-BOUNDARY-01` 仍為設計中的驗收，完整內容見 [World DB 驗收計畫](security/world-db/verification-plan.md)，並非已通過測試。
+
 | 工具／介面 | 程式位置 | 說明文件 |
 | --- | --- | --- |
 | 獨立 HTTPX 請求摘要 | `src/deception/api/fingerprint.py` | [不依賴外部 Gateway 的客戶端摘要](trusted-session.md#獨立客戶端的請求摘要) |
