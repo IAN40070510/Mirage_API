@@ -28,6 +28,8 @@
 | [修補執行與驗收順序](implementation-runbook.md) | 固定原生缺口、獨立角色與交易分段、G0–G6 Gate、待 Owner 採納決策與證據規則；目前尚未實作／驗收 | 6 |
 | [Oracle 隔離權限驗收 Lab](isolated-oracle-lab.md) | 新建 Internal Network、專用 PostgreSQL、Verifier／Authorizer SCRAM Role Probes；不是正式服務或 G1/G2 完整通過證據 | 7 |
 
+| [Trusted HTTP 延遲初步診斷](http-latency-baseline.md) | 隔離 PostgreSQL 連線重用對照數據、HTTP 待測分段與安全優化邊界；端到端測試尚未執行 | 8 |
+
 ## 交接原則
 
 1. 此文件以 Mirage 上游 `main` commit `88dc2008fd35a2d3873949a769653dc9f18e8980` 作**唯讀分析基準**，未來 source drift 必須更新證據。
