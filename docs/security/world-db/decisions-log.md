@@ -73,11 +73,23 @@
 | D-51 | ADR 版本、歷史分支名、兩份 Source SHA、當前文件 Commit、實作與新驗收狀態**分欄追溯** | 同一追蹤 Markdown 無法可靠內嵌自己的 HEAD SHA（寫入會改變 Commit）；實際 Document Commit／文件檢查結果由 Git/PR 外部證據提供 |
 | D-52 | 區分鎖後 DB `decision_time` 與最後 `SEND_AUTHORIZED` COMMIT，並保留跨 Deadline 延遲與 DB 時鐘回撥的 Owner 決策 | `decision_time < deadline` 只證明判定當下合法；不能推出 COMMIT 必然在期限前。StartSend 仍按 Freeze v1 的 transmission deadline，不能自行引入第二授權 |
 
+### v0.2 協定與證據狀態補錄（D-53～D-57；仍為 Proposed）
+
+| ID | 具體修正 | 證據／限制 |
+| --- | --- | --- |
+| D-53 | MSDSS Freeze v1 已是 MSDSS 目標基準；**Mirage Owner 未採納**且其固定 upstream `start_send()` 仍有已觀察到的二次 Emergency 差異 | `WORLD-PROTOCOL-01`／`WORLD-PROTOCOL-02` 需原生實作＋並行符合性測試；不能因文件對齊宣稱已 conformant |
+| D-54 | Restore／Purge 的非復活證明必須錨定於 World DB **還原範圍外**、不可由 Runtime 改寫或同時倒退的控制面／Ledger／單調 checkpoint | 只驗還原庫內 Tombstone 存在、備份內表一致或自填 timestamp 不足；錨點缺失／不可驗持續 Quarantine；`WORLD-RESTORE-TOMBSTONE-01` NOT_RUN；實際選型 BD-05 OPEN |
+| D-55 | BD-11 未核准前固定鎖後單一 DB decision_time／未知 Commit 停止新起送／無法判定權威時間即 Fail-Closed | 不宣稱 commit-before-deadline；產品若要求 Commit 先於期限則保持正式發送關閉。已 COMMIT 的授權不回溯改成 rollback；Policy Race 仍須採納 Freeze v1 |
+| D-56 | 文件／ID／遠端檔案一致性可 PASS 但安全驗收仍 NOT_RUN；`WORLD-RECOVERY-03` 為群組，A～F 需每一子案具 Given／Action／Expected | 靜態檢查不能代替 native conformance、PG ACL、GC、Restore、Commit Loss 的 runtime／DB 證明 |
+| D-57 | Snapshot Purge Fence 僅限事實上不可安全執行／清理的受保護狀態，禁止將其變成 Freeze v1 授權後的任意 Policy Revocation 入口 | `WORLD-PROTOCOL-02` 驗證已授權但 Snapshot 完整時，不因新 Policy／Emergency 或偽造 Fence 而作第二授權 |
+
 **版本與責任**：Mirage_API 原生分析 `main` `88dc2008fd35a2d3873949a769653dc9f18e8980`；MSDSS Protocol Freeze v1 整合基準 `main` `5a1ee26dcf79f04cf29345a0403e3f3f8082358b`；此組文件由 Mirage `docs/mir-sec-world-001-adr-v0.1` 的 v0.2 草稿舊提交 `003c918f142296588d2fe14b70fafe3cc5cf8458` 延續。**該 SHA 只是來源歷史，不是當前 ADR Commit**；後者與文件檢查結果須由 Draft PR／`git rev-parse HEAD` 的外部證據留存，不能在自身追蹤檔案內寫入自身 Commit SHA。全部新增安全驗收 **NOT_RUN**。
 
-### v0.2 新增／修訂測試 ID 交接清單（22 項，全部 NOT_RUN）
+### v0.2 新增／修訂測試 ID 交接清單（31 項，其中 1 項為群組索引；全部 NOT_RUN）
 
 `WORLD-IDENTITY-01`、`WORLD-OPERATION-01`、`WORLD-OPERATION-02`、`WORLD-OPERATION-03`、`WORLD-POLICY-01`、`WORLD-POLICY-02`、`WORLD-PAYLOAD-01`、`WORLD-PAYLOAD-02`、`WORLD-PAYLOAD-03`、`WORLD-SNAPSHOT-01`、`WORLD-SNAPSHOT-ACL-01`、`WORLD-LIFECYCLE-01`、`WORLD-LIFECYCLE-02`、`WORLD-LIFECYCLE-03`、`WORLD-PURGE-01`、`WORLD-TIME-01`、`WORLD-LOCK-01`、`WORLD-COMPAT-01`、`WORLD-RECOVERY-03`、`WORLD-RECOVERY-04`、`WORLD-RESTORE-OP-01`、`WORLD-AUDIT-02`。
+
+本輪追加 `WORLD-PROTOCOL-01`、`WORLD-PROTOCOL-02`、`WORLD-RESTORE-TOMBSTONE-01`，以及 `WORLD-RECOVERY-03A`、`WORLD-RECOVERY-03B`、`WORLD-RECOVERY-03C`、`WORLD-RECOVERY-03D`、`WORLD-RECOVERY-03E`、`WORLD-RECOVERY-03F`。**父 ID `WORLD-RECOVERY-03` 不可作獨立 JUnit PASS**；子案必須各自滿足 Verification Plan 的 Given／Action／Expected。
 
 完整預期與 Scenario 以 [Verification Plan](verification-plan.md) 各唯一 ID 為準；ADR／Decision Log／Plan 的 ID 與狀態必須同步，這裡沒有 PASS 證據。`WORLD_COMMITTED_ADMISSION_UNAVAILABLE` 仍是 reconciliation classification，非 State enum。
 
