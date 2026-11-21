@@ -27,6 +27,17 @@
 
 **G2 子切面（本輪待 CI 驗證）**：`TrustedSessionVerifier` 配合 `PostgresTrustedKeyRevocations.consume_guarded_replay` 與 `PostgresReplayStore._consume_on_cursor`，使**現有 Key Revocation Guard＋Replay JTI INSERT** 在同一 PostgreSQL connection／READ COMMITTED transaction 執行。不同 DSN 或非 PostgreSQL Replay Store 拒絕；新增真實 PostgreSQL 的單連線、INSERT 後 rollback、COMMIT ACK loss 負面案例。這**尚未涵蓋 Ingress Receipt、由可信 Verifier 獨立寫入的證據、Operation ID 對帳或正式 Role ACL**。G2 仍為 `NOT_RUN`；正式入口 Release Fuse 不變。
 
+**2026-11-21 G2 Ingress Receipt 原子性子驗收（獨立 Candidate Clean Cutover 分支）**：新增 `migrations/017_trusted_ingress_receipts.sql`、`PostgresIngressReceiptWriter` 及 `TrustedSessionVerifier.verify_with_receipt()`；在同一 Key Guard／Replay 交易中寫入 Receipt，任何 Receipt Writer 失敗必須連同 Replay 回滾。這不是對舊 `verify()` 的可信度升級；舊路徑僅保留測試相容，正式發送 Release Fuse 不變。
+
+- 真實 PostgreSQL `17.6-alpine`：專用 Oracle `mir-sec-world001-lab`、一次性新 Schema、無 published ports；單次探針來源為獨立工作區，不改原三個 Compose 或七個 staging 容器。
+- 正向／負向交易：首次 Job `job_01M7Y53Q2Z00JEZQGMRNGM0JFM` 因測試容器不可讀 `0600` 密碼檔而失敗；僅限一次性受控測試容器加入原 Lab Bootstrap 同樣的 `CAP_DAC_READ_SEARCH` 後，**成功 Job `job_01M7Y557CH005E073KWZAZKYZV`** 實際輸出 `LAB_RECEIPT_TX_PROBE_OK normal=atomic replay=denied explicit_rollback=atomic`。成功測試於一次性新 schema 執行，測後只刪除此 schema；不觸及其他資料庫或容器。
+- 實體 Role／DB ACL 子測試：**Verifier SCRAM Job `job_01M7Y55P9K00HH03PJ2PY6PPKJ`** 輸出 `LAB_RECEIPT_SCHEMA_PROBE_OK orphan=23503 role_denial=42501 pair_rollback=atomic`；**Runtime SCRAM Job `job_01M7Y566SY00CRARMGPRDJX3D6`** 輸出 `LAB_RECEIPT_SCHEMA_PROBE_OK role=runtime direct_dml=42501`。它們驗證專用 Lab ACL 與 FK，不是正式產品角色已部署的證據。
+- **追加資料庫時間負面驗收**：對 Key Lock 後重新讀取 `clock_timestamp()` 的版本，隔離 PG 17.6 Job `job_01M7Y5BR5R00F2165DB6PQEG3R` 輸出 `LAB_RECEIPT_TX_PROBE_OK normal=atomic replay=denied explicit_rollback=atomic db_time=denied`；故意將 Python 驗證時間倒退 120 秒、送出過期簽章，資料庫拒絕且無消費 JTI。測試來源封存 SHA-256 `a4b690403ce02c470a338db670b7cf7b6b95c8da1d6af89b58799f10323a332a`，測完只移除獨立探針 Schema。
+- **新增真實受限 Verifier 正向／負向整合**：以 `mir_sec_verifier` 的獨立 SCRAM Secret 在專用拋棄式 Schema 僅授予 Replay／Receipt 所需 `SELECT/INSERT`；Job `job_01M7Y5F5QP00RTD093B4WMH7N4` 回報 `LAB_VERIFIER_RECEIPT_ROLE_OK scram=verifier receipt=inserted replay=inserted protected_dml=42501 set_role=42501`。同一角色可成功驗章後消費並存 Receipt，不能 `UPDATE response_admissions`、`DELETE ingress_receipts`、`UPDATE generation_controls` 或 `SET ROLE mir_sec_authorizer`。來源封存 SHA-256 `efb24a9503c2282249f6cc322bc5e9598fe8f1e0253c6c54ac69a64faa6b679c`。
+- **範圍限制**：交易探針使用隔離 Lab schema owner 進行正向功能測試，實體 Verifier/Runtime ACL 負面測試另以 SCRAM 角色分別執行。尚未證明正式 Verifier 程序不可由 Runtime 取得憑證、跨服務 IPC、Receipt 與 Grant 的一次性 Binding、Unknown COMMIT 對帳、Snapshot／Restore 或傳輸；G2 整體 `NOT_RUN`，G3–G6 仍 `NOT_RUN`。
+
+**G3 Candidate Clean Cutover（D-70）**：使用者已選定淘汰舊的可信 `candidate_records → grant()` 路徑，保留三類業務 Candidate 生成器。切換時必須先提供可信 Submission／Validation／Promotion、一次性 Receipt→Candidate→Admission Binding 及獨立 Authorized Snapshot，再撤銷舊 Runtime DML／Grant 能力；不存在「新流程故障改用舊 `put()`／`grant()`」的回退選項。驗收必須同時證明 **(a)** 舊路徑與 Runtime 直接 SQL 不能建立有效 `SEND_AUTHORIZED`，**(b)** 新角色及正常商品／Cart／Medusa 路徑不退化，**(c)** Candidate GC 不刪已授權 Snapshot，**(d)** unknown COMMIT 與 Restore fail-closed。G3/G4/G5 仍 **NOT_RUN**；在完整證據前只允許獨立分支與隔離 DB，正式發送仍禁用。
+
 ## 不得由工程師自行猜測的決策
 
 1. **Mirage Owner adoption／Protocol Freeze v1：ACCEPTED（2026-11-21 使用者明確決策）。** `SEND_AUTHORIZED` 提交後不以 Policy／Emergency 做第二次授權；`StartSend` 保留 owner、deadline、single-use 與真實 Snapshot 執行前置條件。這只解除協定選擇阻塞，**不代表** DB 角色分離、Snapshot 完整性、未知 COMMIT 或原生端到端符合性已經驗證。

@@ -10,7 +10,7 @@
 
 安全架構提案（**尚未實作／尚未驗收**）：[MIR-SEC-WORLD-001 World DB 信任邊界 ADR v0.2](adr/MIR-SEC-WORLD-001-world-db-trust-boundary.md)；[決策歷史、權威證據、交易鎖與負面測試索引](security/world-db/README.md)。狀態：Architecture Proposed／Weakness OPEN／MSDSS P2 NO-GO。
 
-**ADR 三層證據狀態**：MSDSS Freeze v1 baseline **ACCEPTED**、Mirage Owner adoption **PENDING**、Mirage native conformance **NOT_RUN**；新增 `WORLD-PROTOCOL-MATRIX-01`、`WORLD-RESTORE-FENCE-01`、`WORLD-PURGE-BOUNDARY-01` 仍為設計中的驗收，完整內容見 [World DB 驗收計畫](security/world-db/verification-plan.md)，並非已通過測試。
+**ADR 三層證據狀態**：MSDSS Freeze v1 baseline **ACCEPTED**、Mirage Owner adoption **ACCEPTED（D-68）**、Mirage native conformance **NOT_RUN**；新增 `WORLD-PROTOCOL-MATRIX-01`、`WORLD-RESTORE-FENCE-01`、`WORLD-PURGE-BOUNDARY-01` 仍為設計中的驗收，完整內容見 [World DB 驗收計畫](security/world-db/verification-plan.md)，並非已通過測試。
 
 | 工具／介面 | 程式位置 | 說明文件 |
 | --- | --- | --- |
@@ -21,6 +21,7 @@
 | JWS 固定拒絕碼與簽發向量 | `tests/fixtures/golden_vectors/trusted_session_errors.json`、`sign_trusted_errors.mjs` | [格式、clock、撤銷及 Replay 邊界](trusted-session.md) |
 | 固定安全錯誤 Renderer | `src/deception/core/security_error.py` | [獨立模板、精確封套與請求綁定](security-errors.md) |
 | 可信簽章金鑰撤銷 | `src/deception/security/key_revocation.py`、`migrations/014_trusted_key_revocations.sql` | [永久墓碑、Replay 排序與輪替](key-revocation.md) |
+| 可信 Ingress Receipt 交易子切面 | `src/deception/security/ingress_receipt.py`、`migrations/017_trusted_ingress_receipts.sql`、`deploy/security-lab/receipt_atomic_probe.py`、`verifier_receipt_role_probe.py` | [JWS／Key Guard／Replay／Receipt 單交易與 Verifier 角色驗收界線](ingress-receipt.md) |
 | World DB 隔離權限驗收 Lab | `deploy/security-lab/compose.yaml`、`provision.py`、`probe.py`、`atomic_ingress_probe.py` | [單機獨立 Docker 網路、SCRAM Role、SQLSTATE 42501 及同交易 Replay 實測](security/world-db/isolated-oracle-lab.md) |
 | 可信入口拒絕稽核 | `src/deception/security/ingress_audit.py`、`migrations/013_ingress_refusal_audit.sql` | [固定分類、資料最小化與故障處理](ingress-audit.md) |
 | Profile 整體撤銷 | `src/deception/world/projection_registry.py`、`admission.py`、`postgres_admission.py` | [一般／緊急墓碑、控制邊界與驗證](profile-revocation.md) |

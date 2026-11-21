@@ -81,19 +81,57 @@ class PostgresTrustedKeyRevocations:
         不接受分離的 Replay DSN 或其他儲存實作，以免呼叫端誤以為跨連線已
         原子提交。傳回 (revocation, replay_result)，遭撤銷時不寫入 Replay。
         """
+        revoked, result, _ = self._consume_guarded(replay_store, issuer=issuer, kid=kid,
+            audience=audience, jti=jti, expires_at=expires_at, now=now)
+        return revoked, result
+
+    def consume_guarded_receipt(self, replay_store, receipt_writer, *, claims, kid: str,
+                                expires_at: int, now: int, max_clock_skew: int):
+        """單一 Key Guard／Replay／Receipt 交易；任一 INSERT 失敗則整筆回滾。
+
+        這只供可信 Verifier 程序於驗章後呼叫。Receipt writer／Replay／Key Guard
+        必須共享一個 DSN 與實體交易；不允許在不同資料庫分段宣稱原子性。
+        """
+        return self._consume_guarded(replay_store, issuer=claims.iss, kid=kid,
+            audience=claims.aud, jti=claims.jti, expires_at=expires_at, now=now,
+            receipt_writer=receipt_writer, claims=claims, max_clock_skew=max_clock_skew)
+
+    def _consume_guarded(self, replay_store, *, issuer: str, kid: str, audience: str,
+                         jti: str, expires_at: int, now: int, receipt_writer=None, claims=None,
+                         max_clock_skew: int | None = None):
+        """由一個 Coordinator 負責 Lock、Replay、Receipt 的提交與回滾。"""
         from deception.world.postgres_replay import PostgresReplayStore
+        from deception.world.replay import ReplayConsumeResult
+        from .ingress_receipt import PostgresIngressReceiptWriter
 
         if not isinstance(replay_store, PostgresReplayStore) or replay_store._dsn != self._dsn:
             raise KeyRevocationError("ingress_requires_same_postgres_connection_domain")
+        if receipt_writer is not None and (not isinstance(receipt_writer, PostgresIngressReceiptWriter)
+                                            or receipt_writer._dsn != self._dsn or claims is None
+                                            or type(max_clock_skew) is not int
+                                            or not 0 <= max_clock_skew <= 30):
+            raise KeyRevocationError("ingress_receipt_requires_same_postgres_connection_domain")
         with self._connection() as connection:
             with connection.cursor() as cursor:
                 self._lock(cursor, issuer, kid)
                 revoked = self._select(cursor, issuer, kid)
                 if revoked is not None:
-                    return revoked, None
+                    return revoked, None, None
+                if receipt_writer is not None:
+                    # Lock 等待後以 PG 權威時鐘重新檢查；鎖前 Python 時鐘不可當
+                    # 作 Receipt 寫入時刻的保證，否則過期 JWS 可能取得可信證據。
+                    cursor.execute("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
+                    db_now = cursor.fetchone()[0]
+                    if (claims.iat > db_now + max_clock_skew
+                            or claims.nbf > db_now + max_clock_skew
+                            or claims.exp <= db_now - max_clock_skew):
+                        raise KeyRevocationError("ingress_receipt_db_time_invalid")
                 result = replay_store._consume_on_cursor(cursor, issuer=issuer, audience=audience,
                                                           jti=jti, expires_at=expires_at, now=now)
-                return None, result
+                receipt_id = None
+                if result is ReplayConsumeResult.ACCEPTED and receipt_writer is not None:
+                    receipt_id = receipt_writer._write_on_cursor(cursor, claims=claims, kid=kid)
+                return None, result, receipt_id
 
     def revocation(self, issuer: str, kid: str) -> KeyRevocation | None:
         """以新交易查目前永久墓碑，未知提交結果只查回，不盲目重做撤銷。"""

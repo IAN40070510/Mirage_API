@@ -15,6 +15,7 @@
 | Implementation baseline（Mirage source） | **固定原始碼分析 SHA**：Mirage upstream `main` `88dc2008fd35a2d3873949a769653dc9f18e8980`；正式 Owner 採納時須另外核准適用版本。文件前置 HEAD `003c918f142296588d2fe14b70fafe3cc5cf8458` 不是 Mirage source baseline |
 | Mirage Owner adoption | **ACCEPTED（2026-11-21）**；使用者已正式選擇授權一致性優先及採納 MSDSS Protocol Freeze v1，見 [D-68](../security/world-db/decisions-log.md)；**不代表**原生符合性或 DBA／Security 簽核 |
 | G1 Verifier／Authorizer 部署隔離選擇 | **同機獨立容器／OS 身分（D-69，2026-11-21）**；每服務不同 SCRAM DB Role／Secret／DSN，禁止共池或 Runtime `SET ROLE`；仍須實測與部署簽核，R5 主機控制不涵蓋 |
+| Candidate 授權遷移策略 | **Clean Cutover（D-70，2026-11-21）**；保留原生 Candidate 生成器，但舊的 `candidate_records → grant()` 不得作為正式可信發送的授權入口；新路徑尚未完成，**NOT_IMPLEMENTED** |
 | Mirage native conformance | **NOT_RUN**（`WORLD-PROTOCOL-MATRIX-01`／`WORLD-PROTOCOL-01`）；固定 `start_send()` 有**已觀察到的局部差異**，不得以該單點推論完整合約測試已執行或已有全域符合性結論 |
 | 來源 | 多輪安全審查及兩個不同 Repo/SHA 的唯讀核對；**非已實作／通過的安全驗證** |
 | 變更界線 | 文件提案；**不代表已修改 Runtime、資料庫 ACL、staging、金鑰或 production 開關** |
@@ -175,6 +176,14 @@ start_send_deadline = min(
 此表是待實作的**故障合約**，不是宣稱已解決跨 DB／Anchor 的原子性；可行發布協定與 release certificate 仍是 BD-05 OPEN。
 
 ### 6.5.3 Candidate／Snapshot Write-Once、合法狀態與 Purge
+
+**Clean Cutover 決策（D-70，已由使用者選定實作方向；仍待原生驗收）**：
+
+- **保留** `getProduct`、合成 Cart／Inventory、Medusa 的 Candidate 生成、Gate 與 Envelope v1 封裝；不讓新授權改造不必要地重寫業務生成器。
+- **停止信任** `trusted_http.admitted()` 現有的 `PostgresCandidateStore.put()` 後直接呼叫 `PostgresAdmissionControl.grant()` 的兩次獨立交易組合。舊 `candidate_records` 只允許受控讀取、對帳或遷移，不得因 ref/hash 已存在就提供新的 `SEND_AUTHORIZED`；既有資料不自動升格為可信版本。
+- **唯一新入口** 必須先取得由受保護 Validator／Promotion 固定的完整 Scope、不可變版本、Envelope bytes/hash、Projection/Policy 證據；`GrantTx` 在同一資料庫交易中核對可信 Ingress Receipt、一次性 Binding 與受保護 Candidate，再產生 Admission 並綁定**獨立 Authorized Snapshot**。`StartSend` 只能依受保護 Snapshot，而非舊 Candidate 原始 Payload 起送。
+- **禁止降級**：Promotion／Receipt／Binding／Snapshot 任何一項不存在、衝突或不可驗時拒絕；不得設定 `legacy=true`、環境開關、重試舊 `grant()` 或修改 Runtime 的資料表來繞過。舊有記憶體 CandidateStore 測試不構成新可信路徑的授權證據。
+- **切換原則**：不在沒有新路徑的狀態下刪除共用 Generator 介面；先實作新 schema、角色 ACL、交易狀態與 Transmission，再以真實低權限 PG、並行與故障注入證明舊路徑被拒且新流程正常。正式發送持續禁用；Snapshot／Restore 與 External Side Effect 的未決條件不可被 Cutover 遮蔽。
 
 10. **MUST**：明確分離 `CandidateEvidence`（完整 Scope、candidate_ref/version、Envelope hash、Policy／Source／Validation）、`CandidatePayload`（BYTEA 或固定 object id/version/hash 與 purge state）、`GrantBinding`、`SnapshotProposal`、`OperationSnapshotBinding`、`AuthorizedSnapshot`、`PayloadPurgeTombstone`；允許等價受保護模型而不強制每個名稱都需獨立資料表。**擬議完整 Candidate Version Identity** 為 `(environment_id, deployment_id, session_id, world_generation_id, candidate_ref, candidate_version)`；`GrantBinding`／Snapshot／FK 必須保留這個完整識別，不得省略 version 或 Scope。**既有** migration `001_world_runtime.sql` 的 `candidate_records` 主鍵僅前五項、沒有 `candidate_version`；新增 DB 生成、不可變 Version 是**正式 Schema／ACL／升級前置條件（NOT_IMPLEMENTED）**，在 Migration 與舊版二進位的相容／負面測試完成之前**不得**把六欄 Identity 當成可執行的現有 DB 約束。前五項是不可重用的**邏輯識別保留鍵**：不能靠改 version 重用已綁／已清理的相同 `candidate_ref`；以受保護的 UNIQUE／Tombstone 強制。`SUBMITTED + VALID BINDING` 不合法；`PURGED → AVAILABLE` 永久禁止；同一完整 Identity 不能 INSERT 替代 Payload。
 11. **MUST**：先以受保護交易記錄**首次不可變 Snapshot Proposal** 和完整 Scope Pin；固定 object ID／version／hash，交易外依固定版本 materialize 完整 bytes、驗 Envelope encoding v1／Hash，再建立不可變 Snapshot。不能在等待外部 Object Storage 時一直持有關鍵 DB row lock。首次 Proposal 未持久化，無法聲稱能阻止改選。外部物件不存在／hash 失配 → Fail-Closed，不可請 Runtime 重新提供相同 Hash 的「替代內容」。
