@@ -130,6 +130,9 @@ WORLD_ADR_REQUIRED_IDS = (
     "WORLD-PURGE-01", "WORLD-TIME-01", "WORLD-LOCK-01",
     "WORLD-COMPAT-01", "WORLD-RECOVERY-03", "WORLD-RECOVERY-04",
     "WORLD-RESTORE-OP-01", "WORLD-AUDIT-02",
+    "WORLD-PROTOCOL-01", "WORLD-PROTOCOL-02", "WORLD-RESTORE-TOMBSTONE-01",
+    "WORLD-RECOVERY-03A", "WORLD-RECOVERY-03B", "WORLD-RECOVERY-03C",
+    "WORLD-RECOVERY-03D", "WORLD-RECOVERY-03E", "WORLD-RECOVERY-03F",
 )
 
 
@@ -166,6 +169,13 @@ def check_world_adr_contract(root: Path) -> list[str]:
     adr = content["ADR"]
     plan = content["verification"]
     decision = content["decisions"]
+    plan_ids = re.findall(r"(?m)^\| `(WORLD-[A-Z0-9-]+)` \|", plan)
+    duplicates = sorted({test_id for test_id in plan_ids if plan_ids.count(test_id) > 1})
+    if duplicates:
+        errors.append(f"world-adr: duplicate verification IDs: {', '.join(duplicates)}")
+    for line in plan.splitlines():
+        if re.match(r"^\| `WORLD-[A-Z0-9-]+` \|", line) and not line.endswith("| NOT_RUN |"):
+            errors.append(f"world-adr: proposed verification row must remain NOT_RUN: {line[:72]}")
     for test_id in WORLD_ADR_REQUIRED_IDS:
         if f"`{test_id}`" not in adr:
             errors.append(f"world-adr: ADR missing test {test_id}")
