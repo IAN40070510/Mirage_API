@@ -16,6 +16,8 @@ from deception.core.orchestrator import PipelineResult
 from deception.core.handoff import verify_candidate
 from deception.generation.models import digest as candidate_digest
 from deception.security.trusted_deployment import TrustedDeploymentSettings
+from deception.security.fenced_admission_control import FencedAdmissionControl
+from deception.world.postgres_store import psycopg
 from deception.security.ingress_audit import PostgresIngressAudit
 from deception.world import (PostgresAdmissionControl, PostgresCandidateStore, PostgresProjectionRegistry,
                              ProjectionCompatibilityProfile, ProjectionEvidence)
@@ -40,7 +42,8 @@ def _digest(value) -> str:
 def create_app(*, settings: TrustedDeploymentSettings, postgres_dsn: str,
                config: DemoConfig, output_root=None, world_ttl: int = 3600, enable_business: bool = False,
                enable_medusa_store: bool = False, medusa_publishable_key: str | None = None,
-               medusa_source: Path | None = None):
+               medusa_source: Path | None = None,
+               fence_dsn: str | None = None, fence_namespace: str | None = None):
     """建立共享 Session、假名化觀察與持久化 Admission 的合成 HTTP app。
 
     配置只核准本專案的 synthetic-store 契約，支援 GET getProduct 的 200／404。
@@ -54,10 +57,19 @@ def create_app(*, settings: TrustedDeploymentSettings, postgres_dsn: str,
         raise ValueError("native store requires explicitly enabled synthetic business operations")
     if enable_medusa_store and not medusa_publishable_key:
         raise ValueError("native store requires a fixed publishable key")
+    if (fence_dsn is None) != (fence_namespace is None):
+        raise ValueError("fence DSN and namespace must be configured together")
+    if fence_dsn is not None and (not fence_dsn.strip() or not fence_namespace.strip()
+                                  or fence_dsn == postgres_dsn):
+        raise ValueError("independent Fence requires a separate nonempty DSN and namespace")
     settings = TrustedDeploymentSettings.model_validate(settings.model_dump())
     provider = settings.build_provider(postgres_dsn=postgres_dsn)
     candidates = PostgresCandidateStore(postgres_dsn)
     control = PostgresAdmissionControl(postgres_dsn)
+    if fence_dsn is not None:
+        # Lab opt-in only: does not prevent direct calls to the underlying World DB control.
+        control = FencedAdmissionControl(
+            control, lambda: psycopg.connect(fence_dsn), fence_namespace)
     registry = PostgresProjectionRegistry(postgres_dsn)
     request_audit = PostgresRequestAudit(postgres_dsn)
     ingress_audit = PostgresIngressAudit(postgres_dsn, environment_id=settings.environment_id,

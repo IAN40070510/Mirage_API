@@ -21,6 +21,16 @@ class FencedAdmissionControl:
     fence_connection_factory: object
     namespace: str
 
+    def __getattr__(self, name: str):
+        """Delegate non-StartSend admission operations to the existing control.
+
+        This lab adapter does not fence other mutations; do not deploy as an
+        end-to-end trusted-send authorization boundary.
+        """
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return getattr(self.admission_control, name)
+
     def start_send(self, admission_id: str, *, owner: str, now: int):
         """Persist intent before StartSend; unknown commit is never retried here.
 

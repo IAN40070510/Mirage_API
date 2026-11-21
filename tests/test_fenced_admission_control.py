@@ -34,6 +34,15 @@ class Admission:
 class FencedAdmissionTests(unittest.TestCase):
     """Check mandatory configuration and protected execution delegation."""
 
+    def test_existing_control_operations_remain_accessible(self):
+        """Non-StartSend methods are forwarded during the lab integration."""
+        admission = Admission()
+        admission.state = lambda _: "GRANTED"
+        adapter = FencedAdmissionControl(admission, Connection, "world")
+        self.assertEqual(adapter.state("id"), "GRANTED")
+        with self.assertRaises(AttributeError):
+            getattr(adapter, "_private")
+
     def test_missing_fence_denies_before_start_send(self):
         """An absent independent Fence factory must not reach World DB."""
         admission = Admission()
