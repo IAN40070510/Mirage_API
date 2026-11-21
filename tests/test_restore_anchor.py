@@ -83,3 +83,18 @@ class RestoreAnchorTests(unittest.TestCase):
             results = list(pool.map(publish, range(1, 17)))
         self.assertEqual(sorted(item["sequence"] for item in results), list(range(1, 17)))
         self.assertEqual(self.anchor.latest()["sequence"], 16)
+
+    def test_invalid_checkpoint_inputs(self):
+        """Reject non-hex digests and booleans masquerading as epoch integers."""
+        with self.assertRaises(ValueError):
+            self.anchor.append("world", True, "a"*64, "one")
+        with self.assertRaises(ValueError):
+            self.anchor.append("world", 1, "z"*64, "one")
+        with self.assertRaises(ValueError):
+            self.anchor.append("world", 1, "a"*64, "")
+
+    def test_cross_namespace_append_refused(self):
+        """One anchor chain must never be rebound to another authority namespace."""
+        self.anchor.append("world", 1, "a"*64, "one")
+        with self.assertRaises(AnchorViolation):
+            self.anchor.append("other", 1, "b"*64, "two")

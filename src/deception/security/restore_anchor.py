@@ -5,6 +5,7 @@ import hmac
 import json
 import os
 import stat
+import re
 from pathlib import Path
 
 
@@ -44,6 +45,16 @@ class FileRestoreAnchor:
                     raise AnchorViolation("sequence gap")
                 if item["previous"] != previous or not hmac.compare_digest(mac, authenticate(self.key, item)):
                     raise AnchorViolation("tampered checkpoint")
+                if (item.get("version") != 1 or not isinstance(item.get("namespace"), str)
+                        or not item["namespace"] or type(item.get("epoch")) is not int
+                        or item["epoch"] < 0 or not isinstance(item.get("publication_id"), str)
+                        or not item["publication_id"] or not isinstance(item.get("world_digest"), str)
+                        or re.fullmatch(r"[0-9a-f]{64}", item["world_digest"]) is None):
+                    raise AnchorViolation("invalid checkpoint fields")
+                if records and (item["namespace"] != records[-1]["namespace"]
+                                or item["epoch"] < records[-1]["epoch"]
+                                or item["publication_id"] in {r["publication_id"] for r in records}):
+                    raise AnchorViolation("invalid checkpoint continuity")
                 item["mac"] = mac
                 previous = hashlib.sha256(canonical(item)).hexdigest()
                 records.append(item)
@@ -74,7 +85,11 @@ class FileRestoreAnchor:
 
     def append(self, namespace, epoch, world_digest, publication_id):
         """Append and fsync a checkpoint under an exclusive interprocess lock."""
-        if not namespace or not publication_id or epoch < 0 or len(world_digest) != 64:
+        if (not isinstance(namespace, str) or not namespace
+                or not isinstance(publication_id, str) or not publication_id
+                or type(epoch) is not int or epoch < 0
+                or not isinstance(world_digest, str)
+                or re.fullmatch(r"[0-9a-f]{64}", world_digest) is None):
             raise ValueError("invalid checkpoint")
         if self.path.is_symlink():
             raise AnchorViolation("anchor symlink refused")
