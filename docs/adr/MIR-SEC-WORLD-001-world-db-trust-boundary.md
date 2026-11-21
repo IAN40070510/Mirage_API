@@ -14,6 +14,7 @@
 | Protocol baseline（MSDSS Freeze v1） | **ACCEPTED as MSDSS baseline**；MSDSS `main` `5a1ee26dcf79f04cf29345a0403e3f3f8082358b` 的 `docs/P2_SEND_AUTHORIZATION_FREEZE.md`；本欄**不是** Mirage Owner 簽核 |
 | Implementation baseline（Mirage source） | **固定原始碼分析 SHA**：Mirage upstream `main` `88dc2008fd35a2d3873949a769653dc9f18e8980`；正式 Owner 採納時須另外核准適用版本。文件前置 HEAD `003c918f142296588d2fe14b70fafe3cc5cf8458` 不是 Mirage source baseline |
 | Mirage Owner adoption | **ACCEPTED（2026-11-21）**；使用者已正式選擇授權一致性優先及採納 MSDSS Protocol Freeze v1，見 [D-68](../security/world-db/decisions-log.md)；**不代表**原生符合性或 DBA／Security 簽核 |
+| G1 Verifier／Authorizer 部署隔離選擇 | **同機獨立容器／OS 身分（D-69，2026-11-21）**；每服務不同 SCRAM DB Role／Secret／DSN，禁止共池或 Runtime `SET ROLE`；仍須實測與部署簽核，R5 主機控制不涵蓋 |
 | Mirage native conformance | **NOT_RUN**（`WORLD-PROTOCOL-MATRIX-01`／`WORLD-PROTOCOL-01`）；固定 `start_send()` 有**已觀察到的局部差異**，不得以該單點推論完整合約測試已執行或已有全域符合性結論 |
 | 來源 | 多輪安全審查及兩個不同 Repo/SHA 的唯讀核對；**非已實作／通過的安全驗證** |
 | 變更界線 | 文件提案；**不代表已修改 Runtime、資料庫 ACL、staging、金鑰或 production 開關** |
