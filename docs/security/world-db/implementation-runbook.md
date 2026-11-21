@@ -41,6 +41,14 @@
 - 本地 `python tools/check_documentation.py`、Python `compileall`、`git diff --check`：通過。
 - **證明範圍**：本次記憶體／PostgreSQL `StartSend` 的 Freeze v1 行為調整與既有完整測試回歸；21 個 skip 不能當成通過。這些結果**不等於**新受保護 DB Role 實體連線、IngressTx Receipt 原子性、R1 負面 SQL、Snapshot／Restore 或完整協定逐條符合性已完成。上述 G0–G6 仍依既有表列狀態。
 
+### 2026-11-21 G1 預檢／隔離 SCRAM 角色子案例
+
+- 原生測試 Commit：`04d29a2d99c57590793a726398ddc967ae4a2b8a`。
+- [Python tests GitHub Actions run 44849685972](https://github.com/IAN40070510/Mirage_API/actions/runs/44849685972)：PostgreSQL `17.6-alpine` service，**1,265 passed／21 skipped／2 warnings**；JUnit artifact `14684238578`，摘要 `sha256:1da77caacb06672b8a89a3c589cebc380dabcbf201f673f1e708997828874ba7`。
+- [Container verification run 44849686038](https://github.com/IAN40070510/Mirage_API/actions/runs/44849686038)：`success`。
+- 測試包含 `test_world_acl_real_scram_login_denies_protected_dml`：在**專用拋棄式 CI PostgreSQL** 以實際非特權 SCRAM LOGIN 執行 Admission／Session／Replay 負面 SQL 與 `SET ROLE`；此子案例及共用高權限 DSN 啟動阻擋均已納入 pytest suite。
+- **驗證限制**：角色是 CI 為測試建立的受限 fixture，不是正式 Oracle 容器中已部署的 Runtime Role；新的受保護授權函式、Ingress Receipt、Authorizer 及 Restore 仍未完成。**G1 完整驗收與 `MIR-SEC-WORLD-001` 仍 OPEN**，不能因 CI PASS 解除正式發送禁令。
+
 - 只以隔離專用 PostgreSQL 測試 DB 執行會修改角色或資料表的整合測試，不能指向共享 staging 或 production。
 - 結果變更須循 `NOT_RUN → RUNNING → PASS/FAIL/BLOCKED`，留下固定 Mirage SHA、Schema/Migration hash、PG 版本、實體 DB Login、資料集與 Fault Injection、UTC 時間及脫敏日誌。
 - `python tools/check_documentation.py` 成功只代表文件品質，不代表 G0–G6 或 `WORLD-*` 安全驗收通過。

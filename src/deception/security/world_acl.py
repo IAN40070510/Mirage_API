@@ -85,9 +85,9 @@ def inspect_runtime_world_acl(dsn: str, *, schema: str = "public") -> WorldAclAs
                                           unsafe_capabilities=tuple(unsafe))
     except WorldAclPreflightError:
         raise
-    except Exception as exc:
+    except Exception:
         # 不向日誌或 HTTP 暴露可能含 DSN／憑證的底層例外內容。
-        raise WorldAclPreflightError("world_acl_unverifiable") from exc
+        raise WorldAclPreflightError("world_acl_unverifiable") from None
 
 
 def require_restricted_world_runtime(dsn: str, *, schema: str = "public") -> None:
