@@ -18,6 +18,7 @@ from deception.security import TrustedKeyRegistry, TrustedSessionError, TrustedS
 from deception.security.ingress_receipt import IngressReceiptError, PostgresIngressReceiptWriter
 from deception.security.key_revocation import PostgresTrustedKeyRevocations
 from deception.world import PostgresReplayStore
+from deception.world.replay import ReplayConsumeResult
 
 
 def _token(key: Ed25519PrivateKey, jti: str, *, reference_time: int | None = None) -> str:
@@ -122,7 +123,20 @@ def run() -> None:
             with psycopg.connect(scoped) as connection:
                 assert connection.execute("SELECT count(*) FROM replay_entries WHERE jti=%s",
                                           (third,)).fetchone()[0] == 0
-            print("LAB_RECEIPT_TX_PROBE_OK normal=atomic replay=denied explicit_rollback=atomic db_time=denied")
+            gc_jti = uuid4().hex
+            clock_now = int(time.time())
+            replay = PostgresReplayStore(scoped)
+            assert replay.consume(issuer="probe-gateway", audience="probe-mirage", jti=gc_jti,
+                                  expires_at=clock_now + 20,
+                                  now=clock_now) is ReplayConsumeResult.ACCEPTED
+            assert replay.gc(now=clock_now + 100) == 1
+            with psycopg.connect(scoped) as connection:
+                assert connection.execute("SELECT count(*) FROM replay_entries WHERE jti=%s",
+                                          (first,)).fetchone()[0] == 1
+                assert connection.execute("SELECT count(*) FROM replay_entries WHERE jti=%s",
+                                          (gc_jti,)).fetchone()[0] == 0
+            print("LAB_RECEIPT_TX_PROBE_OK normal=atomic replay=denied explicit_rollback=atomic "
+                  "db_time=denied gc=protected_receipt_retained")
         finally:
             admin.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))
 

@@ -33,6 +33,7 @@ claims, receipt_id = verifier.verify_with_receipt(
 - `deploy/security-lab/receipt_atomic_probe.py`：不依賴 pytest 的獨立 Oracle PostgreSQL 17.6 探針；只有 `MIRAGE_LAB_EXPLICIT=mir-sec-world001-lab` 且固定專用 DB 身分、一次性新 Schema 才可執行。
 - `deploy/security-lab/verifier_receipt_role_probe.py`：在同一隔離 Lab 以實體 `mir_sec_verifier` SCRAM 登入驗證 Receipt／Replay 正向寫入；檢查 Admission、Generation、Receipt DELETE 及 `SET ROLE` 越權遭 SQLSTATE `42501` 拒絕。測試腳本只為一次性 Schema 授予最低需要的 DML，並由 Schema Owner 做建置與清除。不可外推為正式服務 Secret 或 IPC 隔離已通過。
 - `migrations/017_trusted_ingress_receipts.sql`：FK 強制 Replay／Receipt 一致，`PUBLIC` 不具表 DML；實際 Verifier／Runtime ACL 由獨立部署腳本管理。
+- `PostgresReplayStore.gc()` 對過期 JTI 只刪除**未**被 Receipt 參照者；FK 不允許清掉仍供 Grant／對帳使用的墓碑。這是保守保留政策，將來仍須由獨立 GC Role 執行正式 Retention 與 Restore 協定，不能由 Runtime 直接 `DELETE`。
 
 **時鐘信任**：Receipt 寫入之前，Verifier 在 Key Lock 取得後使用 PostgreSQL `clock_timestamp()` 再檢查 JWS 的 `iat`、`nbf`、`exp` 與部署容許的 skew；呼叫端提供的 Python `now` 不得繞過資料庫權威時間。這是單一測試切面的保證，尚不涵蓋跨交易的 Grant／StartSend Deadline。
 

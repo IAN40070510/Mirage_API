@@ -56,10 +56,20 @@ class PostgresReplayStore:
                 else ReplayConsumeResult.REPLAY)
 
     def gc(self, *, now: int) -> int:
-        """刪除已過期 Replay 紀錄，保留仍可能有效的舊授權。"""
+        """只刪除已過期且未被可信 Receipt 參照的 Replay；FK 為最後防線。
+
+        已驗證 JTI 即使過期，其 Receipt 仍可能供 Grant、對帳或安全審計引用。
+        在明確的 Receipt／Operation Retention 策略獲核准之前，GC 必須保留這些
+        墓碑；獨立 GC 角色部署仍需完成，Runtime 不得直接持有 DELETE 權限。
+        """
         with self._connection() as connection:
             with connection.cursor() as cursor:
-                cursor.execute("DELETE FROM replay_entries WHERE expires_at <= %s", (now,))
+                cursor.execute(
+                    """DELETE FROM replay_entries e
+                       WHERE e.expires_at <= %s AND NOT EXISTS (
+                           SELECT 1 FROM ingress_receipts r
+                           WHERE r.issuer = e.issuer AND r.audience = e.audience AND r.jti = e.jti
+                       )""", (now,))
                 return cursor.rowcount
 
     def _connection(self) -> Any:

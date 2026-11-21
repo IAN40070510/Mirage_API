@@ -9,6 +9,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from deception.security import TrustedSessionError
 from deception.security.ingress_receipt import IngressReceiptError, PostgresIngressReceiptWriter
+from deception.world import PostgresReplayStore
+from deception.world.replay import ReplayConsumeResult
 from test_key_revocation import verifier
 from test_postgres_conformance import isolated_test_dsn
 from test_trusted_session import encode
@@ -130,3 +132,23 @@ def test_ingress_receipt_rechecks_db_clock_after_key_lock(isolated_test_dsn):
         verify_with_receipt(checker, signed(key, jti=jti, reference_time=forged_now), writer, now=forged_now)
     with psycopg.connect(isolated_test_dsn) as connection:
         assert connection.execute("SELECT count(*) FROM replay_entries WHERE jti=%s", (jti,)).fetchone()[0] == 0
+
+
+def test_replay_gc_preserves_ingress_receipt_evidence_and_cleans_unreferenced(isolated_test_dsn):
+    """Replay GC 不被 Receipt FK 阻塞所有過期清理，也不得刪掉可信引用墓碑。"""
+    import psycopg
+
+    key = Ed25519PrivateKey.generate()
+    checker = verifier(isolated_test_dsn, {"old": key})
+    writer = PostgresIngressReceiptWriter(isolated_test_dsn, environment_id="env", deployment_id="deploy")
+    retained_jti, unbound_jti = uuid4().hex, uuid4().hex
+    verify_with_receipt(checker, signed(key, jti=retained_jti), writer)
+    replay = PostgresReplayStore(isolated_test_dsn)
+    now = int(time.time())
+    assert replay.consume(issuer="gateway", audience="mirage", jti=unbound_jti,
+                          expires_at=now + 20, now=now) is ReplayConsumeResult.ACCEPTED
+    assert replay.gc(now=now + 100) == 1
+    with psycopg.connect(isolated_test_dsn) as connection:
+        jtis = {row[0] for row in connection.execute("SELECT jti FROM replay_entries WHERE jti=ANY(%s)",
+                                                     ([retained_jti, unbound_jti],))}
+    assert jtis == {retained_jti}
