@@ -67,6 +67,7 @@
 | `WORLD-POLICY-02` | Emergency 在 SEND_AUTHORIZED 前／後提交，另 NO_NEW_GRANTS 與既有 Grant、REVOKED 後再 ACTIVE | 前者拒絕 Authorize；後者已授權保留、Start 不再重查；NO_NEW_GRANTS 禁新 Grant，REVOKED 不可直接復活 | NOT_RUN |
 | `WORLD-PROTOCOL-01` | **Given**：固定 Mirage upstream `88dc2008…` `start_send()` 含 Generation/Profile Emergency 二次查核，MSDSS `5a1ee26…` Freeze v1 以 SEND_AUTHORIZED COMMIT 為最終授權點。**Action**：比較行為，再以正式修補後 Mirage 原生交易、並行撤銷與 owner/deadline/single-use/Snapshot 測試實測 | **Expected**：舊 upstream 明確標為已知差異、非 compliant；**新版未實作前 NOT_RUN，不能宣稱已 PASS**。正式採納版不二次 Policy/Emergency 授權，仍攔截 owner、期限、single-use、Snapshot 不符 | NOT_RUN |
 | `WORLD-PROTOCOL-02` | **Given**：SEND_AUTHORIZED 已提交且 Snapshot 完整，後續 Policy/Emergency 改變。**Action**：Runtime 或控制面嘗試自填／任意覆寫 Purge/Execution Fence；另觸發真實受保護 Snapshot purge/corruption | **Expected**：前者不得藉偽造 Fence 否決已提交授權；後者按執行不可用性 Fail-Closed，保留授權歷史與不可重送證據；兩者皆不得引入第二個政策授權點 | NOT_RUN |
+| `WORLD-PROTOCOL-MATRIX-01` | **Given**：MSDSS Freeze v1 固定 `5a1ee26...`，Mirage source 固定 `88dc2008...`，Owner 未簽採納決策；只有 `start_send()` 局部差異已被觀察。**Action**：獨立取出 MSDSS Protocol baseline 狀態、Mirage Owner 簽核紀錄、Mirage native 端到端合約測試（SEND_AUTHORIZED COMMIT、授權前後 Policy/Emergency、owner、deadline、single-use、Snapshot/ASGI、未知 COMMIT、傳輸分類） | **Expected**：三欄只能分別填 `ACCEPTED`（MSDSS baseline）／`PENDING`（Mirage Owner）／`NOT_RUN`（Mirage native），不可互代；局部差異須列修正項但不能冒稱完整 conformance PASS/FAIL 已實測 | NOT_RUN |
 
 ## 3. Freshness、鎖、時間與輪替
 
@@ -89,6 +90,7 @@
 | ID | 測試情境 | 預期 | 狀態 |
 | --- | --- | --- | --- |
 | `WORLD-PURGE-01` | Snapshot 清理與 SEND_AUTHORIZED、StartSend、活躍 Sender、UNKNOWN 結果同時競爭 | 先原子 non_retryable fence、禁止新 Start；活躍 Sender 保留同一 Snapshot 至終態／受控中止，Unknown 有界保留／對帳；Purge 永不復活資格 | NOT_RUN |
+| `WORLD-PURGE-BOUNDARY-01` | **Given**：同一 Admission 已 SEND_AUTHORIZED；(A) Candidate 原始 Payload 已 Purged，但 Authorized Snapshot 仍完整；(B) Authorized Snapshot 進入受保護不可逆 `PURGE_PENDING/PURGED`，或可信 Hash 證明 `CORRUPT`；(C) Runtime 嘗試直接改 eligibility／purge reason；(D) Purge worker 在寫入不可逆 Fence 後卡住。**Action**：競爭 StartSend、GC 與 Policy/Emergency 變動並注入 worker crash | **Expected**：A 不因 Candidate GC 被誤判不可發送，仍遵守 owner/deadline/single-use；B 只能改 Snapshot execution eligibility、保留原授權歷史、Snapshot id/hash 與 Audit；C 依 ACL/窄函式拒絕；D 保留不可逆 Fence 並對帳／告警，不回復 AVAILABLE、不重送，也不創造 Policy Revocation | NOT_RUN |
 | `WORLD-COMPAT-01` | 舊 DB Role／Credential／Connection Pool、舊二進位與新 schema/function/ACL，Runtime 自填新 protocol_version，Restore 舊 ACL | 舊 Role 直接受保護 DML／EXECUTE 被 DB 拒絕；身份／版本不信自填值；混版/回滾 Fail-Closed，不重授權 | NOT_RUN |
 | `WORLD-AUDIT-02` | 已發出部分 ASGI bytes 後寫 Supplementary Audit 失敗、Unknown Transmission | 不宣稱未傳輸；不得重送、不能用補充事件偽造 SEND_STARTED；對帳與有限保留 | NOT_RUN |
 
@@ -117,6 +119,7 @@
 | `WORLD-RESTORE-01` | World DB 還原到舊 Replay／Revocation／Epoch 快照 | 發送 Quarantine；舊 Receipt／Token 不重新有效 | NOT_RUN |
 | `WORLD-RESTORE-02` | 還原後清理計算、Clock Skew、Key Rotation 不確定 | 不自動提前解除隔離；有可驗證的完整恢復證據 | NOT_RUN |
 | `WORLD-RESTORE-TOMBSTONE-01` | **Given**：在備份後建立並清理 Candidate，寫入不可復活 Tombstone 與後續 Operation/Purge 事件；舊 World DB 備份**不含該 Tombstone**。**Action**：還原舊備份，嘗試重建原五欄 Logical Key／不同 version，再分別令外部錨點可用、不可用／被倒退 | **Expected**：還原前在受保護控制面啟用 Quarantine；無法核對**不隨 World DB 回退**的錨點完整性／單調性／事件涵蓋範圍時始終禁用正式發送與 Identity 復活；只有可信 reconciliation、Owner 批准與正式放行流程才能解除；此案 NOT_RUN 不代表錨點已實作 | NOT_RUN |
+| `WORLD-RESTORE-FENCE-01` | **Given**：外部控制面已接受最新 Fence Head H2，另備 H1/H2 checkpoint；H1 有合法簽章但 generation 較低，H2 的 digest manifest 涵蓋 Candidate Tombstone、Binding、Operation／Replay／Revocation；(B) Tombstone DB COMMIT 成功但 H2 checkpoint 發布前當機／ACK 未知。**Action**：還原只對得上 H1 的舊 World DB，嘗試重播 H1、降低 generation、以 Runtime 憑證寫入 Fence、使用錯 digest／timeline 或落後的有效 H1 冒稱涵蓋後續 Tombstone | **Expected**：獨立最高可信 head/世代拒絕可判定的降版與改寫；B 的跨交易 checkpoint 缺口**不會**因 H1 簽章有效而通過，不可證明完整時持續 Quarantine；無可信 reconciliation／獨立 Owner/DBA/Security 放行證據不得恢復發送 | NOT_RUN |
 | `WORLD-MIGRATION-01` | Schema／ACL／函式版本不匹配 | Startup/Release Preflight Fail-Closed；正式發送不能開始 | NOT_RUN |
 | `WORLD-MIGRATION-02` | 舊 Runtime 仍持舊 Role/Pool、舊 Advisory Key 或 schema rollback | 撤銷舊 Role protected DML/EXECUTE 並清空 Pool；Runtime 自填 version 不具權威；舊版本不能重開發送／權限 | NOT_RUN |
 | `WORLD-DISABLE-01` | 實際 Trusted-send 控制面無法確認、Runtime 可自行啟用、或 Restore 使禁用狀態倒退 | Release Preflight 失敗、正式發送停止；不得以未經證實的 `DECEIVE OFF` 字樣代替控制證據 | NOT_RUN |
