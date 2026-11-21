@@ -54,7 +54,7 @@ Tx B (Session epoch rollover)：
 | AuthorizeTx | Head FOR SHARE → Binding/Admission FOR UPDATE → Generation FOR UPDATE → Profile/Key/Policy Guard（實際順序需以 SQL 證實） | Freeze v1：**COMMIT SEND_AUTHORIZED 才是線性化點**；鎖後一次 decision_time |
 | StartSendTx | Admission FOR UPDATE → 已綁 Snapshot/Pin/Purge Fence 的受保護執行檢查 | **無 Policy/Emergency/Epoch/Key 再授權**；SEND_STARTED＋必要 Audit 提交確認後才 ASGI |
 | GcPurgeTx | 完整 Candidate Identity + Version、Binding、Pin/Lease、Snapshot/Purge Tombstone、FK DELETE 的隱含鎖 | 必須先原子寫 non_retryable fence；Active Sender 等待／受控中止，UNKNOWN 對帳；DB GC 不自動證明外部 Object 已刪 |
-| Restore/MixedFence | Quarantine/Namespace/External Receipt；Old Role ACL／Connection Pool 徹底撤銷 | 新舊 Runtime 分 Role/credential；不得信自填 version；未知 COMMIT/HTTP 不新發送 |
+| Restore/MixedFence | **還原範圍外**的 Quarantine/Namespace/Anti-Rollback Anchor/External Receipt；Old Role ACL／Connection Pool 徹底撤銷 | 先隔離才准 Runtime／Sender 恢復；外部單調 checkpoint 與 Tombstone/Operation 範圍不能驗證時持續禁送；新舊 Runtime 分 Role/credential，未知 COMMIT/HTTP 不新發送 |
 
 **MUST**：實作記錄每一 SQL 的**實際** Isolation Level、row/advisory/FK lock mode、等待依賴、lock_timeout、`40P01`／`40001` 時是否有外部副作用；並以不同 PostgreSQL Backend 鎖等待、順序競態、GC、撤銷、備份還原實證。**此圖是盤點，不是已證明全球無死鎖的 DAG。**
 
@@ -67,6 +67,8 @@ Tx B (Session epoch rollover)：
 - **Candidate Validator／Promotion 交界**：昂貴 Validation 不宜因單一交易要求持有長時間 Key／Generation／Candidate 鎖；可在交易外依受保護不可變快照驗證，再由短 PromotionTx 重新鎖定並核對 DB 產生的 Version、bytes／Envelope hash、Scope、Contract／Source／Validator Evidence 和 Policy Authority 最新**允許狀態**。不能以普通 `validated=true` 作授權證據；Policy Version Upgrade 不應自動等同 Revocation。
 - **Candidate FK／GC 的附帶鎖與留存**：FK 應參照實際完整 Scope 複合鍵，先確認 Index／鍵更新規則與插入所取得的 FK Row Lock；不能以單欄 `candidate_id` 虛構現在的資料模型。受限 GC 必須安全略過 Active／Bound／UNRESOLVED 且仍需要 Payload 的資料；若永久 Binding 保留，另行隔離可過期 Payload 與不可變稽核 Metadata，不得以無限保存 Raw Bytes 作唯一解。
 - **權威決策時間**：每個 Protected Tx 先取得全部必要鎖，再只讀一次 DB `clock_timestamp()` 得 `decision_time` 並持久化；同交易所有期限／GC／Lease 均使用此值。Claim 判 `authorization_deadline`，Authorize/StartSend 判 `transmission_deadline`，`decision_time < deadline` 不代表 COMMIT 必須早於 deadline；COMMIT 未知一律拒絕猜測。Runtime now、時鐘回退／不可驗證 skew 均 Fail-Closed。
+- **BD-11 OPEN 時的預設停用**：不能把 decision-time 合法冒稱 commit-before-deadline；如果產品需要後者，正式送出功能保持 DISABLED。未知 COMMIT 不得新起送／重試；但已實際完成的 `SEND_AUTHORIZED` 不因 ACK 遺失而回溯變成未授權。權威 DB 時間不可檢證時停止新的授權與 StartSend。
+- **Purge Fence 不是 Policy Revocation**：僅受保護的 Snapshot 安全不可用／不可逆 GC 事實可封鎖已授權執行；Runtime 或控制介面不得在授權後藉自填 Fence 達成第二次政策否決（`WORLD-PROTOCOL-02` NOT_RUN）。
 - `SELECT FOR UPDATE／FOR SHARE／FOR KEY SHARE`、FK INSERT/DELETE implicit row-lock／advisory lock 順序須列入同一 lock graph；Key／Profile／Emergency 與 **Authorize** 並行驗證，**不得**把本來已凍結的 Policy 又塞回 StartSend。
 - `lock_timeout`、`statement_timeout`、`idle_in_transaction_session_timeout` 與角色 CONN LIMIT 是**可用性限制**，數值須由容量與延遲測試訂定；不是替代狀態機正確性的證據。
 
