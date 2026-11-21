@@ -31,6 +31,14 @@
 
 ## 驗收證據規則
 
+### 2026-11-21 第一批 Freeze v1 相容修補（僅原生回歸）
+
+- 修補 Commit：`0f1493f0ef6e2765b3ca4b56efeae4129695e3db`（獨立分支，未合併 main）。
+- [Python tests GitHub Actions run 44847829807](https://github.com/IAN40070510/Mirage_API/actions/runs/44847829807)：PostgreSQL `17.6-alpine` service、Python 3.12，**1,260 passed／21 skipped／2 warnings**，結論 `success`；完整 JUnit artifact `14683717240`，摘要 `sha256:126b71ea8f917f5792584fad5fbae4eb080f2a0525759f256f14ac5af0a9a5d1`。
+- [Container demonstration verification run 44847829826](https://github.com/IAN40070510/Mirage_API/actions/runs/44847829826)：`success`。
+- 本地 `python tools/check_documentation.py`、Python `compileall`、`git diff --check`：通過。
+- **證明範圍**：本次記憶體／PostgreSQL `StartSend` 的 Freeze v1 行為調整與既有完整測試回歸；21 個 skip 不能當成通過。這些結果**不等於**新受保護 DB Role 實體連線、IngressTx Receipt 原子性、R1 負面 SQL、Snapshot／Restore 或完整協定逐條符合性已完成。上述 G0–G6 仍依既有表列狀態。
+
 - 只以隔離專用 PostgreSQL 測試 DB 執行會修改角色或資料表的整合測試，不能指向共享 staging 或 production。
 - 結果變更須循 `NOT_RUN → RUNNING → PASS/FAIL/BLOCKED`，留下固定 Mirage SHA、Schema/Migration hash、PG 版本、實體 DB Login、資料集與 Fault Injection、UTC 時間及脫敏日誌。
 - `python tools/check_documentation.py` 成功只代表文件品質，不代表 G0–G6 或 `WORLD-*` 安全驗收通過。
