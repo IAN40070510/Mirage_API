@@ -9,6 +9,7 @@
 - Verifier／Authorizer／Runtime 的測試密碼分開由主機本地 CSPRNG 產生，不輸出到對話、Git 或指令參數；密碼檔 mode `0600`，數字 UID 分別為 `10011`、`10012`、`10013`，服務容器也以同 UID 執行；測試進程不取得其他服務秘密掛載。
 - 探針具有 `read_only` rootfs、`cap_drop: ALL`、`no-new-privileges`、無自動重啟、有限 RAM/PIDs；使用已在主機的原始映像，明確固定本次 Mirage source SHA。Host root／Docker daemon 受控（R5）**不在**本輪身分隔離保證內。
 - 只有一次性 `bootstrap` 容器為讀取不同 UID 擁有的 `0600` Secret 另外授予 `CAP_DAC_READ_SEARCH`；它不掛載 Docker socket、不能寫入 Host Secret／Source，且執行結束即退出。所有常駐探針仍 `cap_drop: ALL`；這不是供正式環境複製的金鑰管理設計。
+- 角色探針只是持續存活、供 `exec` 執行 SQL 驗證的容器，不提供 HTTP 健康端點；已停用繼承自 Mirage API 映像的 HTTP healthcheck。只有 PostgreSQL 採 `pg_isready` 健康檢查；探針成功與否以 `LAB_ROLE_PROBE_OK` 和 Gateway Job Exit Code 判定。
 
 ## 輸入、輸出與部署前提
 

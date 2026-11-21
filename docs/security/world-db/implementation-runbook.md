@@ -51,6 +51,16 @@
 - 測試包含 `test_world_acl_real_scram_login_denies_protected_dml`：在**專用拋棄式 CI PostgreSQL** 以實際非特權 SCRAM LOGIN 執行 Admission／Session／Replay 負面 SQL 與 `SET ROLE`；此子案例及共用高權限 DSN 啟動阻擋均已納入 pytest suite。
 - **驗證限制**：角色是 CI 為測試建立的受限 fixture，不是正式 Oracle 容器中已部署的 Runtime Role；新的受保護授權函式、Ingress Receipt、Authorizer 及 Restore 仍未完成。**G1 完整驗收與 `MIR-SEC-WORLD-001` 仍 OPEN**，不能因 CI PASS 解除正式發送禁令。
 
+### 2026-11-21 Oracle ARM64 實機隔離 PostgreSQL 角色子驗收
+
+- **驗收切面**：新增專用 `mir-sec-world001-lab-net`（Docker internal bridge）、`mir-sec-world001-pgdata`、`mir-sec-world001-pg`、`mir-sec-world001-verifier-probe`、`mir-sec-world001-authorizer-probe`；Runtime 為單次測試容器。所有容器只加入 Lab 網路，沒有 host-published ports，與原有三組 Compose 網路無交集；原有七容器在驗收後仍維持 Running，原健康狀態未退化。未變更 staging、正式金鑰與 Trusted Send 開關。
+- **資料庫與來源**：專用 `mir_sec_world_lab`、PostgreSQL `17.6`／arm64 image ID `sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94`；探針 image ID `sha256:05fa0bab9b32b2898d5e39cb3c647fcd454d30d7af157284816dd6654b976509`。原始 Probe／Provision 程式固定於 `317a913d2d8f6ae6503abfaa7653d9a561da60cc`，後續僅調整 Compose 的探針 Healthcheck，未改探針程式或 DB ACL。
+- **初始化**：`job_01M7Y13MRV00H4W49TVSBJJCYF`，`LAB_PROVISION_OK migrations=16 roles=3 secrets=redacted`；三個獨立 SCRAM Login（`mir_sec_verifier`、`mir_sec_authorizer`、`mir_sec_http_runtime`）為 `NOSUPERUSER`／`NOINHERIT`／`NOBYPASSRLS`，沒有互相 Membership。Secret 本地產生且沒有進入輸出或 Git；`bootstrap` 僅作一次性權限建置。
+- **正／負面結果**：`job_01M7Y1408600RPS895K5K0HZVQ`：Verifier 允許 Replay INSERT 再 rollback、越權 DML／`SET ROLE` 均 `42501`；`job_01M7Y13Z8R00MZY9GZ0AR69ZH5`：Authorizer 允許讀取 Admission、直寫及 `SET ROLE` 均 `42501`；`job_01M7Y14EVX009RTY1Y3QH6ECPC`：Runtime 無法修改 Admission、Session epoch、Replay 或 `SET ROLE`，均 `42501`。三者輸出 `LAB_ROLE_PROBE_OK`，Job Exit Code 成功。
+- **已排除的環境誤報**：首次 Bootstrap 因 root 容器移除全部 capabilities 而無法讀取其他 UID `0600` 密碼檔，已只對一次性 Bootstrap 加 `CAP_DAC_READ_SEARCH` 後成功；Probe 映像預設 HTTP healthcheck 因沒有 HTTP 服務而誤報 unhealthy，後續 Compose 明確停用探針的該檢查，PG `pg_isready` 不受影響。
+- **證據基準**：首次成功部署 Compose hash `70364025d12332d6bed9a27fe1e127005fdf8c76435172c6e4b978ac1a49931f`（後續 Healthcheck 調整會產生新 hash）；核對紀錄 `job_01M7Y15K62001XG803ZB6956R8`、`job_01M7Y15VV500HP0K6VJQMG6JSH`、`job_01M7Y15HH900CRPQG617NR3QNK`、`job_01M7Y15J2K00809JZ93DQ8W32K`。
+- **安全驗收判定：Lab ACL 子切面 PASS；G1 完整 Gate NOT_RUN；G2–G6 NOT_RUN**。目前 `mir_sec_*` 是專用測試角色而非正式 `mirage_*` 身分；尚無正式 Verifier／Authorizer 執行邏輯、Receipt／Binding／Grant 受限函式、來源鎖定 `pg_hba.conf`、Restore Fence 或端到端正常世界交易。本 Lab 不構成 production 安全證明。
+
 - 只以隔離專用 PostgreSQL 測試 DB 執行會修改角色或資料表的整合測試，不能指向共享 staging 或 production。
 - 結果變更須循 `NOT_RUN → RUNNING → PASS/FAIL/BLOCKED`，留下固定 Mirage SHA、Schema/Migration hash、PG 版本、實體 DB Login、資料集與 Fault Injection、UTC 時間及脫敏日誌。
 - `python tools/check_documentation.py` 成功只代表文件品質，不代表 G0–G6 或 `WORLD-*` 安全驗收通過。
