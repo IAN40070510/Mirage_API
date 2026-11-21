@@ -25,6 +25,7 @@ docker compose -f compose.yaml config --quiet
 docker compose -f compose.yaml up -d postgres verifier-probe authorizer-probe
 docker compose -f compose.yaml --profile bootstrap run --rm --no-deps bootstrap
 docker compose -f compose.yaml exec -T verifier-probe python /lab/source/deploy/security-lab/probe.py verifier
+docker compose -f compose.yaml exec -T verifier-probe python /lab/source/deploy/security-lab/atomic_ingress_probe.py
 docker compose -f compose.yaml exec -T authorizer-probe python /lab/source/deploy/security-lab/probe.py authorizer
 docker compose -f compose.yaml --profile negative-tests run --rm --no-deps runtime-probe python /lab/source/deploy/security-lab/probe.py runtime
 ```
@@ -32,6 +33,8 @@ docker compose -f compose.yaml --profile negative-tests run --rm --no-deps runti
 預期 `provision.py` 只在全新專用 PostgreSQL Database 執行有序 migrations，建立 `mir_sec_verifier`／`mir_sec_authorizer`／`mir_sec_http_runtime` 互不繼承的 SCRAM 登入；Runtime 無關鍵表 DML，Verifier 只具測試性 Replay INSERT／SELECT，Authorizer 只具保護表 SELECT。這些角色配置**刻意不是**完整 World API 的可運行最小權限；正式受限函式、Ingress Receipt、Grant Binding 仍未接上。
 
 `probe.py` 必須用該角色的實體 SCRAM Session 驗證 `session_user/current_user`、`rolinherit/rolsuper/rolbypassrls`、實際 `has_table_privilege`、跨角色 Membership、SECRET 隔離，以及三種直寫 SQL 與 `SET ROLE` 的 **SQLSTATE 42501**。Verifier 的正常 Replay INSERT 必須可成功執行並於測試 rollback；Authorizer 的正常 SELECT 必須可執行。CLI 不應輸出 DSN 密碼。若有任一項失敗，環境應標記 FAIL、停止本輪信任邊界驗收，**不得放寬 ACL 來換 PASS**。
+
+`atomic_ingress_probe.py` 額外使用**原始 Mirage 分支程式** `PostgresTrustedKeyRevocations.consume_guarded_replay()`，在 Verifier 身分下實際檢查一次性消費、重複 JTI 拒絕及取得同一交易鎖後、Replay INSERT 之後明確注入例外所造成的整筆 Rollback。這不測試 Ingress Receipt，也不代表 COMMIT ACK 遺失已被解決；不能將該子案例擴張為完整 G2 PASS。
 
 ## 失敗、恢復與記錄
 
