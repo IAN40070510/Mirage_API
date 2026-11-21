@@ -12,7 +12,7 @@ from deception.security.key_revocation import PostgresTrustedKeyRevocations
 from .admission import AdmissionOperationResult, AdmissionState
 from .models import ProjectionEvidence, ResponseAdmission, ResponseSource, WorldScope
 from .postgres_store import psycopg
-from .projection_registry import PostgresProjectionRegistry, ProjectionAuthorizationResult
+from .projection_registry import PostgresProjectionRegistry
 from .store import WorldStoreError, WorldStoreStatus
 from .transmission import response_envelope, response_hashes
 
@@ -82,6 +82,35 @@ def _verified_envelope_hashes(envelope: bytes) -> tuple[str, str, str]:
     return response_hashes(status, headers, body)
 
 
+def _protected_lock(cursor, kind: str, identity: dict[str, str | int]) -> bool:
+    """透過白名單 SECURITY DEFINER 取得物理 Row Lock，而不授予敏感欄 UPDATE。
+
+    此入口不是 Runtime 公開 API；DB REVOKE PUBLIC EXECUTE 且只有獨立 Validator
+    或 Authorizer Role 可執行。鎖持續至外層同一 transaction commit/rollback。
+    """
+    cursor.execute("SELECT protected_lock_reference(%s,%s::jsonb)",
+                   (kind, json.dumps(identity, sort_keys=True)))
+    return cursor.fetchone()[0] is True
+
+
+def _authorized_registry_revision(cursor, evidence: ProjectionEvidence) -> int | None:
+    """先鎖 Profile 撤銷域，再以受保護函式鎖 Registry，才讀最新政策欄位。"""
+    profile = evidence.compatibility_profile.profile_sha256
+    if PostgresProjectionRegistry.profile_state_in_transaction(cursor, profile) is not None:
+        return None
+    if not _protected_lock(cursor, "registry", {"contract_hash": evidence.projection_contract_hash}):
+        return None
+    cursor.execute(
+        """SELECT source_spec_sha256,compatibility_profile_sha256,registry_revision,revoked
+           FROM projection_registry WHERE projection_contract_hash=%s""",
+        (evidence.projection_contract_hash,),
+    )
+    row = cursor.fetchone()
+    if row is None or row[3] or row[0] != evidence.source_spec_sha256 or row[1] != profile:
+        return None
+    return row[2]
+
+
 class _ProtectedConnection:
     """每個受保護作業使用獨立實體 Login，不透過 SET ROLE 共用 Runtime Pool。"""
 
@@ -129,10 +158,13 @@ class PostgresCandidatePromoter(_ProtectedConnection):
             raise ProtectedGrantError("invalid_candidate_reference")
         with self._connection() as connection:
             with connection.cursor() as cursor:
+                candidate_identity = {**scope.model_dump(), "candidate_ref": candidate_ref}
+                if not _protected_lock(cursor, "candidate", candidate_identity):
+                    raise ProtectedGrantError("candidate_not_found")
                 cursor.execute(
                     """SELECT candidate_hash, body, expires_at FROM candidate_records
                        WHERE environment_id=%s AND deployment_id=%s AND session_id=%s
-                         AND world_generation_id=%s AND candidate_ref=%s FOR SHARE""",
+                         AND world_generation_id=%s AND candidate_ref=%s""",
                     (*_scope_values(scope), candidate_ref),
                 )
                 candidate = cursor.fetchone()
@@ -142,13 +174,7 @@ class PostgresCandidatePromoter(_ProtectedConnection):
                 actual_hashes = _verified_envelope_hashes(bytes(candidate[1]))
                 if actual_hashes != (envelope_hash, immutable_body_hash, semantic_headers_hash):
                     raise ProtectedGrantError("candidate_hash_components_mismatch")
-                registry = PostgresProjectionRegistry(self._dsn)
-                authorization = registry.authorize_for_grant(
-                    cursor, projection_contract_hash=checked.projection_contract_hash,
-                    source_spec_sha256=checked.source_spec_sha256,
-                    compatibility_profile_sha256=checked.compatibility_profile.profile_sha256,
-                )
-                if authorization.result is not ProjectionAuthorizationResult.AUTHORIZED:
+                if _authorized_registry_revision(cursor, checked) is None:
                     raise ProtectedGrantError("candidate_policy_not_authorized")
                 if not self._source_matches(cursor, scope, request_fingerprint, source):
                     raise ProtectedGrantError("candidate_source_unverifiable")
@@ -174,21 +200,28 @@ class PostgresCandidatePromoter(_ProtectedConnection):
     def _source_matches(cursor, scope: WorldScope, fingerprint: str, source: ResponseSource) -> bool:
         """核對受保護的 Read／World Commit 來源，不接受單獨的 Runtime 宣稱。"""
         if source.kind == "snapshot":
+            if not _protected_lock(cursor, "read_admission", {"read_admission_id": source.read_admission_id}):
+                return False
             cursor.execute(
                 """SELECT 1 FROM read_admissions WHERE read_admission_id=%s
                    AND environment_id=%s AND deployment_id=%s AND session_id=%s
                    AND world_generation_id=%s AND request_binding_digest=%s
-                   AND state_version=%s AND state_hash=%s FOR SHARE""",
+                   AND state_version=%s AND state_hash=%s
+                   AND expires_at>floor(extract(epoch FROM clock_timestamp()))::bigint
+                   """,
                 (source.read_admission_id, *_scope_values(scope), fingerprint,
                  source.state_version, source.state_hash),
             )
             return cursor.fetchone() is not None
         if source.kind == "committed_operation":
+            if not _protected_lock(cursor, "world_operation", {
+                    **scope.model_dump(), "result_digest": source.operation_result_digest}):
+                return False
             cursor.execute(
                 """SELECT 1 FROM world_operations WHERE environment_id=%s
                    AND deployment_id=%s AND session_id=%s AND world_generation_id=%s
                    AND result_digest=%s AND state_version=%s AND state_hash=%s
-                   AND status='committed' FOR SHARE""",
+                   AND status='committed'""",
                 (*_scope_values(scope), source.operation_result_digest,
                  source.committed_state_version, source.committed_state_hash),
             )
@@ -219,37 +252,55 @@ class PostgresProtectedAuthorizer(_ProtectedConnection):
         checked = ProjectionEvidence.model_validate(evidence.model_dump())
         if not authorization_revision or len(authorization_revision) > 128:
             raise ProtectedGrantError("invalid_authorization_revision")
+        input_digest = self.intent_digest(
+            operation_id=operation_id, receipt_id=receipt_id, scope=scope,
+            candidate_ref=candidate_ref, candidate_version=candidate_version,
+            authorization_revision=authorization_revision,
+            authorization_deadline=authorization_deadline,
+            transmission_deadline=transmission_deadline, evidence=checked,
+        )
         with self._connection() as connection:
             with connection.cursor() as cursor:
                 cursor.execute("SET LOCAL lock_timeout='3s'")
                 cursor.execute("SELECT current_setting('transaction_isolation')")
                 if cursor.fetchone()[0] != "read committed":
                     raise ProtectedGrantError("protected_grant_requires_read_committed")
+                if not _protected_lock(cursor, "session_head", scope.model_dump()):
+                    raise ProtectedGrantError("missing_session_head")
                 cursor.execute(
                     """SELECT session_epoch FROM session_heads
-                       WHERE environment_id=%s AND deployment_id=%s AND session_id=%s FOR SHARE""",
+                       WHERE environment_id=%s AND deployment_id=%s AND session_id=%s""",
                     _scope_values(scope)[:3],
                 )
                 head = cursor.fetchone()
                 if head is None:
                     raise ProtectedGrantError("missing_session_head")
+                if not _protected_lock(cursor, "session_binding", {
+                        **scope.model_dump(), "session_epoch": head[0]}):
+                    raise ProtectedGrantError("session_generation_mismatch")
                 cursor.execute(
                     """SELECT 1 FROM session_world_bindings WHERE environment_id=%s
                        AND deployment_id=%s AND session_id=%s AND session_epoch=%s
-                       AND world_generation_id=%s FOR SHARE""",
+                       AND world_generation_id=%s""",
                     (*_scope_values(scope)[:3], head[0], scope.world_generation_id),
                 )
                 if cursor.fetchone() is None:
                     raise ProtectedGrantError("session_generation_mismatch")
+                if not _protected_lock(cursor, "receipt", {"receipt_id": str(receipt_id)}):
+                    raise ProtectedGrantError("receipt_missing")
                 cursor.execute(
                     """SELECT issuer, key_id, environment_id, deployment_id, session_id,
                               session_epoch, request_fingerprint, token_expires_at
-                       FROM ingress_receipts WHERE receipt_id=%s FOR UPDATE""",
+                       FROM ingress_receipts WHERE receipt_id=%s""",
                     (receipt_id,),
                 )
                 receipt = cursor.fetchone()
                 if (receipt is None or receipt[2:6] != (*_scope_values(scope)[:3], head[0])):
                     raise ProtectedGrantError("receipt_scope_or_epoch_mismatch")
+                if not _protected_lock(cursor, "promotion", {
+                        **scope.model_dump(), "candidate_ref": candidate_ref,
+                        "candidate_version": candidate_version}):
+                    raise ProtectedGrantError("unbound_or_corrupt_candidate")
                 cursor.execute(
                     """SELECT request_fingerprint, candidate_hash, immutable_body_hash,
                               semantic_headers_hash, projection_contract_hash,
@@ -258,7 +309,7 @@ class PostgresProtectedAuthorizer(_ProtectedConnection):
                        FROM protected_candidate_promotions
                        WHERE environment_id=%s AND deployment_id=%s AND session_id=%s
                          AND world_generation_id=%s AND candidate_ref=%s AND candidate_version=%s
-                       FOR SHARE""",
+                       """,
                     (*_scope_values(scope), candidate_ref, candidate_version),
                 )
                 promoted = cursor.fetchone()
@@ -281,19 +332,15 @@ class PostgresProtectedAuthorizer(_ProtectedConnection):
                 keys._lock(cursor, receipt[0], receipt[1])
                 if keys._select(cursor, receipt[0], receipt[1]) is not None:
                     raise ProtectedGrantError("receipt_key_revoked")
-                authorization = PostgresProjectionRegistry(self._dsn).authorize_for_grant(
-                    cursor, projection_contract_hash=checked.projection_contract_hash,
-                    source_spec_sha256=checked.source_spec_sha256,
-                    compatibility_profile_sha256=checked.compatibility_profile.profile_sha256,
-                )
-                if authorization.result is not ProjectionAuthorizationResult.AUTHORIZED \
-                        or authorization.authorization is None:
+                registry_revision = _authorized_registry_revision(cursor, checked)
+                if registry_revision is None:
                     raise ProtectedGrantError("grant_projection_not_authorized")
                 cursor.execute("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
                 decision_time = cursor.fetchone()[0]
                 if (decision_time >= receipt[7] or decision_time >= promoted[8]
                         or decision_time >= authorization_deadline
                         or authorization_deadline > transmission_deadline
+                        or transmission_deadline > receipt[7]
                         or transmission_deadline > promoted[8]):
                     raise ProtectedGrantError("grant_deadline_not_valid")
                 grant_revision = generation[0] + 1
@@ -301,7 +348,7 @@ class PostgresProtectedAuthorizer(_ProtectedConnection):
                     admission_id=uuid4().hex, request_binding_digest=receipt[6],
                     world_generation_id=scope.world_generation_id,
                     grant_revision=grant_revision,
-                    projection_registry_revision=authorization.authorization.registry_revision,
+                    projection_registry_revision=registry_revision,
                     candidate_ref=candidate_ref, candidate_hash=promoted[1],
                     immutable_body_hash=promoted[2], semantic_headers_hash=promoted[3],
                     projection_contract_hash=promoted[4],
@@ -310,8 +357,6 @@ class PostgresProtectedAuthorizer(_ProtectedConnection):
                     transmission_deadline=transmission_deadline,
                     source=promoted[7], projection_evidence=checked,
                 )
-                operation_digest = self._operation_digest(operation_id, receipt_id, scope,
-                                                          candidate_ref, candidate_version, admission)
                 cursor.execute(
                     """UPDATE generation_controls SET control_revision=%s
                        WHERE world_generation_id=%s""",
@@ -332,32 +377,40 @@ class PostgresProtectedAuthorizer(_ProtectedConnection):
                            environment_id, deployment_id, session_id, world_generation_id,
                            candidate_ref, candidate_version
                        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
-                    (operation_id, operation_digest, receipt_id, admission.admission_id,
+                    (operation_id, input_digest, receipt_id, admission.admission_id,
                      *_scope_values(scope), candidate_ref, candidate_version),
                 )
                 return admission
 
     @staticmethod
-    def _operation_digest(operation_id: UUID, receipt_id: UUID, scope: WorldScope,
-                          ref: str, version: int, admission: ResponseAdmission) -> str:
-        """以不可混淆的 Operation Identity 與完整 Grant Input 形成一次性對帳摘要。"""
+    def intent_digest(*, operation_id: UUID, receipt_id: UUID, scope: WorldScope,
+                      candidate_ref: str, candidate_version: int,
+                      authorization_revision: str, authorization_deadline: int,
+                      transmission_deadline: int, evidence: ProjectionEvidence) -> str:
+        """在任何 DB 作用前固定一次性意圖摘要，供 COMMIT 不明時核對相同輸入。"""
         data = dict(operation_id=str(operation_id), receipt_id=str(receipt_id),
-                    scope=scope.model_dump(mode="json"), candidate_ref=ref,
-                    candidate_version=version,
-                    admission=admission.model_dump(mode="json", exclude={"admission_id", "grant_revision"}))
+                    scope=scope.model_dump(mode="json"), candidate_ref=candidate_ref,
+                    candidate_version=candidate_version,
+                    authorization_revision=authorization_revision,
+                    authorization_deadline=authorization_deadline,
+                    transmission_deadline=transmission_deadline,
+                    evidence=evidence.model_dump(mode="json"))
         return hashlib.sha256(json.dumps(data, ensure_ascii=False, sort_keys=True,
                                          separators=(",", ":")).encode("utf-8")).hexdigest()
 
-    def lookup(self, operation_id: UUID) -> ResponseAdmission | None:
-        """對未知 COMMIT 僅依已持久化 Operation ID 唯讀查回，不新增授權。"""
+    def lookup(self, operation_id: UUID, *, input_digest: str) -> ResponseAdmission | None:
+        """未知 COMMIT 只讀同 ID＋同 Digest 結果；不同輸入不可誤取別人授權。"""
         if not isinstance(operation_id, UUID):
             raise ProtectedGrantError("invalid_protected_operation_id")
+        _require_digest(input_digest)
         with self._connection() as connection:
             row = connection.execute(
-                """SELECT a.admission FROM protected_grant_bindings b
+                """SELECT a.admission,b.input_digest FROM protected_grant_bindings b
                    JOIN response_admissions a ON a.admission_id=b.admission_id
                    WHERE b.operation_id=%s""", (operation_id,),
             ).fetchone()
+        if row is not None and row[1] != input_digest:
+            raise ProtectedGrantError("operation_input_digest_conflict")
         return None if row is None else ResponseAdmission.model_validate(row[0])
 
     def claim(self, admission_id: str, *, owner: str) -> AdmissionOperationResult:
@@ -397,9 +450,13 @@ class PostgresProtectedAuthorizer(_ProtectedConnection):
                 binding = cursor.fetchone()
                 if binding is None:
                     return AdmissionOperationResult.REJECTED
+                if not _protected_lock(cursor, "session_head", {
+                        "environment_id": binding[0], "deployment_id": binding[1],
+                        "session_id": binding[2]}):
+                    return AdmissionOperationResult.REJECTED
                 cursor.execute(
                     """SELECT session_epoch FROM session_heads WHERE environment_id=%s
-                       AND deployment_id=%s AND session_id=%s FOR SHARE""", binding[:3],
+                       AND deployment_id=%s AND session_id=%s""", binding[:3],
                 )
                 epoch = cursor.fetchone()
                 if epoch is None or epoch[0] != binding[4]:
@@ -430,17 +487,12 @@ class PostgresProtectedAuthorizer(_ProtectedConnection):
                     self._dsn, environment_id=binding[0], deployment_id=binding[1])
                 keys._lock(cursor, binding[5], binding[6])
                 revoked_key = keys._select(cursor, binding[5], binding[6]) is not None
-                registry = PostgresProjectionRegistry(self._dsn)
-                decision = registry.authorize_for_grant(
-                    cursor, projection_contract_hash=claims.projection_contract_hash,
-                    source_spec_sha256=claims.projection_evidence.source_spec_sha256,
-                    compatibility_profile_sha256=binding[8],
-                )
+                registry_revision = _authorized_registry_revision(cursor, claims.projection_evidence)
                 cursor.execute("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
                 db_now = cursor.fetchone()[0]
                 deadline = row[2] if authorize else row[1]
                 revoked = (generation[0] is not None or generation[1]
-                           or revoked_key or decision.result is not ProjectionAuthorizationResult.AUTHORIZED)
+                           or revoked_key or registry_revision is None)
                 expired = db_now >= deadline or db_now >= binding[7]
                 if revoked or expired:
                     terminal = AdmissionState.ABANDONED.value if revoked else AdmissionState.EXPIRED.value

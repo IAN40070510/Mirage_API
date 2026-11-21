@@ -8,15 +8,15 @@
 
 | 實作檔案 | 安全作用與限制 |
 | --- | --- |
-| `migrations/018_protected_grant_bindings.sql` | 新增完整 Scope＋不可變版本的 `protected_candidate_promotions`、一對一 Receipt/Admission 的 `protected_grant_bindings` 與不可變觸發器。新 Schema 不自動建立角色或開啟發送。 |
-| `src/deception/world/protected_grant.py` | 分離 Candidate Validator 與 Authorizer 的預期 PostgreSQL Login／DSN；Promotion 複製並重新雜湊低信任 Candidate；Grant 在單一交易鎖定 Session／Receipt／Candidate／Generation／Key／Profile，檢查 Registry／DB 期限並寫入 Binding＋Admission；Claim／Authorize 只接受已有 Binding，使用 DB 時間；Operation ID 只讀查回。 |
+| `migrations/018_protected_grant_bindings.sql` | 新增完整 Scope＋不可變版本的 `protected_candidate_promotions`、一對一 Receipt/Admission 的 `protected_grant_bindings` 與不可變觸發器。新增固定 Schema `search_path` 的受限 `SECURITY DEFINER` Row Lock Helper；未授予 Runtime 執行權。Migration 不建立 LOGIN 或開啟發送。 |
+| `src/deception/world/protected_grant.py` | 分離 Candidate Validator 與 Authorizer 的預期 PostgreSQL Login／DSN；Promotion 複製並重新驗證 v1 Envelope 三種 SHA-256；Grant 在單一交易鎖定 Session／Receipt／Candidate／Generation／Key／Profile，檢查 Registry／DB 期限並寫入 Binding＋Admission；Claim／Authorize 只接受已有 Binding，使用 DB 時間；Operation ID＋input digest 只讀查回。未核准 token expiry grace 前，保守要求 `transmission_deadline <= token_expires_at`。 |
 | `src/deception/world/postgres_candidate.py` | Candidate GC 不使用呼叫者提供的 `protected_refs` 當唯一判據；已 Promotion 的來源候選不得被刪除。此為暫時偏向安全的保留策略，日後需分離可清理 Bytes 與永久 Metadata。 |
 | `src/deception/security/world_acl.py` | 增加 Runtime 對兩張新表的有效 DML 拒絕查核。 |
-| `tests/test_protected_grant.py` | 擬定真實 PostgreSQL 正向 Grant、Receipt 重綁／交易回滾、偽造 Fingerprint、未 Promotion、錯誤 Login、Candidate GC 與不可變資料負面測試。 |
+| `tests/test_protected_grant.py` | 擬定真實 PostgreSQL 正向 Grant、Receipt 重綁／交易回滾、偽造 Fingerprint、未 Promotion、錯誤 Login、Candidate GC 與不可變資料負面測試；使用一次性真 SCRAM Login 及欄位級最低權限驗證。 |
 
 ## 本輪發現並保持阻擋的關鍵事項
 
-1. **ACL 與資料庫 Row Lock**：PostgreSQL 17 `SELECT ... FOR SHARE` 也需要受查表至少一欄 `UPDATE` 權限。不能直接向 Authorizer／Validator 授予 Key／Receipt／Session 等完整表 `UPDATE`。正式 G3 必須落地受限 `SECURITY DEFINER` 鎖定／狀態程序（固定可信 `search_path`、撤銷 PUBLIC EXECUTE、真實低權限登入驗證），或等價無敏感欄位修改權的程序契約；現有 Python 交易**未**完成最低權限配置。
+1. **ACL 與資料庫 Row Lock**：PostgreSQL 17 `SELECT ... FOR SHARE` 也需要受查表至少一欄 `UPDATE` 權限。不可直接向 Authorizer／Validator 授予 Key／Receipt／Session 等整表 `UPDATE`。目前新增只接受預先定義 `kind`／完整 Scope 的 `SECURITY DEFINER protected_lock_reference`，函式固定 Migration 對應的可信 Schema `search_path`，並撤銷 `PUBLIC EXECUTE`；單次真 SCRAM 最小權限 Role 測試仍 `NOT_RUN`。正式部署還必須驗證函式 owner NOLOGIN／無 Runtime 繼承／禁止在可信 Schema CREATE。
 2. **Validator 的政策權威**：Hash 一致只證明 bytes 完整，不能單獨證明 Contract／真實 HTTP 來源。獨立 Validator 尚未接進正式服務，沒有可量測的業務投影審核證據；目前 Promotion 只在專用受信任呼叫者假設下成立。不能讓 Runtime 以同一 DB 身分呼叫 Promotion。
 3. **Transition/Send 接線**：新 Authorizer 尚未取代 `trusted_http.create_app()` 舊 `grant` 路徑；`StartSend`／Snapshot／Send Lease、跨 DB Fence／Restore 還沒連接。在此之前 `from_environment()` 必須繼續硬拒絕。
 4. **真資料庫驗證權限**：本機沒有 PostgreSQL／pytest 服務；嘗試唯讀盤點既有 Oracle 隔離 Lab 時，Gateway 使用者對 `/var/run/docker.sock` 得到 `permission denied`（Job `job_01M8022EJE00NNKXPMDAK1YAT3`）。不得在未授權狀態下提權操作 Lab。`WORLD-*` PostgreSQL 正向／負面測試目前 `NOT_RUN`。

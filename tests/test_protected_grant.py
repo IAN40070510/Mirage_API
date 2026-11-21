@@ -1,6 +1,8 @@
 """MIR-SEC-WORLD-001：Receipt、Candidate Promotion 與 Grant Binding 的真實 PG 負面驗收。"""
 
 import hashlib
+import os
+import secrets
 import time
 from uuid import uuid4
 
@@ -106,7 +108,15 @@ def test_protected_grant_binds_receipt_promotion_and_admission_atomically(isolat
     admission = _grant(isolated_test_dsn, seeded, operation_id=operation_id)
     assert admission.candidate_hash == seeded[5][0]
     authorizer = PostgresProtectedAuthorizer(isolated_test_dsn, expected_login=_login(isolated_test_dsn))
-    assert authorizer.lookup(operation_id) == admission
+    input_digest = authorizer.intent_digest(
+        operation_id=operation_id, receipt_id=seeded[3], scope=seeded[0],
+        candidate_ref=seeded[4], candidate_version=1,
+        authorization_revision="reviewed-v1", authorization_deadline=seeded[6] + 30,
+        transmission_deadline=seeded[6] + 50, evidence=seeded[2],
+    )
+    assert authorizer.lookup(operation_id, input_digest=input_digest) == admission
+    with pytest.raises(ProtectedGrantError, match="operation_input_digest_conflict"):
+        authorizer.lookup(operation_id, input_digest=digest("0"))
     with psycopg.connect(isolated_test_dsn) as connection:
         assert connection.execute("SELECT count(*) FROM protected_grant_bindings WHERE receipt_id=%s",
                                   (seeded[3],)).fetchone()[0] == 1
@@ -159,7 +169,8 @@ def test_protected_grant_requires_promotion_and_db_role(isolated_test_dsn):
     with pytest.raises(ProtectedGrantError, match="unbound_or_corrupt_candidate"):
         _grant(isolated_test_dsn, seeded)
     with pytest.raises(ProtectedGrantError, match="protected_service_login_mismatch"):
-        PostgresProtectedAuthorizer(isolated_test_dsn, expected_login="mirage_http_runtime").lookup(uuid4())
+        PostgresProtectedAuthorizer(isolated_test_dsn, expected_login="mirage_http_runtime").lookup(
+            uuid4(), input_digest=digest("a"))
 
 
 def test_candidate_gc_cannot_delete_promoted_payload(isolated_test_dsn):
@@ -175,3 +186,96 @@ def test_candidate_gc_cannot_delete_promoted_payload(isolated_test_dsn):
         with pytest.raises(psycopg.errors.InsufficientPrivilege) as error:
             connection.execute("UPDATE protected_candidate_promotions SET candidate_version=2")
         assert error.value.sqlstate == "42501"
+
+
+def test_protected_grant_real_role_acl_and_authorizer(isolated_test_dsn):
+    """真實 SCRAM Login 驗證 Runtime 不能修改；Validator/Authorizer 只持所需 ACL。"""
+    if os.environ.get("MIRAGE_WORLD_ROLE_TEST_ISOLATED") != "true":
+        pytest.skip("requires disposable PostgreSQL cluster for login role creation")
+    import psycopg
+    from psycopg import sql
+    from psycopg.conninfo import conninfo_to_dict, make_conninfo
+
+    suffix = uuid4().hex[:12]
+    users = {kind: (f"mirage_g3_{kind}_{suffix}", secrets.token_urlsafe(32))
+             for kind in ("runtime", "validator", "authorizer")}
+    options = conninfo_to_dict(isolated_test_dsn).get("options", "")
+    schema = options.split("search_path=", 1)[1].split(" ", 1)[0]
+
+    with psycopg.connect(isolated_test_dsn, autocommit=True) as admin:
+        try:
+            for login, password in users.values():
+                admin.execute(sql.SQL("CREATE ROLE {} LOGIN NOINHERIT NOSUPERUSER NOCREATEDB "
+                                      "NOCREATEROLE NOBYPASSRLS PASSWORD {}").format(
+                                          sql.Identifier(login), sql.Literal(password)))
+                admin.execute(sql.SQL("GRANT USAGE ON SCHEMA {} TO {}").format(
+                    sql.Identifier(schema), sql.Identifier(login)))
+
+            validator = sql.Identifier(users["validator"][0])
+            authorizer = sql.Identifier(users["authorizer"][0])
+            runtime = sql.Identifier(users["runtime"][0])
+            admin.execute(sql.SQL("GRANT SELECT ON candidate_records,read_admissions,world_operations,"
+                                  "projection_registry,projection_profile_revocations TO {}").format(validator))
+            admin.execute(sql.SQL("GRANT INSERT,SELECT ON protected_candidate_promotions TO {}").format(validator))
+            admin.execute(sql.SQL("GRANT EXECUTE ON FUNCTION protected_lock_reference(text,jsonb) TO {}").format(
+                validator))
+            admin.execute(sql.SQL("GRANT SELECT ON session_heads,session_world_bindings,ingress_receipts,"
+                                  "protected_candidate_promotions,generation_controls,response_admissions,"
+                                  "trusted_key_revocations,projection_registry,projection_profile_revocations,"
+                                  "protected_grant_bindings TO {}").format(authorizer))
+            admin.execute(sql.SQL("GRANT UPDATE ON generation_controls,response_admissions TO {}").format(
+                authorizer))
+            admin.execute(sql.SQL("GRANT INSERT ON response_admissions,protected_grant_bindings TO {}").format(
+                authorizer))
+            admin.execute(sql.SQL("GRANT EXECUTE ON FUNCTION protected_lock_reference(text,jsonb) TO {}").format(
+                authorizer))
+
+            logins = {kind: make_conninfo(isolated_test_dsn, user=login, password=password)
+                      for kind, (login, password) in users.items()}
+            seeded = _seed(isolated_test_dsn)
+            promoter = PostgresCandidatePromoter(
+                logins["validator"], expected_login=users["validator"][0])
+            assert promoter.promote(
+                scope=seeded[0], candidate_ref=seeded[4], request_fingerprint=digest("a"),
+                envelope_hash=seeded[5][0], immutable_body_hash=seeded[5][1],
+                semantic_headers_hash=seeded[5][2], evidence=seeded[2], source=seeded[1],
+            ) == 1
+            authorizer_service = PostgresProtectedAuthorizer(
+                logins["authorizer"], expected_login=users["authorizer"][0])
+            admission = authorizer_service.grant(
+                operation_id=uuid4(), receipt_id=seeded[3], scope=seeded[0],
+                candidate_ref=seeded[4], candidate_version=1,
+                authorization_revision="reviewed-v1",
+                authorization_deadline=seeded[6] + 30,
+                transmission_deadline=seeded[6] + 50, evidence=seeded[2],
+            )
+            assert admission.request_binding_digest == digest("a")
+
+            for dsn, statements in ((logins["runtime"], (
+                    "UPDATE response_admissions SET state='SEND_AUTHORIZED' WHERE false",
+                    "INSERT INTO protected_grant_bindings(operation_id) VALUES(gen_random_uuid())",
+                    "UPDATE session_heads SET session_epoch=0 WHERE false",
+                    "SELECT protected_lock_reference('session_head','{}'::jsonb)",
+                    )), (logins["validator"], (
+                    "UPDATE response_admissions SET state='SEND_AUTHORIZED' WHERE false",
+                    "INSERT INTO protected_grant_bindings(operation_id) VALUES(gen_random_uuid())",
+                    )), (logins["authorizer"], (
+                    "UPDATE ingress_receipts SET session_epoch=0 WHERE false",
+                    "INSERT INTO protected_candidate_promotions(candidate_ref) VALUES('forged')",
+                    ))):
+                for statement in statements:
+                    with psycopg.connect(dsn) as low:
+                        with pytest.raises(psycopg.errors.InsufficientPrivilege) as error:
+                            low.execute(statement)
+                        assert error.value.sqlstate == "42501"
+
+            for role in (validator, authorizer):
+                with psycopg.connect(logins["runtime"]) as low:
+                    with pytest.raises(psycopg.errors.InsufficientPrivilege) as error:
+                        low.execute(sql.SQL("SET ROLE {}").format(role))
+                    assert error.value.sqlstate == "42501"
+        finally:
+            # 每個測試只撤除自己建立的三個一次性 Role，不觸碰既有 Lab Login。
+            for login, _ in users.values():
+                admin.execute(sql.SQL("DROP OWNED BY {}").format(sql.Identifier(login)))
+                admin.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(login)))

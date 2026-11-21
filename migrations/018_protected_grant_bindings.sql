@@ -51,6 +51,66 @@ CREATE TABLE IF NOT EXISTS protected_grant_bindings (
         ON UPDATE RESTRICT ON DELETE RESTRICT
 );
 
+-- Security Definer 只負責真實 Row Lock，不提供 DML／任意 SQL。
+-- 低權限 Validator／Authorizer 可取鎖，但不需獲得 Session/Receipt/Policy 的 UPDATE。
+-- Runtime 不能 EXECUTE；部署不得授予 Runtime 本函式或本 schema CREATE 權限。
+CREATE OR REPLACE FUNCTION protected_lock_reference(kind TEXT, identity JSONB)
+RETURNS BOOLEAN
+LANGUAGE plpgsql SECURITY DEFINER VOLATILE PARALLEL UNSAFE
+SET search_path = pg_catalog, pg_temp
+AS $$
+BEGIN
+    IF kind = 'candidate' THEN
+        PERFORM 1 FROM candidate_records WHERE environment_id=identity->>'environment_id'
+          AND deployment_id=identity->>'deployment_id' AND session_id=identity->>'session_id'
+          AND world_generation_id=identity->>'world_generation_id'
+          AND candidate_ref=identity->>'candidate_ref' FOR SHARE;
+    ELSIF kind = 'read_admission' THEN
+        PERFORM 1 FROM read_admissions WHERE read_admission_id=identity->>'read_admission_id'
+          FOR SHARE;
+    ELSIF kind = 'world_operation' THEN
+        PERFORM 1 FROM world_operations WHERE environment_id=identity->>'environment_id'
+          AND deployment_id=identity->>'deployment_id' AND session_id=identity->>'session_id'
+          AND world_generation_id=identity->>'world_generation_id'
+          AND result_digest=identity->>'result_digest'
+          FOR SHARE;
+    ELSIF kind = 'registry' THEN
+        PERFORM 1 FROM projection_registry WHERE projection_contract_hash=identity->>'contract_hash'
+          FOR SHARE;
+    ELSIF kind = 'session_head' THEN
+        PERFORM 1 FROM session_heads WHERE environment_id=identity->>'environment_id'
+          AND deployment_id=identity->>'deployment_id' AND session_id=identity->>'session_id'
+          FOR SHARE;
+    ELSIF kind = 'session_binding' THEN
+        PERFORM 1 FROM session_world_bindings WHERE environment_id=identity->>'environment_id'
+          AND deployment_id=identity->>'deployment_id' AND session_id=identity->>'session_id'
+          AND session_epoch=(identity->>'session_epoch')::bigint FOR SHARE;
+    ELSIF kind = 'receipt' THEN
+        PERFORM 1 FROM ingress_receipts WHERE receipt_id=(identity->>'receipt_id')::uuid FOR UPDATE;
+    ELSIF kind = 'promotion' THEN
+        PERFORM 1 FROM protected_candidate_promotions
+          WHERE environment_id=identity->>'environment_id'
+            AND deployment_id=identity->>'deployment_id' AND session_id=identity->>'session_id'
+            AND world_generation_id=identity->>'world_generation_id'
+            AND candidate_ref=identity->>'candidate_ref'
+            AND candidate_version=(identity->>'candidate_version')::bigint FOR SHARE;
+    ELSE
+        RAISE EXCEPTION 'unsupported protected lock kind' USING ERRCODE = '22023';
+    END IF;
+    RETURN FOUND;
+END;
+$$;
+
+-- 由 Migration 決定真正物件 schema，固定 pg_catalog first／pg_temp last。
+-- 不能把呼叫者的 search_path 或 temp table 視作特權解析來源。
+DO $$
+DECLARE trusted_schema NAME := current_schema();
+BEGIN
+    EXECUTE format('ALTER FUNCTION %I.protected_lock_reference(text,jsonb) '
+                   'SET search_path = pg_catalog, %I, pg_temp', trusted_schema, trusted_schema);
+END;
+$$;
+
 -- 不可變證據不得被任何一般 DML 更新或刪除；實體 bytes 清理由後續獨立 Fence 管理。
 CREATE OR REPLACE FUNCTION reject_protected_mutation()
 RETURNS trigger
@@ -74,3 +134,4 @@ EXECUTE FUNCTION reject_protected_mutation();
 
 REVOKE ALL ON TABLE protected_candidate_promotions, protected_grant_bindings FROM PUBLIC;
 REVOKE ALL ON FUNCTION reject_protected_mutation() FROM PUBLIC;
+REVOKE ALL ON FUNCTION protected_lock_reference(text,jsonb) FROM PUBLIC;
