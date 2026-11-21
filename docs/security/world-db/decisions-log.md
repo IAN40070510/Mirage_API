@@ -101,6 +101,15 @@
 | D-69 | **2026-11-21 使用者決定同一 Oracle 主機上以不同獨立容器／OS 身分部署 Verifier 與 Authorizer。** 不增設第二台主機；Runtime、Verifier、Authorizer 的 SCRAM DB Login、DSN、Secret Mount 與連線池完全隔離，禁止透過 `SET ROLE` 共享高權限連線 | R1 Runtime 憑證竊取須無法讀／執行受保護 Receipt、Binding 與 Admission。部署級 `pg_hba.conf`、`pg_auth_members`、Secret 與 Connection Pool 重用須有實測證據；同機 root／Docker daemon 被控制不涵蓋。實作與 acceptance **NOT_RUN** |
 | D-70 | **2026-11-21 使用者同意 Candidate 採 Clean Cutover：保留商品、Cart／Inventory、Medusa 的 Candidate 生成能力；淘汰舊 `candidate_records → PostgresAdmissionControl.grant()` 作為正式發送的可信授權入口。** 新流程必須經獨立可信 Validation／Promotion、Ingress Receipt、一次性 Grant Binding 與獨立 Authorized Snapshot；舊流程不得成為降級回退。 | 不承諾舊 `put()`／`load()`／`gc()` 取得可信授權的向後相容性；未經對帳的既有 Candidate／Admission 不自動升格或重新授權。待新安全路徑與角色 ACL 原生驗證完成後才切換；目前 `from_environment()` Release Fuse 保持不可旁路，正式發送 **DISABLED**。本決策不是實作完成或 Owner／DBA／Security 全面簽核。 |
 
+### HTTP 效能與傳輸安全補錄（2026-11-22；非新安全驗收）
+
+| ID | 討論結論 | 狀態／不得過度宣稱 |
+| --- | --- | --- |
+| D-71 | **效能目標提議**：預先生成內容的合法快路徑暫以 `P50 ≤ 150 ms`、`P95 ≤ 400 ms`、`P99 ≤ 1,000 ms` 規劃，品質／有效回應率與錯誤率需共同驗收；即時 AI 生成另訂基準。先量測再優化 Role-bounded pool 與預生成內容。 | **PROPOSED／HTTP END-TO-END NOT_RUN**；隔離 PG 單次 `SELECT 1` 連線重用 0.162 ms、重連 4.787 ms 不代表全 HTTP 速度或實際加速倍數；效能 SLO 不是授權截止期限。見 [延遲紀錄](http-latency-baseline.md) 與 [整合總表](remediation-and-performance-register.md)。 |
+| D-72 | **傳輸閘門待實作約束**：只在 `StartSend` 通過外部 Fence 不足以保障後續 ASGI bytes；Send／Snapshot Purge／Restore 需要統一的受保護起送／租約／Pin 與並行隔離協定，外部 Fence Head 必須真正在 World DB 還原域外，證據異常持續 Quarantine。 | **REQUIRED DESIGN BOUNDARY／IMPLEMENTATION NOT_COMPLETE／SECURITY NOT_RUN**；不可宣稱 HTTP 網路傳輸在 PostgreSQL 單一交易內，亦不可將 R1 控制誇大為受控 Runtime 遭完整接管時的 R4 保證。具體實作與故障注入見 [整合總表](remediation-and-performance-register.md)。 |
+
+**跨文件最新決策優先權**：先前 D-54／D-55 等仍提及 `BD-05`／`BD-11` OPEN，屬歷史審查文字；2026-11-21 的 [Restore Anchor Option B](restore-anchor-option-b.md)、[BD-05 自動驗證解禁](bd-05-restore-quarantine-release.md)、[BD-11 鎖後 Deadline](bd-11-deadline-semantics.md) 已分別 OWNER APPROVED／ADOPTED／DECIDED，應按最新決策執行。全部仍未完成原生部署及安全驗收；BD-05 不允許以人工／雙人簽核繞過失敗證據。
+
 **版本與責任**：Mirage_API 原生分析 `main` `88dc2008fd35a2d3873949a769653dc9f18e8980`；MSDSS Protocol Freeze v1 整合基準 `main` `5a1ee26dcf79f04cf29345a0403e3f3f8082358b`；此組文件由 Mirage `docs/mir-sec-world-001-adr-v0.1` 的 v0.2 草稿舊提交 `003c918f142296588d2fe14b70fafe3cc5cf8458` 延續。**該 SHA 只是來源歷史，不是當前 ADR Commit**；後者與文件檢查結果須由 Draft PR／`git rev-parse HEAD` 的外部證據留存，不能在自身追蹤檔案內寫入自身 Commit SHA。全部新增安全驗收 **NOT_RUN**。
 
 ### v0.2 新增／修訂測試 ID 交接清單（37 項，其中 1 項為群組索引；全部 NOT_RUN）

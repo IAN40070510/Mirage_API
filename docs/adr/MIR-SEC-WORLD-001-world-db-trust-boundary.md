@@ -1,5 +1,7 @@
 # MIR-SEC-WORLD-001 — World DB 信任邊界與受保護發送授權（Architecture Draft）
 
+> **後續決策優先適用（2026-11-21）**：[獨立 Restore Anchor Option B](../security/world-db/restore-anchor-option-b.md) 已核准、[BD-05 自動驗證解禁](../security/world-db/bd-05-restore-quarantine-release.md) 已採納、[BD-11 鎖後 Deadline 語意](../security/world-db/bd-11-deadline-semantics.md) 已決定。本文後續若仍將 BD-05／BD-11 寫成 OPEN 或要求每次 Operator Release Certificate，視為歷史草稿未同步；**以上專用決策文件較新並優先**。完整修復與效能議題另見 [整合總表](../security/world-db/remediation-and-performance-register.md)。上述決策皆不代表已實作或已驗收。
+
 | 欄位 | 值 |
 | --- | --- |
 | ADR 版本 | **v0.2 Contract Freeze candidate**（2026-11-21；Proposed、未核准） |

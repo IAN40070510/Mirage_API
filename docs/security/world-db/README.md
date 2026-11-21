@@ -10,7 +10,7 @@
 
 **既有版本差異**：Mirage upstream 固定 SHA 的 `start_send` 仍含 Generation/Profile Emergency 再查；MSDSS Freeze v1 則規定最終 `SEND_AUTHORIZED` COMMIT 後不二次查核。**Mirage Owner 已採納 Freeze v1**，目前只有獨立分支在修補差異；上游 main 並未證明符合。
 
-**Restore 與 BD-11 安全預設**：同一 World DB 備份可倒退後續 Candidate Tombstone；錨點與 Quarantine 強制控制必須由還原範圍外的權威主體維持，缺失時持續禁用正式發送。鎖後 `decision_time` 不證明 COMMIT 早於期限；Owner／DBA／Security 未裁決（BD-11）前，若產品要求 commit-before-deadline 不得開啟正式發送。快照不可用才可阻擋已授權執行，**不得將 Purge Fence 作為第二次 Policy Revocation**。
+**Restore 與 Deadline 最新裁決（覆蓋舊版未決敘述）**：同一 World DB 備份可倒退後續 Candidate Tombstone；[獨立 Restore Anchor Option B](restore-anchor-option-b.md) 已核准，但尚未完成部署。[BD-05](bd-05-restore-quarantine-release.md) 已正式採納**證據全 PASS 自動解禁、證據異常持續隔離且人工不得強制繞過**；[BD-11](bd-11-deadline-semantics.md) 已選定**鎖後 DB 時間判定 eligibility、成功 COMMIT 生效**，不是要求所有 COMMIT 先於期限。兩項均是已決策、**未實作／未驗收**；快照不可用才可阻擋已授權執行，**不得將 Purge Fence 作為第二次 Policy Revocation**。
 
 **防回退 Anchor 與 Purge 語意**：Fence 的簽章／前序 hash 本身不能防止整條紀錄回放舊版；需要 World DB 還原範圍外的最高可信 Head、單調世代、DB timeline/position、canonical digest 與明確資料涵蓋範圍，缺失即維持 Quarantine。**授權 Admission、Candidate 原始 Payload retention、Authorized Snapshot execution eligibility 是三個不同軸線**；原 Candidate bytes Purged 不得自動禁止仍完整的授權 Snapshot；不可逆 `Snapshot Purge Fence` 是執行失格標記，非授權撤銷。
 
@@ -19,6 +19,7 @@
 
 | 文件 | 說明 | 建議閱讀順序 |
 | --- | --- | --- |
+| [安全修復與 HTTP 效能總表](remediation-and-performance-register.md) | **目前全部已知安全缺口、整合風險、先前選定的解法、速度問題、實測與未測證據、分階段結案門檻**；討論後從這裡追蹤 | **0（快速總覽）** |
 | [ADR v0.2](../../adr/MIR-SEC-WORLD-001-world-db-trust-boundary.md) | 問題、方案 B、Freeze v1 不變、不可變 Snapshot／Operation/Purge 與 I-01～I-19、Owner 未決事項 | 1 |
 | [決策歷史](decisions-log.md) | 多輪採納／否決／校正的具體理由，避免對話結論遺失 | 2 |
 | [權威證據矩陣](evidence-authority-matrix.md) | JWS、Replay、Receipt、Candidate Submission／Validation／Promotion／Binding、Admission、Operation Result 各自可信來源 | 3 |
@@ -27,6 +28,9 @@
 | [驗收計畫](verification-plan.md) | 真 PostgreSQL／非特權 Role、Snapshot/Purge、Policy Race、外部 side effect／Restore、Mixed Runtime、未知 COMMIT（37 個必檢 ID，全 NOT_RUN） | 6 |
 | [修補執行與驗收順序](implementation-runbook.md) | 固定原生缺口、獨立角色與交易分段、G0–G6 Gate、待 Owner 採納決策與證據規則；目前尚未實作／驗收 | 6 |
 | [Oracle 隔離權限驗收 Lab](isolated-oracle-lab.md) | 新建 Internal Network、專用 PostgreSQL、Verifier／Authorizer SCRAM Role Probes；不是正式服務或 G1/G2 完整通過證據 | 7 |
+| [Restore Anchor Option B 已核准契約](restore-anchor-option-b.md) | World DB 還原域之外的 Anchor 與不可回退最高 Head；核准方向不等於已部署 | 8 |
+| [BD-05 自動驗證解除 Quarantine](bd-05-restore-quarantine-release.md) | 證據全 PASS 自動放行；異常維持隔離，人工僅修復、不能繞過 | 8 |
+| [BD-11 Deadline 時間語意](bd-11-deadline-semantics.md) | 鎖後權威 DB 時間、COMMIT 線性化點、未知結果對帳；已決策但未驗收 | 8 |
 
 | [Trusted HTTP 延遲初步診斷](http-latency-baseline.md) | 隔離 PostgreSQL 連線重用對照數據、HTTP 待測分段與安全優化邊界；端到端測試尚未執行 | 8 |
 
