@@ -7,7 +7,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
-FUNCTION_ROOTS = ("src/deception", "mirage_validator", "tests", "tools", "integrations")
+FUNCTION_ROOTS = ("src/deception", "mirage_validator", "tests", "tools", "integrations", "deploy/security-lab")
 GUIDES = {
     "httpx_fingerprint": ("src/deception/api/fingerprint.py", "docs/trusted-session.md"),
     "request_audit": ("src/deception/world/request_audit.py", "docs/request-audit.md"),
@@ -17,6 +17,9 @@ GUIDES = {
     "event_world_store": ("src/deception/world/event_store.py", "docs/commit-results.md"),
     "security_error_renderer": ("src/deception/core/security_error.py", "docs/security-errors.md"),
     "trusted_key_revocations": ("src/deception/security/key_revocation.py", "docs/key-revocation.md"),
+    "world_security_lab": ("deploy/security-lab/compose.yaml", "docs/security/world-db/isolated-oracle-lab.md"),
+    "world_security_lab_provision": ("deploy/security-lab/provision.py", "docs/security/world-db/isolated-oracle-lab.md"),
+    "world_security_lab_probe": ("deploy/security-lab/probe.py", "docs/security/world-db/isolated-oracle-lab.md"),
     "ingress_refusal_audit": ("src/deception/security/ingress_audit.py", "docs/ingress-audit.md"),
     "profile_revocation": ("src/deception/world/projection_registry.py", "docs/profile-revocation.md"),
     "medusa_cart_http": ("src/deception/domains/ecommerce/medusa_cart_http.py", "docs/medusa-carts.md"),

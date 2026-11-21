@@ -26,6 +26,7 @@
 | [威脅能力矩陣](threat-capability-matrix.md) | R1–R5、Runtime/Verifier/主機威脅與每項控制覆蓋能力 | 5 |
 | [驗收計畫](verification-plan.md) | 真 PostgreSQL／非特權 Role、Snapshot/Purge、Policy Race、外部 side effect／Restore、Mixed Runtime、未知 COMMIT（37 個必檢 ID，全 NOT_RUN） | 6 |
 | [修補執行與驗收順序](implementation-runbook.md) | 固定原生缺口、獨立角色與交易分段、G0–G6 Gate、待 Owner 採納決策與證據規則；目前尚未實作／驗收 | 6 |
+| [Oracle 隔離權限驗收 Lab](isolated-oracle-lab.md) | 新建 Internal Network、專用 PostgreSQL、Verifier／Authorizer SCRAM Role Probes；不是正式服務或 G1/G2 完整通過證據 | 7 |
 
 ## 交接原則
 
