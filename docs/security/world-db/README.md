@@ -4,13 +4,15 @@
 
 **目前狀態：Proposed／Security Weakness OPEN／MSDSS P2 NO-GO。沒有執行任何修復或正式發送啟用。**
 
-**v0.2 Contract Freeze candidate（2026-11-21）**：MSDSS 已固定 `SEND_AUTHORIZED` COMMIT 為唯一授權點；**Mirage native 尚未採納／其固定上游版本有已知差異，完整符合性 NOT_RUN**。目標 StartSend 只核對 Snapshot／owner／deadline／single-use／真實不可逆的 Purge Fence，不作第二次 Policy 或 Emergency 授權。Operation Identity、外部 effect key、未知 `SEND_STARTED`、Restore Quarantine、Old Role Mixed Binary Fence 已有 Proposed MUST 與 **31 個必檢 ID（其中 `WORLD-RECOVERY-03` 是群組索引、A～F 各為單獨案例）**。**新控制 NOT_IMPLEMENTED、全部新安全驗收 NOT_RUN**。
+**v0.2 Contract Freeze candidate（2026-11-21）**：`MSDSS Protocol baseline = ACCEPTED (MSDSS)`；`Mirage Owner adoption = PENDING`；`Mirage native conformance = NOT_RUN`。固定上游 `start_send()` 有**局部已觀察差異**，不據此聲稱全契約符合性已測。目標 StartSend 只核對 Snapshot／owner／deadline／single-use／真實不可逆的 execution-ineligibility fence，不作第二次 Policy 或 Emergency 授權。Operation Identity、外部 effect key、未知 `SEND_STARTED`、Restore Quarantine、Old Role Mixed Binary Fence 已有 Proposed MUST 與 **34 個必檢 ID（其中 `WORLD-RECOVERY-03` 是群組索引、A～F 各為單獨案例）**。**新控制 NOT_IMPLEMENTED、全部新安全驗收 NOT_RUN**。
 
 **來源追溯**：Mirage upstream `main` `88dc2008fd35a2d3873949a769653dc9f18e8980`；MSDSS `main` `5a1ee26dcf79f04cf29345a0403e3f3f8082358b` 的 Protocol Freeze v1；Mirage 文件歷史分支名 `docs/mir-sec-world-001-adr-v0.1`／**前置** Commit `003c918f142296588d2fe14b70fafe3cc5cf8458`。**前置 SHA 不是最新文件提交**，v0.1 分支名也不是 v0.2 版本權威；當前 SHA 需以 GitHub／`git rev-parse HEAD` 實查，文件版號、兩個 Source SHA、Git Commit、NOT_IMPLEMENTED、NOT_RUN 分開記錄。**Mirage main 尚未收錄此 ADR**。
 
 **既有版本差異**：Mirage upstream 固定 SHA 的 `start_send` 仍含 Generation/Profile Emergency 再查；MSDSS Freeze v1 則規定最終 `SEND_AUTHORIZED` COMMIT 後不二次查核。這是**待 Mirage Owner 採納的原生協定差異**，不是目前 upstream 已符合新要求的證明。
 
 **Restore 與 BD-11 安全預設**：同一 World DB 備份可倒退後續 Candidate Tombstone；錨點與 Quarantine 強制控制必須由還原範圍外的權威主體維持，缺失時持續禁用正式發送。鎖後 `decision_time` 不證明 COMMIT 早於期限；Owner／DBA／Security 未裁決（BD-11）前，若產品要求 commit-before-deadline 不得開啟正式發送。快照不可用才可阻擋已授權執行，**不得將 Purge Fence 作為第二次 Policy Revocation**。
+
+**防回退 Anchor 與 Purge 語意**：Fence 的簽章／前序 hash 本身不能防止整條紀錄回放舊版；需要 World DB 還原範圍外的最高可信 Head、單調世代、DB timeline/position、canonical digest 與明確資料涵蓋範圍，缺失即維持 Quarantine。**授權 Admission、Candidate 原始 Payload retention、Authorized Snapshot execution eligibility 是三個不同軸線**；原 Candidate bytes Purged 不得自動禁止仍完整的授權 Snapshot；不可逆 `Snapshot Purge Fence` 是執行失格標記，非授權撤銷。
 
 
 | 文件 | 說明 | 建議閱讀順序 |
@@ -20,7 +22,7 @@
 | [權威證據矩陣](evidence-authority-matrix.md) | JWS、Replay、Receipt、Candidate Submission／Validation／Promotion／Binding、Admission、Operation Result 各自可信來源 | 3 |
 | [交易／鎖矩陣](transaction-lock-matrix.md) | 現有鎖順序、可能循環、交易責任、未知 COMMIT 與失敗恢復 | 4 |
 | [威脅能力矩陣](threat-capability-matrix.md) | R1–R5、Runtime/Verifier/主機威脅與每項控制覆蓋能力 | 5 |
-| [驗收計畫](verification-plan.md) | 真 PostgreSQL／非特權 Role、Snapshot/Purge、Policy Race、外部 side effect／Restore、Mixed Runtime、未知 COMMIT（31 個必檢 ID，全 NOT_RUN） | 6 |
+| [驗收計畫](verification-plan.md) | 真 PostgreSQL／非特權 Role、Snapshot/Purge、Policy Race、外部 side effect／Restore、Mixed Runtime、未知 COMMIT（34 個必檢 ID，全 NOT_RUN） | 6 |
 
 ## 交接原則
 
@@ -42,5 +44,7 @@
 | Mirage 原生 Freeze v1 符合性 | **NOT_RUN**；固定 upstream `start_send` 已知與目標有差異 |
 | 真 PostgreSQL ACL／並行／COMMIT Recovery | **NOT_RUN** |
 | Restore／外部 Tombstone 錨點／解禁 | **NOT_RUN** |
+
+**未來安全測試狀態**：`NOT_RUN → BLOCKED`（缺前置條件及 Owner 記錄）；`NOT_RUN／BLOCKED → PASS／FAIL` 必須對應固定原始碼、schema、DB Role、故障注入與可核對證據；版本或預期改變後舊 PASS 應標 `STALE`。目前 checker 是文件**靜態守門**，沒有執行這些安全測試，也不允許以純文件存在取得 PASS。正式 Evidence 驅動轉移必須另經 Owner／Security 審核。
 
 參考原文件：[World Runtime](../../world-runtime.md)、[Trusted Session](../../trusted-session.md)、[Profile Revocation](../../profile-revocation.md)、[Key Revocation](../../key-revocation.md)、[World Commit Result](../../commit-results.md)。
