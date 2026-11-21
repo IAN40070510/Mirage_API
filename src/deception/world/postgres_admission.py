@@ -229,18 +229,23 @@ class PostgresAdmissionControl:
         return None if row is None else ResponseAdmission.model_validate(row[0])
 
     def start_send(self, admission_id: str, *, owner: str, now: int) -> AdmissionOperationResult:
-        """在共享鎖內確認唯一 owner、發送期限與緊急撤銷，持久化傳輸起點。"""
+        """僅檢查已提交的授權、owner、期限與 single-use，不回溯重做政策撤銷。"""
         with self._connection() as connection:
             with connection.cursor() as cursor:
-                row = self._lock_admission(cursor, admission_id, for_send=True)
-                if row is None or row[1] != AdmissionState.SEND_AUTHORIZED.value:
+                # Freeze v1：SEND_AUTHORIZED COMMIT 是唯一授權線性化點；這裡不再取得
+                # Generation／Profile 撤銷鎖，也不能因其後提交的 Emergency 重判授權。
+                cursor.execute(
+                    """SELECT state, transmission_deadline, claim_owner
+                       FROM response_admissions WHERE admission_id = %s FOR UPDATE""",
+                    (admission_id,),
+                )
+                row = cursor.fetchone()
+                if row is None or row[0] != AdmissionState.SEND_AUTHORIZED.value:
                     return AdmissionOperationResult.REJECTED
-                cursor.execute("SELECT claim_owner FROM response_admissions WHERE admission_id=%s", (admission_id,))
-                if cursor.fetchone()[0] != owner:
+                if row[2] != owner:
                     return AdmissionOperationResult.REJECTED
-                if row[3] or now >= row[2]:
-                    state = AdmissionState.ABANDONED if row[3] else AdmissionState.EXPIRED
-                    self._set_state(cursor, admission_id, state.value)
+                if now >= row[1]:
+                    self._set_state(cursor, admission_id, AdmissionState.EXPIRED.value)
                     return AdmissionOperationResult.REJECTED
                 self._set_state(cursor, admission_id, AdmissionState.SEND_STARTED.value)
                 cursor.execute(

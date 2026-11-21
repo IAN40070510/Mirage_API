@@ -8,6 +8,9 @@ Mirage_API 用來回應被判定為攻擊的 API 請求。它的目標不是只�
 
 各工具的輸入、輸出、用法、失敗處理、驗證與授權見 [工具文件索引](docs/README.md)。
 
+**Security Architecture（文件提案，不是已部署控制）**：[MIR-SEC-WORLD-001 ADR v0.2 Contract Freeze candidate](docs/adr/MIR-SEC-WORLD-001-world-db-trust-boundary.md) 與 [World DB 文件／驗收索引](docs/security/world-db/README.md) 已將 Send Authorization Freeze v1、Snapshot Write-Once、權威時間、未知 COMMIT、GC／Restore／Mixed Runtime 合約收斂。**Architecture Proposed／MIR-SEC-WORLD-001 OPEN／MSDSS P2 NO-GO／production DECEIVE OFF；新安全控制與驗收均 NOT_IMPLEMENTED／NOT_RUN。**
+
+
 首次使用可直接執行：
 
 ```sh

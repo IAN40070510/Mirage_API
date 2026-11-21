@@ -597,6 +597,31 @@ def test_emergency_revocation_orders_send_authorization(isolated_test_dsn, send_
     assert grant_registered(observer, uuid4().hex, evidence, registry) is not None
 
 
+def test_freeze_v1_start_send_after_generation_emergency_keeps_owner_and_single_use(isolated_test_dsn):
+    """授權後才撤銷 Generation 不回溯拒絕，但仍拒絕錯 owner、過期及重送。"""
+    control = PostgresAdmissionControl(isolated_test_dsn)
+    registry = PostgresProjectionRegistry(isolated_test_dsn)
+    evidence = projection_evidence(uuid4().hex * 2)
+    registry.register(evidence, registry_revision=1)
+    generation = uuid4().hex
+    admission = grant_registered(control, generation, evidence, registry)
+    identifier = admission.admission_id
+
+    assert control.claim(identifier, owner="sender", now=100) is AdmissionOperationResult.SUCCESS
+    assert control.authorize_send(identifier, now=100) is AdmissionOperationResult.SUCCESS
+    still_valid = grant_registered(control, generation, evidence, registry)
+    assert control.claim(still_valid.admission_id, owner="sender", now=100) is AdmissionOperationResult.SUCCESS
+    assert control.authorize_send(still_valid.admission_id, now=100) is AdmissionOperationResult.SUCCESS
+    control.emergency_revoke(generation)
+    assert control.state(identifier) is AdmissionState.SEND_AUTHORIZED
+    assert control.start_send(identifier, owner="intruder", now=101) is AdmissionOperationResult.REJECTED
+    assert control.start_send(identifier, owner="sender", now=admission.transmission_deadline) is AdmissionOperationResult.REJECTED
+    assert control.state(identifier) is AdmissionState.EXPIRED
+
+    assert control.start_send(still_valid.admission_id, owner="sender", now=101) is AdmissionOperationResult.SUCCESS
+    assert control.start_send(still_valid.admission_id, owner="sender", now=101) is AdmissionOperationResult.REJECTED
+
+
 @pytest.mark.parametrize("at_deadline", [False, True])
 def test_postgres_send_uses_transmission_deadline(isolated_test_dsn, at_deadline):
     """Claim 期限之後仍依發送期限授權，期限相等則拒絕。"""

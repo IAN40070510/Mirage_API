@@ -126,7 +126,43 @@ class TrustedSessionVerifier:
         deployment_id: str | None = None,
         now: int | None = None,
     ) -> TrustedSessionClaims:
-        """驗證 Compact JWS 並回傳可信 claims，成功時原子消費一次性 JTI。
+        """驗證 Compact JWS 與一次性 JTI；相容舊入口，不核發可信 Receipt。"""
+        claims, _ = self._verify(token, expected_issuer=expected_issuer,
+            expected_audience=expected_audience, request_fingerprint=request_fingerprint,
+            environment_id=environment_id, deployment_id=deployment_id, now=now)
+        return claims
+
+    def verify_with_receipt(
+        self, token: str, *, expected_issuer: str, expected_audience: str,
+        request_fingerprint: str, receipt_writer,
+        environment_id: str | None = None, deployment_id: str | None = None,
+        now: int | None = None,
+    ):
+        """可信 Verifier 專用：驗章後在同一 PG IngressTx 原子消費 JTI 並建立 Receipt。
+
+        回傳 (已驗證 claims, receipt UUID)；缺少受保護 Writer 或交易不可用時
+        Fail-Closed，不退回舊的單獨 Replay 路徑。此程序本身不得暴露 Runtime DB
+        憑證或接收 Runtime 自填 verified claims；正式使用須另有服務／Secret 隔離。
+        """
+        from .ingress_receipt import PostgresIngressReceiptWriter
+
+        if not isinstance(receipt_writer, PostgresIngressReceiptWriter):
+            raise TrustedSessionError("trusted_ingress_receipt_writer_required")
+        claims, receipt_id = self._verify(token, expected_issuer=expected_issuer,
+            expected_audience=expected_audience, request_fingerprint=request_fingerprint,
+            environment_id=environment_id, deployment_id=deployment_id, now=now,
+            receipt_writer=receipt_writer)
+        if receipt_id is None:
+            raise TrustedSessionError("trusted_ingress_receipt_missing")
+        return claims, receipt_id
+
+    def _verify(
+        self, token: str, *, expected_issuer: str, expected_audience: str,
+        request_fingerprint: str, environment_id: str | None = None,
+        deployment_id: str | None = None, now: int | None = None,
+        receipt_writer=None,
+    ):
+        """執行唯一 JWS 解析／驗章與受控 Key Guard／Replay／Receipt 結果提交。
 
         issuer、audience、fingerprint 與可選部署身份須由可信呼叫端提供；
         正式 HTTP provider 必須提供環境與部署。now 是 Unix 秒，省略取 UTC。
@@ -164,21 +200,36 @@ class TrustedSessionVerifier:
             self._keys.get(claims.iss, header.kid).verify(signature, signing_input)
         except InvalidSignature as exc:
             raise TrustedSessionError("invalid_trusted_session_signature") from exc
-        guard = (nullcontext(None) if self._key_revocations is None
-                 else self._key_revocations.guard(claims.iss, header.kid))
-        with guard as revoked:
-            if revoked is not None:
-                raise TrustedSessionError("trusted_key_revoked")
-            replay_result = self._replay_store.consume(
-                issuer=claims.iss,
-                audience=claims.aud,
-                jti=claims.jti,
-                expires_at=claims.exp + self._max_clock_skew,
-                now=current,
-            )
-            if replay_result is not ReplayConsumeResult.ACCEPTED:
-                raise TrustedSessionError(f"trusted_session_{replay_result.value}")
-        return claims
+        from deception.security.key_revocation import PostgresTrustedKeyRevocations
+
+        receipt_id = None
+        if receipt_writer is not None:
+            if not isinstance(self._key_revocations, PostgresTrustedKeyRevocations):
+                raise TrustedSessionError("trusted_ingress_requires_postgres_key_guard")
+            revoked, replay_result, receipt_id = self._key_revocations.consume_guarded_receipt(
+                self._replay_store, receipt_writer, claims=claims, kid=header.kid,
+                expires_at=claims.exp + self._max_clock_skew, now=current,
+                max_clock_skew=self._max_clock_skew)
+        elif isinstance(self._key_revocations, PostgresTrustedKeyRevocations):
+            revoked, replay_result = self._key_revocations.consume_guarded_replay(
+                self._replay_store, issuer=claims.iss, kid=header.kid,
+                audience=claims.aud, jti=claims.jti,
+                expires_at=claims.exp + self._max_clock_skew, now=current)
+        else:
+            # 記憶體／測試用 Registry 維持既有介面；正式 PostgreSQL 必須同一交易。
+            guard = (nullcontext(None) if self._key_revocations is None
+                     else self._key_revocations.guard(claims.iss, header.kid))
+            with guard as revoked:
+                if revoked is not None:
+                    raise TrustedSessionError("trusted_key_revoked")
+                replay_result = self._replay_store.consume(
+                    issuer=claims.iss, audience=claims.aud, jti=claims.jti,
+                    expires_at=claims.exp + self._max_clock_skew, now=current)
+        if revoked is not None:
+            raise TrustedSessionError("trusted_key_revoked")
+        if replay_result is not ReplayConsumeResult.ACCEPTED:
+            raise TrustedSessionError(f"trusted_session_{replay_result.value}")
+        return claims, receipt_id
 
     @staticmethod
     def _split(token: str) -> tuple[str, str, str]:
