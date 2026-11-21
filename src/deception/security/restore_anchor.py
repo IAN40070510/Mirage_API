@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import os
+import stat
 from pathlib import Path
 
 
@@ -53,19 +54,45 @@ class FileRestoreAnchor:
     def latest(self):
         """Read the authenticated latest checkpoint or fail closed."""
         try:
-            return self._verified(self.path.read_bytes())[-1]
-        except FileNotFoundError as exc:
+            if self.path.is_symlink():
+                raise AnchorViolation("anchor symlink refused")
+            descriptor = os.open(self.path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+            with os.fdopen(descriptor, "rb") as stream:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_SH)
+                self._validate_file(stream)
+                return self._verified(stream.read())[-1]
+        except (FileNotFoundError, PermissionError, OSError) as exc:
             raise AnchorViolation("anchor unavailable") from exc
+
+    def _validate_file(self, stream):
+        """Refuse symlinks, special files, hard links and weak file permissions."""
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise AnchorViolation("anchor must be a single regular file")
+        if info.st_mode & 0o077:
+            raise AnchorViolation("anchor file accessible to other identities")
 
     def append(self, namespace, epoch, world_digest, publication_id):
         """Append and fsync a checkpoint under an exclusive interprocess lock."""
         if not namespace or not publication_id or epoch < 0 or len(world_digest) != 64:
             raise ValueError("invalid checkpoint")
+        if self.path.is_symlink():
+            raise AnchorViolation("anchor symlink refused")
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a+b", buffering=0) as stream:
+        flags = os.O_RDWR | os.O_APPEND | os.O_CLOEXEC | os.O_NOFOLLOW
+        created = False
+        try:
+            descriptor = os.open(self.path, flags | os.O_CREAT | os.O_EXCL, 0o600)
+            created = True
+        except FileExistsError:
+            descriptor = os.open(self.path, flags)
+        with os.fdopen(descriptor, "r+b", buffering=0) as stream:
             fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+            self._validate_file(stream)
             stream.seek(0)
             data = stream.read()
+            if not data and not created:
+                raise AnchorViolation("existing anchor was emptied")
             records = self._verified(data) if data else []
             if records and (records[-1]["namespace"] != namespace or epoch < records[-1]["epoch"]):
                 raise AnchorViolation("namespace or epoch rollback")
@@ -78,6 +105,12 @@ class FileRestoreAnchor:
             stream.seek(0, os.SEEK_END)
             stream.write(canonical(record) + b"\n")
             os.fsync(stream.fileno())
+            if created:
+                directory = os.open(self.path.parent, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(directory)
+                finally:
+                    os.close(directory)
             return record
 
     def require_fresh(self, namespace, epoch, sequence, world_digest):

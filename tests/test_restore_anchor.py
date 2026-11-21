@@ -46,3 +46,40 @@ class RestoreAnchorTests(unittest.TestCase):
             file.write(b"{")
         with self.assertRaises(AnchorViolation):
             self.anchor.latest()
+
+    def test_empty_existing_anchor_is_not_genesis(self):
+        """A truncated existing anchor cannot silently become a new chain."""
+        self.path.touch(mode=0o600)
+        with self.assertRaises(AnchorViolation):
+            self.anchor.append("world", 1, "a"*64, "one")
+
+    def test_symlink_refused(self):
+        """Refuse to follow a symbolic link to another storage boundary."""
+        target = Path(self.temp.name) / "target"
+        target.write_bytes(b"target")
+        self.path.symlink_to(target)
+        with self.assertRaises(AnchorViolation):
+            self.anchor.append("world", 1, "a"*64, "one")
+        with self.assertRaises(AnchorViolation):
+            self.anchor.latest()
+
+    def test_world_readable_file_refused(self):
+        """Reject an anchor file readable by other local service identities."""
+        self.anchor.append("world", 1, "a"*64, "one")
+        self.path.chmod(0o644)
+        with self.assertRaises(AnchorViolation):
+            self.anchor.latest()
+        with self.assertRaises(AnchorViolation):
+            self.anchor.append("world", 1, "b"*64, "two")
+
+    def test_two_publishers_serialize(self):
+        """Concurrent writers must not reuse a checkpoint sequence."""
+        import concurrent.futures
+        def publish(number):
+            """Append one unique publication using a separate adapter instance."""
+            return FileRestoreAnchor(self.path, b"x"*32).append(
+                "world", 1, format(number, "064x"), "p"+str(number))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(publish, range(1, 17)))
+        self.assertEqual(sorted(item["sequence"] for item in results), list(range(1, 17)))
+        self.assertEqual(self.anchor.latest()["sequence"], 16)
