@@ -121,11 +121,122 @@ def check_links(root: Path) -> list[str]:
     return errors
 
 
+WORLD_ADR_REQUIRED_IDS = (
+    "WORLD-IDENTITY-01", "WORLD-OPERATION-01", "WORLD-OPERATION-02",
+    "WORLD-OPERATION-03", "WORLD-POLICY-01", "WORLD-POLICY-02",
+    "WORLD-PAYLOAD-01", "WORLD-PAYLOAD-02", "WORLD-PAYLOAD-03",
+    "WORLD-SNAPSHOT-01", "WORLD-SNAPSHOT-ACL-01",
+    "WORLD-LIFECYCLE-01", "WORLD-LIFECYCLE-02", "WORLD-LIFECYCLE-03",
+    "WORLD-PURGE-01", "WORLD-TIME-01", "WORLD-LOCK-01",
+    "WORLD-COMPAT-01", "WORLD-RECOVERY-03", "WORLD-RECOVERY-04",
+    "WORLD-RESTORE-OP-01", "WORLD-AUDIT-02",
+    "WORLD-PROTOCOL-01", "WORLD-PROTOCOL-02", "WORLD-RESTORE-TOMBSTONE-01",
+    "WORLD-RECOVERY-03A", "WORLD-RECOVERY-03B", "WORLD-RECOVERY-03C",
+    "WORLD-RECOVERY-03D", "WORLD-RECOVERY-03E", "WORLD-RECOVERY-03F",
+    "WORLD-RESTORE-FENCE-01", "WORLD-PURGE-BOUNDARY-01",
+    "WORLD-PROTOCOL-MATRIX-01",
+    "WORLD-SNAPSHOT-SEPARATION-01", "WORLD-RESTORE-PUBLISH-01",
+    "WORLD-PURGE-RETRY-01",
+)
+
+
+def check_world_adr_contract(root: Path) -> list[str]:
+    '''Verify the Proposed ADR v0.2 tests and cross-document safety boundaries.
+
+    The check is deliberately skipped on Mirage main while that branch has
+    no ADR. It does not execute the proposed World DB safety tests.
+    '''
+    adr_path = root / "docs/adr/MIR-SEC-WORLD-001-world-db-trust-boundary.md"
+    if not adr_path.exists():
+        return []
+    files = {
+        "ADR": adr_path,
+        "decisions": root / "docs/security/world-db/decisions-log.md",
+        "verification": root / "docs/security/world-db/verification-plan.md",
+        "evidence": root / "docs/security/world-db/evidence-authority-matrix.md",
+        "locks": root / "docs/security/world-db/transaction-lock-matrix.md",
+        "threat": root / "docs/security/world-db/threat-capability-matrix.md",
+        "index": root / "docs/security/world-db/README.md",
+        "docs-index": root / "docs/README.md",
+        "root-index": root / "README.md",
+    }
+    errors: list[str] = []
+    content: dict[str, str] = {}
+    for name, path in files.items():
+        if not path.is_file():
+            errors.append(f"world-adr: missing {name}: {path.relative_to(root)}")
+            continue
+        content[name] = path.read_text(encoding="utf-8-sig")
+
+    if len(content) != len(files):
+        return errors
+    adr = content["ADR"]
+    plan = content["verification"]
+    decision = content["decisions"]
+    plan_ids = re.findall(r"(?m)^\| `(WORLD-[A-Z0-9-]+)` \|", plan)
+    duplicates = sorted({test_id for test_id in plan_ids if plan_ids.count(test_id) > 1})
+    if duplicates:
+        errors.append(f"world-adr: duplicate verification IDs: {', '.join(duplicates)}")
+    for line in plan.splitlines():
+        if re.match(r"^\| `WORLD-[A-Z0-9-]+` \|", line) and not line.endswith("| NOT_RUN |"):
+            errors.append(f"world-adr: proposed verification row must remain NOT_RUN: {line[:72]}")
+    for test_id in WORLD_ADR_REQUIRED_IDS:
+        if f"`{test_id}`" not in adr:
+            errors.append(f"world-adr: ADR missing test {test_id}")
+        if f"`{test_id}`" not in decision:
+            errors.append(f"world-adr: decisions log missing test {test_id}")
+        rows = [
+            line for line in plan.splitlines()
+            if line.startswith(f"| `{test_id}` |")
+        ]
+        if len(rows) != 1:
+            errors.append(f"world-adr: verification must have one {test_id}, got {len(rows)}")
+        elif not rows[0].endswith("| NOT_RUN |"):
+            errors.append(f"world-adr: {test_id} must remain NOT_RUN")
+    required = {
+        "ADR": (
+            "Architecture", "Proposed", "SEND_AUTHORIZED",
+            "Protocol Freeze v1", "NOT_RUN", "MIR-SEC-WORLD-001",
+            "MSDSS P2", "OperationSnapshotBinding", "decision_time",
+            "SNAPSHOT_BINDING_CONFLICT", "WORLD_COMMITTED_ADMISSION_UNAVAILABLE",
+            "Protocol baseline", "Mirage Owner adoption", "Mirage native conformance",
+        ),
+        "verification": (
+            "NOT_RUN", "WORLD_COMMITTED_ADMISSION_UNAVAILABLE",
+            "SEND_STARTED", "MIR-SEC-WORLD-001", "MSDSS P2",
+        ),
+        "decisions": (
+            "NOT_RUN", "WORLD_COMMITTED_ADMISSION_UNAVAILABLE",
+            "SEND_AUTHORIZED",
+        ),
+        "index": ("Proposed", "NOT_RUN", "NO-GO"),
+        "docs-index": ("Proposed", "OPEN", "NO-GO"),
+        "root-index": ("Proposed", "OPEN", "NO-GO"),
+    }
+    for name, terms in required.items():
+        for term in terms:
+            if term not in content[name]:
+                errors.append(f"world-adr: {name} missing invariant/status {term}")
+    forbidden = (
+        "AuthorizeTx／StartSendTx 後續只沿同一 Binding",
+        "Authorize 與 StartSend 都要重新讀取最新控制狀態",
+        "Grant 後、StartSend 前撤銷，禁止後續 SEND_STARTED",
+        "StartSend 必須比對 Receipt 綁定",
+        "| SEND_AUTHORIZED | 最後一刻重查最新安全狀態",
+    )
+    for name in ("ADR", "evidence", "locks", "verification"):
+        for expression in forbidden:
+            if expression in content[name]:
+                errors.append(f"world-adr: stale pre-Freeze-v1 wording: {name}")
+    return errors
+
+
 def main() -> int:
     """彙整函式、文件及連結結果；成功回 0，缺漏回 1，供人工或持續整合使用。"""
     total, errors = check_functions(ROOT)
     errors.extend(check_guides(ROOT))
     errors.extend(check_links(ROOT))
+    errors.extend(check_world_adr_contract(ROOT))
     if errors:
         for error in errors:
             print(error)
