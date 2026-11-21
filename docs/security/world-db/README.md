@@ -4,7 +4,7 @@
 
 **目前狀態：Proposed／Security Weakness OPEN／MSDSS P2 NO-GO。沒有執行任何修復或正式發送啟用。**
 
-**v0.2 Contract Freeze candidate（2026-11-21）**：`MSDSS Protocol baseline = ACCEPTED (MSDSS)`；`Mirage Owner adoption = PENDING`；`Mirage native conformance = NOT_RUN`。固定上游 `start_send()` 有**局部已觀察差異**，不據此聲稱全契約符合性已測。目標 StartSend 只核對 Snapshot／owner／deadline／single-use／真實不可逆的 execution-ineligibility fence，不作第二次 Policy 或 Emergency 授權。Operation Identity、外部 effect key、未知 `SEND_STARTED`、Restore Quarantine、Old Role Mixed Binary Fence 已有 Proposed MUST 與 **34 個必檢 ID（其中 `WORLD-RECOVERY-03` 是群組索引、A～F 各為單獨案例）**。**新控制 NOT_IMPLEMENTED、全部新安全驗收 NOT_RUN**。
+**v0.2 Contract Freeze candidate（2026-11-21）**：`MSDSS Protocol baseline = ACCEPTED (MSDSS)`；`Mirage Owner adoption = PENDING`；`Mirage native conformance = NOT_RUN`。固定上游 `start_send()` 有**局部已觀察差異**，不據此聲稱全契約符合性已測。目標 StartSend 只核對 Snapshot／owner／deadline／single-use／真實不可逆的 execution-ineligibility fence，不作第二次 Policy 或 Emergency 授權。Operation Identity、外部 effect key、未知 `SEND_STARTED`、Restore Quarantine、Old Role Mixed Binary Fence 已有 Proposed MUST 與 **37 個必檢 ID（其中 `WORLD-RECOVERY-03` 是群組索引、A～F 各為單獨案例）**。**新控制 NOT_IMPLEMENTED、全部新安全驗收 NOT_RUN**。
 
 **來源追溯**：Mirage upstream `main` `88dc2008fd35a2d3873949a769653dc9f18e8980`；MSDSS `main` `5a1ee26dcf79f04cf29345a0403e3f3f8082358b` 的 Protocol Freeze v1；Mirage 文件歷史分支名 `docs/mir-sec-world-001-adr-v0.1`／**前置** Commit `003c918f142296588d2fe14b70fafe3cc5cf8458`。**前置 SHA 不是最新文件提交**，v0.1 分支名也不是 v0.2 版本權威；當前 SHA 需以 GitHub／`git rev-parse HEAD` 實查，文件版號、兩個 Source SHA、Git Commit、NOT_IMPLEMENTED、NOT_RUN 分開記錄。**Mirage main 尚未收錄此 ADR**。
 
@@ -14,6 +14,8 @@
 
 **防回退 Anchor 與 Purge 語意**：Fence 的簽章／前序 hash 本身不能防止整條紀錄回放舊版；需要 World DB 還原範圍外的最高可信 Head、單調世代、DB timeline/position、canonical digest 與明確資料涵蓋範圍，缺失即維持 Quarantine。**授權 Admission、Candidate 原始 Payload retention、Authorized Snapshot execution eligibility 是三個不同軸線**；原 Candidate bytes Purged 不得自動禁止仍完整的授權 Snapshot；不可逆 `Snapshot Purge Fence` 是執行失格標記，非授權撤銷。
 
+**本輪文件增補（全部 Proposed／NOT_RUN）**：Candidate Payload 與 Authorized Snapshot 有各自儲存物件身分；即使底層 Blob 去重共用，也須由受保護 Pin／引用權威防 Candidate GC 誤刪。`CandidatePayloadPurgeFence` 與 `AuthorizedSnapshotPurgeFence` 分離；Snapshot Fence 提交後 GC 失敗只能冪等重試清理，不復活執行資格。DB-first／Anchor-first 兩種 checkpoint 發布故障都不得從單邊成功推論雙邊一致；不明即 Quarantine。新增 `WORLD-SNAPSHOT-SEPARATION-01`、`WORLD-RESTORE-PUBLISH-01`、`WORLD-PURGE-RETRY-01`，全 NOT_RUN。
+
 
 | 文件 | 說明 | 建議閱讀順序 |
 | --- | --- | --- |
@@ -22,7 +24,7 @@
 | [權威證據矩陣](evidence-authority-matrix.md) | JWS、Replay、Receipt、Candidate Submission／Validation／Promotion／Binding、Admission、Operation Result 各自可信來源 | 3 |
 | [交易／鎖矩陣](transaction-lock-matrix.md) | 現有鎖順序、可能循環、交易責任、未知 COMMIT 與失敗恢復 | 4 |
 | [威脅能力矩陣](threat-capability-matrix.md) | R1–R5、Runtime/Verifier/主機威脅與每項控制覆蓋能力 | 5 |
-| [驗收計畫](verification-plan.md) | 真 PostgreSQL／非特權 Role、Snapshot/Purge、Policy Race、外部 side effect／Restore、Mixed Runtime、未知 COMMIT（34 個必檢 ID，全 NOT_RUN） | 6 |
+| [驗收計畫](verification-plan.md) | 真 PostgreSQL／非特權 Role、Snapshot/Purge、Policy Race、外部 side effect／Restore、Mixed Runtime、未知 COMMIT（37 個必檢 ID，全 NOT_RUN） | 6 |
 
 ## 交接原則
 

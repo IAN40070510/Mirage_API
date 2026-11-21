@@ -92,16 +92,23 @@
 | D-60 | Admission 授權狀態、Candidate 原始 Payload retention、**已綁 Authorized Snapshot execution eligibility** 是不同軸線 | Candidate 原始 bytes Purged 且 Snapshot 完整仍可合法起送；Snapshot 不可用才拒絕，Purge 不改寫歷史 SEND_AUTHORIZED；已提交不可逆 `PURGE_PENDING` 即使 GC 卡住也不能重開資格；`WORLD-PURGE-BOUNDARY-01` NOT_RUN |
 | D-61 | 安全測試結果應有 `NOT_RUN`／`BLOCKED`／`PASS`／`FAIL`／`STALE` 與固定 evidence refs 的狀態轉移；文件靜態檢查不能出具安全 PASS | 現行 checker 尚未接真實測試 evidence，因此強制新增案例仍為 NOT_RUN；未來引入 PASS/BLOCKED 需另審核證據來源與版本失效條件 |
 | D-62 | MSDSS Protocol commit `5a1ee26...` 與 Mirage source commit `88dc2008...` 各自獨立固定；BD-11 未裁決前只可聲稱鎖後一次 DB decision_time 有效 | `commit-before-deadline` 無證明；未知 Commit 禁新授權／傳輸的猜測，但實際已提交的 SEND_AUTHORIZED 不得回溯否認。Owner／DBA／Security 未核准維持 production send OFF |
+| D-63 | Candidate Payload 與 Authorized Snapshot 必須有獨立受保護的**邏輯及儲存物件身分**；共享底層去重 Blob 時由實體 Pin／引用權威防 Candidate GC 刪 Snapshot | SEND_AUTHORIZED 僅綁 immutable Snapshot id/version/storage object version，取回真實 bytes 重算 Hash；`WORLD-SNAPSHOT-SEPARATION-01` NOT_RUN |
+| D-64 | 拆成 `CandidatePayloadPurgeFence` 與 `AuthorizedSnapshotPurgeFence`，各獨立 Write-Once、Scope 與受限寫入 | 前者只禁止原 Candidate 再使用；後者不可逆禁止 Snapshot 新起送但不改 SEND_AUTHORIZED，Runtime 不可自填；`WORLD-SNAPSHOT-SEPARATION-01`、`WORLD-PURGE-RETRY-01` NOT_RUN |
+| D-65 | Restore Anchor 與 World DB 不具天然原子提交，必須覆蓋 **DB-first／Anchor-first** 兩種錯誤次序及未知 ACK | DB committed／Anchor missing → Quarantine；Anchor PREPARED／DB rollback 不構成業務提交；獨立最高可信 Head 不回退，Operation Digest 對帳；BD-05 OPEN，`WORLD-RESTORE-PUBLISH-01` NOT_RUN |
+| D-66 | `AuthorizedSnapshotPurgeFence` 已提交但 Object GC 失敗時只重試 cleanup，**永不恢復 eligibility** | 用固定 `gc_operation_id` 冪等清除／受控介入，保留原 ACL、Audit、Tombstone；不得產生替代 Snapshot／Admission；`WORLD-PURGE-RETRY-01` NOT_RUN |
+| D-67 | 安全測試結果必須經 `NOT_RUN → RUNNING → PASS/FAIL/BLOCKED`，阻塞解除／修復失敗後只能重跑；PASS 綁定不可變實測證據 | 固定 Mirage SHA、Migration/Schema、PG 版、Role、資料集、時間、Fault Injection 與脫敏日誌；文件檢查 PASS 不轉成 `WORLD-*` PASS；`WORLD-SNAPSHOT-SEPARATION-01`、`WORLD-RESTORE-PUBLISH-01`、`WORLD-PURGE-RETRY-01` 全部 NOT_RUN |
 
 **版本與責任**：Mirage_API 原生分析 `main` `88dc2008fd35a2d3873949a769653dc9f18e8980`；MSDSS Protocol Freeze v1 整合基準 `main` `5a1ee26dcf79f04cf29345a0403e3f3f8082358b`；此組文件由 Mirage `docs/mir-sec-world-001-adr-v0.1` 的 v0.2 草稿舊提交 `003c918f142296588d2fe14b70fafe3cc5cf8458` 延續。**該 SHA 只是來源歷史，不是當前 ADR Commit**；後者與文件檢查結果須由 Draft PR／`git rev-parse HEAD` 的外部證據留存，不能在自身追蹤檔案內寫入自身 Commit SHA。全部新增安全驗收 **NOT_RUN**。
 
-### v0.2 新增／修訂測試 ID 交接清單（34 項，其中 1 項為群組索引；全部 NOT_RUN）
+### v0.2 新增／修訂測試 ID 交接清單（37 項，其中 1 項為群組索引；全部 NOT_RUN）
 
 `WORLD-IDENTITY-01`、`WORLD-OPERATION-01`、`WORLD-OPERATION-02`、`WORLD-OPERATION-03`、`WORLD-POLICY-01`、`WORLD-POLICY-02`、`WORLD-PAYLOAD-01`、`WORLD-PAYLOAD-02`、`WORLD-PAYLOAD-03`、`WORLD-SNAPSHOT-01`、`WORLD-SNAPSHOT-ACL-01`、`WORLD-LIFECYCLE-01`、`WORLD-LIFECYCLE-02`、`WORLD-LIFECYCLE-03`、`WORLD-PURGE-01`、`WORLD-TIME-01`、`WORLD-LOCK-01`、`WORLD-COMPAT-01`、`WORLD-RECOVERY-03`、`WORLD-RECOVERY-04`、`WORLD-RESTORE-OP-01`、`WORLD-AUDIT-02`。
 
 本輪追加 `WORLD-PROTOCOL-01`、`WORLD-PROTOCOL-02`、`WORLD-RESTORE-TOMBSTONE-01`，以及 `WORLD-RECOVERY-03A`、`WORLD-RECOVERY-03B`、`WORLD-RECOVERY-03C`、`WORLD-RECOVERY-03D`、`WORLD-RECOVERY-03E`、`WORLD-RECOVERY-03F`。**父 ID `WORLD-RECOVERY-03` 不可作獨立 JUnit PASS**；子案必須各自滿足 Verification Plan 的 Given／Action／Expected。
 
 本輪再加入 `WORLD-RESTORE-FENCE-01`、`WORLD-PURGE-BOUNDARY-01`、`WORLD-PROTOCOL-MATRIX-01`；所有案例仍 NOT_RUN，不能用文件檢查器通過宣稱安全驗收。
+
+本次再補 `WORLD-SNAPSHOT-SEPARATION-01`（獨立物件／共用 Blob Pin）、`WORLD-RESTORE-PUBLISH-01`（兩方向發布失敗）、`WORLD-PURGE-RETRY-01`（Fence 後 GC 故障）。完整 Given／Action／Expected 留在 Verification Plan；均尚未執行。
 
 完整預期與 Scenario 以 [Verification Plan](verification-plan.md) 各唯一 ID 為準；ADR／Decision Log／Plan 的 ID 與狀態必須同步，這裡沒有 PASS 證據。`WORLD_COMMITTED_ADMISSION_UNAVAILABLE` 仍是 reconciliation classification，非 State enum。
 

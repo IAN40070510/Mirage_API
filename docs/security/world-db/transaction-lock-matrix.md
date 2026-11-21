@@ -53,8 +53,9 @@ Tx B (Session epoch rollover)：
 | GrantTx | Head／Generation／Receipt／Promoted Candidate／Binding／Admission／Profile／Key；FK INSERT 對 Parent 隱含 KEY SHARE | **不能假定 Candidate 一定最先鎖**；必須交付完整多 Backend lock DAG |
 | AuthorizeTx | Head FOR SHARE → Binding/Admission FOR UPDATE → Generation FOR UPDATE → Profile/Key/Policy Guard（實際順序需以 SQL 證實） | Freeze v1：**COMMIT SEND_AUTHORIZED 才是線性化點**；鎖後一次 decision_time |
 | StartSendTx | Admission FOR UPDATE → 已綁 Snapshot/Pin/Purge Fence 的受保護執行檢查 | **無 Policy/Emergency/Epoch/Key 再授權**；SEND_STARTED＋必要 Audit 提交確認後才 ASGI |
-| GcPurgeTx | 完整 Candidate Identity + Version、Binding、Pin/Lease、Snapshot/Purge Tombstone、FK DELETE 的隱含鎖 | 必須先原子寫 non_retryable fence；Active Sender 等待／受控中止，UNKNOWN 對帳；DB GC 不自動證明外部 Object 已刪 |
+| CandidatePayloadGcTx／AuthorizedSnapshotPurgeTx | Candidate Payload Object 與獨立 Snapshot Object identity/version、Binding、**實體 Blob Ref/Pin/Lease**、各自 Purge Fence、FK DELETE 隱含鎖 | Candidate GC 不能刪仍被 Snapshot Pin 的共享 Blob，Candidate Fence 不影響已授權 Snapshot。Snapshot GC 先受保護 COMMIT `AuthorizedSnapshotPurgeFence` 永久禁新 StartSend，後以固定 gc_operation_id 冪等刪實體 bytes；GC 失敗不得恢復資格；UNKNOWN 對帳；真正 Object 刪除與 DB COMMIT 非原子 |
 | Restore/MixedFence | **還原範圍外**的 Quarantine/Namespace/Anti-Rollback Anchor/External Receipt；Old Role ACL／Connection Pool 徹底撤銷 | 先隔離才准 Runtime／Sender 恢復；外部單調 checkpoint 與 Tombstone/Operation 範圍不能驗證時持續禁送；新舊 Runtime 分 Role/credential，未知 COMMIT/HTTP 不新發送 |
+| RestoreAnchorPublish（跨交易／跨信任域） | World DB 的 Operation/Tombstone Commit 與外部獨立 Head 的 durable publish／ACK 是**不同原子域**；Anchor 先行時必須標 PREPARED／UNUSED | DB first、Anchor missing／ACK unknown → Quarantine＋唯讀 Operation Digest／外部效果對帳；Anchor first、DB rollback → 不構成業務提交，Head 不回退；兩邊無法核對則持續 Quarantine，`WORLD-RESTORE-PUBLISH-01` NOT_RUN |
 
 **MUST**：實作記錄每一 SQL 的**實際** Isolation Level、row/advisory/FK lock mode、等待依賴、lock_timeout、`40P01`／`40001` 時是否有外部副作用；並以不同 PostgreSQL Backend 鎖等待、順序競態、GC、撤銷、備份還原實證。**此圖是盤點，不是已證明全球無死鎖的 DAG。**
 
@@ -70,7 +71,9 @@ Tx B (Session epoch rollover)：
 - **BD-11 OPEN 時的預設停用**：不能把 decision-time 合法冒稱 commit-before-deadline；如果產品需要後者，正式送出功能保持 DISABLED。未知 COMMIT 不得新起送／重試；但已實際完成的 `SEND_AUTHORIZED` 不因 ACK 遺失而回溯變成未授權。權威 DB 時間不可檢證時停止新的授權與 StartSend。
 - **Purge Fence 不是 Policy Revocation**：僅受保護的 Snapshot 安全不可用／不可逆 GC 事實可封鎖已授權執行；Runtime 或控制介面不得在授權後藉自填 Fence 達成第二次政策否決（`WORLD-PROTOCOL-02` NOT_RUN）。
 - **三軸資料一致性**：Admission 授權狀態、Candidate 原始 Payload retention、已綁 Authorized Snapshot 的 `AVAILABLE/PURGE_PENDING/PURGED/CORRUPT/UNAVAILABLE` 執行資格是不同狀態域。GC 清除 Candidate 原始 bytes 不能直接封鎖完整 Snapshot；Snapshot 真實 Purge/Integrity 失效則只封鎖新 StartSend，不回溯寫掉 SEND_AUTHORIZED；實際 Schema／轉移仍屬 Proposed，`WORLD-PURGE-BOUNDARY-01` NOT_RUN。
+- **獨立儲存物件／雙 Fence／GC 重試**：CandidatePayloadObject 與 AuthorizedSnapshotObject 各有受保護 identity，底層共享 dedup Blob 時必須同鎖或等價 pin/refcount 保障，外部 Object Delete 與 DB Reference 轉移的競態須以故障注入測試。`CandidatePayloadPurgeFence` 不影響已授權 Snapshot，`AuthorizedSnapshotPurgeFence` 已提交則即使 Object GC 失敗也永久禁新起送；重試只能在相同冪等 GC Operation 下清理，不重開資格。`WORLD-SNAPSHOT-SEPARATION-01`、`WORLD-PURGE-RETRY-01` NOT_RUN。
 - **Restore Fence**：只有還原範圍外的最高受信任 checkpoint head、單調世代、DB timeline/position 與 canonical digest 覆蓋清單能建立防重播／未倒退邊界；若缺 Candidate Tombstone/Binding/Operation/Replay/Revocation 涵蓋、或來源權威不可核對，必須持續 Quarantine（`WORLD-RESTORE-FENCE-01` NOT_RUN）。
+- **Anchor 發布非原子**：DB-first 的 checkpoint ACK 未知與 Anchor-first 的 DB rollback 是兩個不同故障案例。先行的 PREPARED checkpoint 不等同 DB Commit，不能拿獨立 Anchor 當 World Result；DB-first 卻沒有相應最新 Head 時持續隔離並依 Operation Digest 對帳（`WORLD-RESTORE-PUBLISH-01` NOT_RUN）。
 - `SELECT FOR UPDATE／FOR SHARE／FOR KEY SHARE`、FK INSERT/DELETE implicit row-lock／advisory lock 順序須列入同一 lock graph；Key／Profile／Emergency 與 **Authorize** 並行驗證，**不得**把本來已凍結的 Policy 又塞回 StartSend。
 - `lock_timeout`、`statement_timeout`、`idle_in_transaction_session_timeout` 與角色 CONN LIMIT 是**可用性限制**，數值須由容量與延遲測試訂定；不是替代狀態機正確性的證據。
 
