@@ -164,20 +164,27 @@ class TrustedSessionVerifier:
             self._keys.get(claims.iss, header.kid).verify(signature, signing_input)
         except InvalidSignature as exc:
             raise TrustedSessionError("invalid_trusted_session_signature") from exc
-        guard = (nullcontext(None) if self._key_revocations is None
-                 else self._key_revocations.guard(claims.iss, header.kid))
-        with guard as revoked:
-            if revoked is not None:
-                raise TrustedSessionError("trusted_key_revoked")
-            replay_result = self._replay_store.consume(
-                issuer=claims.iss,
-                audience=claims.aud,
-                jti=claims.jti,
-                expires_at=claims.exp + self._max_clock_skew,
-                now=current,
-            )
-            if replay_result is not ReplayConsumeResult.ACCEPTED:
-                raise TrustedSessionError(f"trusted_session_{replay_result.value}")
+        from deception.security.key_revocation import PostgresTrustedKeyRevocations
+
+        if isinstance(self._key_revocations, PostgresTrustedKeyRevocations):
+            revoked, replay_result = self._key_revocations.consume_guarded_replay(
+                self._replay_store, issuer=claims.iss, kid=header.kid,
+                audience=claims.aud, jti=claims.jti,
+                expires_at=claims.exp + self._max_clock_skew, now=current)
+        else:
+            # 記憶體／測試用 Registry 維持既有介面；正式 PostgreSQL 必須同一交易。
+            guard = (nullcontext(None) if self._key_revocations is None
+                     else self._key_revocations.guard(claims.iss, header.kid))
+            with guard as revoked:
+                if revoked is not None:
+                    raise TrustedSessionError("trusted_key_revoked")
+                replay_result = self._replay_store.consume(
+                    issuer=claims.iss, audience=claims.aud, jti=claims.jti,
+                    expires_at=claims.exp + self._max_clock_skew, now=current)
+        if revoked is not None:
+            raise TrustedSessionError("trusted_key_revoked")
+        if replay_result is not ReplayConsumeResult.ACCEPTED:
+            raise TrustedSessionError(f"trusted_session_{replay_result.value}")
         return claims
 
     @staticmethod

@@ -32,20 +32,28 @@ class PostgresReplayStore:
             return ReplayConsumeResult.EXPIRED
         with self._connection() as connection:
             with connection.cursor() as cursor:
-                cursor.execute(
-                    """
-                    INSERT INTO replay_entries (issuer, audience, jti, expires_at)
-                    VALUES (%s, %s, %s, %s)
-                    ON CONFLICT (issuer, audience, jti) DO NOTHING
-                    RETURNING issuer
-                    """,
-                    (issuer, audience, jti, expires_at),
-                )
-                return (
-                    ReplayConsumeResult.ACCEPTED
-                    if cursor.fetchone() is not None
-                    else ReplayConsumeResult.REPLAY
-                )
+                return self._consume_on_cursor(cursor, issuer=issuer, audience=audience,
+                                               jti=jti, expires_at=expires_at, now=now)
+
+    @staticmethod
+    def _consume_on_cursor(cursor, *, issuer: str, audience: str, jti: str,
+                           expires_at: int, now: int) -> ReplayConsumeResult:
+        """在呼叫者已建立的 PostgreSQL 交易消費 JTI，不開第二條連線或自行提交。"""
+        if not issuer or not audience or not jti or expires_at <= now:
+            return ReplayConsumeResult.EXPIRED
+        if cursor.connection.autocommit:
+            raise ValueError("replay_consume_requires_transaction")
+        cursor.execute(
+            """
+            INSERT INTO replay_entries (issuer, audience, jti, expires_at)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (issuer, audience, jti) DO NOTHING
+            RETURNING issuer
+            """,
+            (issuer, audience, jti, expires_at),
+        )
+        return (ReplayConsumeResult.ACCEPTED if cursor.fetchone() is not None
+                else ReplayConsumeResult.REPLAY)
 
     def gc(self, *, now: int) -> int:
         """刪除已過期 Replay 紀錄，保留仍可能有效的舊授權。"""

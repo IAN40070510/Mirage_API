@@ -296,10 +296,19 @@ def from_environment():
     MIRAGE_ENABLE_BUSINESS 須明確設 true 才啟用合成寫入。可選的
     MIRAGE_AUTO_MIGRATE=true 會先套用 checksum migration；預設由部署流程執行。
     任何設定或 schema 錯誤都阻止啟動，不切換至模擬判定或記憶體儲存。
+    安全修補分支的正式 Trusted Send 入口保留硬性 Release Fuse，直到
+    Verifier／Authorizer 跨容器可信連線及實體 ACL 均完成安全驗收。
     """
     required = ("MIRAGE_TRUSTED_SETTINGS_FILE", "MIRAGE_POSTGRES_DSN", "MIRAGE_DEMO_ORIGIN")
     if any(not os.environ.get(name) for name in required):
         raise ValueError("trusted settings file, PostgreSQL DSN and deployment origin are required")
+    from deception.security.world_acl import WorldAclPreflightError, require_restricted_world_runtime
+
+    require_restricted_world_runtime(os.environ["MIRAGE_POSTGRES_DSN"],
+                                     schema=os.environ.get("MIRAGE_WORLD_SCHEMA", "public"))
+    # 即使 ACL Read-Only Preflight 通過，也不代表目前共用 postgres_dsn 的
+    # Verifier／Authorizer 已分離。未改造完成前不得讓任何環境變數繞過此 Gate。
+    raise WorldAclPreflightError("protected_world_services_not_wired")
     settings = TrustedDeploymentSettings.model_validate_json(
         Path(os.environ["MIRAGE_TRUSTED_SETTINGS_FILE"]).read_text(encoding="utf-8"))
     for name in ("MIRAGE_AUTO_MIGRATE", "MIRAGE_ENABLE_BUSINESS", "MIRAGE_ENABLE_MEDUSA_STORE"):
