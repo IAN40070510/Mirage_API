@@ -12,7 +12,7 @@
 | `claim`／`authorize_send`／`start_send`（**區分上游舊版與 MSDSS Freeze v1**） | Mirage 上游 `main` 的原生實作仍須逐項核實；MSDSS Freeze v1 的 Authorize：Session Head FOR SHARE → Binding → Admission FOR UPDATE → Generation FOR UPDATE → Profile；StartSend：Admission FOR UPDATE，**不取 Head/Revocation 鎖** | 舊上游 Source 不能假裝已支援新 Freeze；新 v0.2 修補不得讓 StartSend 重新授權 |
 | `KeyRevocationRegistry.guard/revoke` | Key namespace 的 transaction advisory lock → Tombstone read/write | 新 Ingress／Authorize 需納入 Key guard；**StartSend 不重新取 Key/Policy Revocation 鎖** |
 | Profile Revocation | Profile namespace 的 transaction advisory lock、受保護狀態讀寫 | 需與 Admission／Generation／Session 交互動態查核，沿用現有鍵演算法 |
-| `TrustedSessionVerifier.verify`／`PostgresReplayStore.consume`／`KeyRevocationRegistry.guard` | Verifier 呼叫 Replay consume；Replay 與 Key Guard **各自開 DB connection** | **現有程式不滿足**「Key Guard＋Replay＋Receipt 同一 physical connection／transaction」；外層單加 BEGIN 無效 |
+| `TrustedSessionVerifier.verify`／`PostgresReplayStore.consume`／`KeyRevocationRegistry.guard` | Mirage 固定原生基準：Verifier 呼叫 Replay consume；Replay 與 Key Guard **各自開 DB connection**；獨立修補分支改為 PostgreSQL 專用 `consume_guarded_replay`，Key Guard＋Replay INSERT 同一 connection/transaction | 局部收斂不包含 Receipt writer；**尚不滿足**「Key Guard＋Replay＋Receipt 同一 physical connection／transaction」；外層單加 BEGIN 無效 |
 | `PostgresCandidateStore.put/gc` | `put` 由 body 算 SHA-256 保存完整 Scope＋`candidate_ref`；`gc` 依呼叫者傳入 `protected_refs` 刪除已過期紀錄 | 單靠呼叫者清單不是 Grant／GC 的 DB-level 原子性保證；需完整 Scope FK／鎖／受限 GC 與 Payload 保留策略 |
 
 **潛在循環示例（不是已重現的死鎖）**：

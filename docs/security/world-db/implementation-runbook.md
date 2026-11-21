@@ -25,6 +25,8 @@
 
 **G1 子切面（待獨立驗證）**：獨立分支新增 `deception.security.world_acl`，以正式 Runtime 實體 DSN 唯讀檢查 Session Login、有效權限、特權 Role Membership 與關鍵表。現有 `trusted_http.from_environment()` 在服務／權限重構未完成前有不可由環境開關跳過的 **Release Fuse**：即使 ACL 檢查通過仍拒絕正式 Trusted Send 啟動。`create_app()` 仍供隔離 Python 正向測試使用，**不能以此推論正式入口可啟用**。新增 `WORLD-ACL-06` 子案例在一次性 PostgreSQL CI service 建立真實 SCRAM LOGIN，驗證無法改寫 Admission、Session epoch、Replay 或 `SET ROLE`；一般開發環境未設 `MIRAGE_WORLD_ROLE_TEST_ISOLATED=true` 不准修改 PostgreSQL cluster roles。這只驗證**隔離 ACL fixture**，並非正式 Oracle 部署角色、Secret、來源或 IPC 的證據，G1 保持 `NOT_RUN`。
 
+**G2 子切面（本輪待 CI 驗證）**：`TrustedSessionVerifier` 配合 `PostgresTrustedKeyRevocations.consume_guarded_replay` 與 `PostgresReplayStore._consume_on_cursor`，使**現有 Key Revocation Guard＋Replay JTI INSERT** 在同一 PostgreSQL connection／READ COMMITTED transaction 執行。不同 DSN 或非 PostgreSQL Replay Store 拒絕；新增真實 PostgreSQL 的單連線、INSERT 後 rollback、COMMIT ACK loss 負面案例。這**尚未涵蓋 Ingress Receipt、由可信 Verifier 獨立寫入的證據、Operation ID 對帳或正式 Role ACL**。G2 仍為 `NOT_RUN`；正式入口 Release Fuse 不變。
+
 ## 不得由工程師自行猜測的決策
 
 1. **Mirage Owner adoption／Protocol Freeze v1：ACCEPTED（2026-11-21 使用者明確決策）。** `SEND_AUTHORIZED` 提交後不以 Policy／Emergency 做第二次授權；`StartSend` 保留 owner、deadline、single-use 與真實 Snapshot 執行前置條件。這只解除協定選擇阻塞，**不代表** DB 角色分離、Snapshot 完整性、未知 COMMIT 或原生端到端符合性已經驗證。
