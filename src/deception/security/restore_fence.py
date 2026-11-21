@@ -81,6 +81,9 @@ def release_if_reconciled(cursor, evidence: RestoreEvidence, expected_revision: 
     )
     if cursor.fetchone() is not None:
         raise RestoreFenceDenied("unresolved publication intent")
+    from .fence_operation_journal import require_no_ambiguous_operations
+
+    require_no_ambiguous_operations(cursor, evidence.namespace)
     cursor.execute(
         """UPDATE restore_quarantine_fences
            SET anchor_sequence=%s, anchor_digest=%s, state='RELEASED',

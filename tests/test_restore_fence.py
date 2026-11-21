@@ -23,6 +23,8 @@ class FakeCursor:
         self.calls.append((sql, params))
         if "FROM restore_quarantine_fences" in sql:
             self._result = self.row
+        elif "FROM restore_operation_intents" in sql:
+            self._result = None
         elif "FROM restore_publication_intents" in sql:
             self._result = (1,) if self.pending else None
         else:
