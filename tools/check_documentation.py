@@ -21,6 +21,8 @@ GUIDES = {
     "world_security_lab_provision": ("deploy/security-lab/provision.py", "docs/security/world-db/isolated-oracle-lab.md"),
     "world_security_lab_probe": ("deploy/security-lab/probe.py", "docs/security/world-db/isolated-oracle-lab.md"),
     "world_security_lab_ingress_probe": ("deploy/security-lab/atomic_ingress_probe.py", "docs/security/world-db/isolated-oracle-lab.md"),
+    "world_security_lab_receipt_migrate": ("deploy/security-lab/migrate_receipts.py", "docs/security/world-db/isolated-oracle-lab.md"),
+    "world_security_lab_receipt_probe": ("deploy/security-lab/receipt_schema_probe.py", "docs/security/world-db/isolated-oracle-lab.md"),
     "ingress_refusal_audit": ("src/deception/security/ingress_audit.py", "docs/ingress-audit.md"),
     "profile_revocation": ("src/deception/world/projection_registry.py", "docs/profile-revocation.md"),
     "medusa_cart_http": ("src/deception/domains/ecommerce/medusa_cart_http.py", "docs/medusa-carts.md"),

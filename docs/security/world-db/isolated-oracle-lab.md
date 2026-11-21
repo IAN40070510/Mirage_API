@@ -30,6 +30,16 @@ docker compose -f compose.yaml exec -T authorizer-probe python /lab/source/deplo
 docker compose -f compose.yaml --profile negative-tests run --rm --no-deps runtime-probe python /lab/source/deploy/security-lab/probe.py runtime
 ```
 
+當分支加入 `017_trusted_ingress_receipts.sql`，由已完成初始化的專用 Lab 執行**可重入的前向 Migration**（不得重新建立／覆蓋 SCRAM 帳號）：
+
+```bash
+docker compose -f compose.yaml --profile bootstrap run --rm --no-deps bootstrap python /lab/source/deploy/security-lab/migrate_receipts.py
+docker compose -f compose.yaml exec -T verifier-probe python /lab/source/deploy/security-lab/receipt_schema_probe.py verifier
+docker compose -f compose.yaml --profile negative-tests run --rm --no-deps runtime-probe python /lab/source/deploy/security-lab/receipt_schema_probe.py runtime
+```
+
+第一個指令檢查精確 Lab database／marker 並以既有 admin Secret 套用有 checksum 的有序 Migration，只授權 Lab Verifier Receipt 的指定 INSERT 欄位、Verifier/Authorizer SELECT，Runtime 沒有直接 DML。探針只使用**合成 Receipt 測資**，故通過也只證明 PostgreSQL FK、ACL 與 Rollback，不代表已由真實 Verifier 驗章或可供正式 Grant 使用。新 Receipt 的 `ON DELETE RESTRICT` 在正式 GC/Retention 協定完成前，可能保守阻擋關聯 Replay 清理；不得為讓 GC 通過而移除 FK 或恢復 Runtime DELETE。
+
 預期 `provision.py` 只在全新專用 PostgreSQL Database 執行有序 migrations，建立 `mir_sec_verifier`／`mir_sec_authorizer`／`mir_sec_http_runtime` 互不繼承的 SCRAM 登入；Runtime 無關鍵表 DML，Verifier 只具測試性 Replay INSERT／SELECT，Authorizer 只具保護表 SELECT。這些角色配置**刻意不是**完整 World API 的可運行最小權限；正式受限函式、Ingress Receipt、Grant Binding 仍未接上。
 
 `probe.py` 必須用該角色的實體 SCRAM Session 驗證 `session_user/current_user`、`rolinherit/rolsuper/rolbypassrls`、實際 `has_table_privilege`、跨角色 Membership、SECRET 隔離，以及三種直寫 SQL 與 `SET ROLE` 的 **SQLSTATE 42501**。Verifier 的正常 Replay INSERT 必須可成功執行並於測試 rollback；Authorizer 的正常 SELECT 必須可執行。CLI 不應輸出 DSN 密碼。若有任一項失敗，環境應標記 FAIL、停止本輪信任邊界驗收，**不得放寬 ACL 來換 PASS**。
