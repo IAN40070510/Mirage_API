@@ -65,6 +65,8 @@
 | `WORLD-SNAPSHOT-01` | Status／ordered headers／body bytes／encoding v1／Snapshot id/version/hash 與 Admission/Operation 變動，ASGI 訊息不同；合法 HTTP framing | 應用層 Envelope 任何未授權變更拒絕；合法 framing 轉換允許；不把 Hash 宣稱為 TCP wire hash | NOT_RUN |
 | `WORLD-SNAPSHOT-ACL-01` | 不同 Role 讀 Snapshot、備份與 Debug Log 中敏感 bytes、保留期／密鑰刪除／取回 Hash | 未授權 Role 無全文權限，Audit 無敏感 bytes，有限 retention/backup/secure purge 及真 bytes hash 驗證必須留下證據 | NOT_RUN |
 | `WORLD-POLICY-02` | Emergency 在 SEND_AUTHORIZED 前／後提交，另 NO_NEW_GRANTS 與既有 Grant、REVOKED 後再 ACTIVE | 前者拒絕 Authorize；後者已授權保留、Start 不再重查；NO_NEW_GRANTS 禁新 Grant，REVOKED 不可直接復活 | NOT_RUN |
+| `WORLD-PROTOCOL-01` | **Given**：固定 Mirage upstream `88dc2008…` `start_send()` 含 Generation/Profile Emergency 二次查核，MSDSS `5a1ee26…` Freeze v1 以 SEND_AUTHORIZED COMMIT 為最終授權點。**Action**：比較行為，再以正式修補後 Mirage 原生交易、並行撤銷與 owner/deadline/single-use/Snapshot 測試實測 | **Expected**：舊 upstream 明確標為已知差異、非 compliant；**新版未實作前 NOT_RUN，不能宣稱已 PASS**。正式採納版不二次 Policy/Emergency 授權，仍攔截 owner、期限、single-use、Snapshot 不符 | NOT_RUN |
+| `WORLD-PROTOCOL-02` | **Given**：SEND_AUTHORIZED 已提交且 Snapshot 完整，後續 Policy/Emergency 改變。**Action**：Runtime 或控制面嘗試自填／任意覆寫 Purge/Execution Fence；另觸發真實受保護 Snapshot purge/corruption | **Expected**：前者不得藉偽造 Fence 否決已提交授權；後者按執行不可用性 Fail-Closed，保留授權歷史與不可重送證據；兩者皆不得引入第二個政策授權點 | NOT_RUN |
 
 ## 3. Freshness、鎖、時間與輪替
 
@@ -100,22 +102,28 @@
 | `WORLD-FAIL-04` | SEND_STARTED 之後 Runtime Crash／TCP 失聯 | 結果 UNKNOWN／UNRESOLVED；無自動重送 | NOT_RUN |
 | `WORLD-RECOVERY-01` | 未知 COMMIT（before／after ACK loss） | 有相同 ID／digest 可信結果才唯讀查回；不能盲目重試 | NOT_RUN |
 | `WORLD-RECOVERY-02` | Operation ID 相同但 input digest 改變／ID 碰撞 | 明確拒絕而不轉移別的 Operation 結果 | NOT_RUN |
-| `WORLD-RECOVERY-03` | **群組索引** A DB 明確 rollback 且有 World/External/HTTP 零效果證據；B JTI 已提交消費但 Grant 失敗；C COMMIT/ACK loss 卻要求新 JWS；D World 已提交 Admission 未知；E HTTP 已起送而 Audit 未知；F Object 已刪但 DB 未更新 | A 僅在原 immutable operation/digest 未執行、JWS exp／Session／Generation／Policy 仍有效時受限重試；**JTI 未消費／查無 Receipt 本身不是證明**；B 不復活 JTI；C 只對帳；D 不重做 World；E 不重送；F Quarantine；各子案須有獨立結果，不得把群組當單一 PASS | NOT_RUN |
+| `WORLD-RECOVERY-03` | **群組索引，不得產生 JUnit PASS**：各以 A～F 獨立 Fault Injection 實測；不可把「查不到 Receipt」當 rollback，亦不得把測試 Harness 知道的 COMMIT 真值當 Client 所知 | **Expected**：`03A`～`03F` 每案獨立 Given／Action／Expected、各有 JUnit 與 commit/DB 角色/副作用證據；本列只保留索引、不代表六案通過 | NOT_RUN |
+| `WORLD-RECOVERY-03A` | **Given**：IngressTx 經 PostgreSQL 明確證實 rollback，可信查核顯示 World／外部 API／HTTP 均無效果，原 Operation Identity/Digest 未執行且 JWS／Session／Generation／Policy 仍有效。**Action**：以**同 ID、同 Digest** 發起受限重試 | **Expected**：僅在所有前提成立時可依政策重新驗證並受限執行；任一前提缺失則拒絕，不得以單純 JTI 未消費推定安全 | NOT_RUN |
+| `WORLD-RECOVERY-03B` | **Given**：Ingress Replay＋Receipt 已提交，後續 Grant 失敗，JTI 已永久消費。**Action**：Runtime 用相同或換 Operation ID 重用同 JTI | **Expected**：拒絕重消費；原消費墓碑與失敗證據保留，沒有有效的新 Admission／Binding | NOT_RUN |
+| `WORLD-RECOVERY-03C` | **Given**：IngressTx 的 COMMIT ACK 遺失，Client 無從得知實際提交，唯讀對帳暫不可用。**Action**：Runtime 嘗試用舊 JWS、新 JWS 或新 Epoch 直接重試 | **Expected**：全部停止重新執行；標 `UNVERIFIABLE` 並以原 Operation ID/Digest 對帳，查無結果不得解作 rollback | NOT_RUN |
+| `WORLD-RECOVERY-03D` | **Given**：World Mutation/Commit 已由可信結果證實提交，Admission 狀態失敗或不可確認。**Action**：HTTP 重試或簽發新 JWS 以求再次執行相同意圖 | **Expected**：不重做 World／外部副作用；以固定 Effect Key／World Operation Result 對帳，不以新 JWS 消除原不確定性 | NOT_RUN |
+| `WORLD-RECOVERY-03E` | **Given**：`SEND_STARTED` 已可能提交，Sender 已輸出首個 ASGI bytes，但補充 Audit ACK 遺失。**Action**：Runtime Crash 後重開連線、要求重送 | **Expected**：不新建 HTTP 傳輸、不宣稱 bytes=0；保留 UNKNOWN／UNRESOLVED，只有原本仍存活的傳輸可依已核准政策完成 | NOT_RUN |
+| `WORLD-RECOVERY-03F` | **Given**：外部 Snapshot Object 已被刪除，但 World DB 的 Purge/Fence 記錄因 COMMIT/ACK 或 Restore 不確定而欠缺。**Action**：從舊 DB 備份恢復已授權 Snapshot 後要求 StartSend | **Expected**：沒有外部可信刪除／恢復錨點與可用 bytes 證據即 Quarantine、不得重新發送；DB 舊紀錄不能復活已失效 Snapshot | NOT_RUN |
 | `WORLD-GC-01` | GC 對未過期 JTI／在途 Binding／UNRESOLVED 操作嘗試清理 | 全部保留；超過所有保留窗口才有權 GC | NOT_RUN |
 | `WORLD-GC-02` | 多 Backend GC 對同 Candidate Full Scope/Version 的 FK/Binding/Grant/SnapshotPin 競爭；protected_refs 提示過時；deadlock/lock timeout | 真 DB 的 FK 隱含鎖＋受保護轉移防止 orphan／TOCTOU；GC 不以 Runtime protected_refs 為權威，未知 COMMIT 不猜測 | NOT_RUN |
 | `WORLD-GC-03` | 長期保留 Evidence／Binding，原 Candidate Raw Payload 已到期；比較 Active Snapshot、未解傳輸／Unknown 結果與有限保留窗口 | 原 Candidate 已 Purged，但合法 Snapshot 可用時不影響已提交授權；Snapshot 欄位／Purge Tombstone 不被刪成可重送；Active/Unknown 需有安全保留／有界中止 | NOT_RUN |
 | `WORLD-RESTORE-OP-01` | 舊 DB 回滾至 Operation Identity 建立前，但外部已執行 OP-100；新 Namespace/Epoch 下再次發起同一意圖 | 先 Quarantine 並向外部 Effect/World Receipt 對帳；未知不可重新發送或產生新外部 Key，沒有穩定證據就永久阻擋或人工處置 | NOT_RUN |
 | `WORLD-RECOVERY-04` | SEND_STARTED commit ACK 遺失：A 原 Sender 仍持原連線；B 對帳查得 SEND_STARTED；C 查無／仍未知 | A 只允許原本已開始的傳輸按期限結束；B 只證明 DB 狀態，不得新建 HTTP；C at-most-once 禁自動重試／新 JWS／Snapshot | NOT_RUN |
-
 | `WORLD-RESTORE-01` | World DB 還原到舊 Replay／Revocation／Epoch 快照 | 發送 Quarantine；舊 Receipt／Token 不重新有效 | NOT_RUN |
 | `WORLD-RESTORE-02` | 還原後清理計算、Clock Skew、Key Rotation 不確定 | 不自動提前解除隔離；有可驗證的完整恢復證據 | NOT_RUN |
+| `WORLD-RESTORE-TOMBSTONE-01` | **Given**：在備份後建立並清理 Candidate，寫入不可復活 Tombstone 與後續 Operation/Purge 事件；舊 World DB 備份**不含該 Tombstone**。**Action**：還原舊備份，嘗試重建原五欄 Logical Key／不同 version，再分別令外部錨點可用、不可用／被倒退 | **Expected**：還原前在受保護控制面啟用 Quarantine；無法核對**不隨 World DB 回退**的錨點完整性／單調性／事件涵蓋範圍時始終禁用正式發送與 Identity 復活；只有可信 reconciliation、Owner 批准與正式放行流程才能解除；此案 NOT_RUN 不代表錨點已實作 | NOT_RUN |
 | `WORLD-MIGRATION-01` | Schema／ACL／函式版本不匹配 | Startup/Release Preflight Fail-Closed；正式發送不能開始 | NOT_RUN |
 | `WORLD-MIGRATION-02` | 舊 Runtime 仍持舊 Role/Pool、舊 Advisory Key 或 schema rollback | 撤銷舊 Role protected DML/EXECUTE 並清空 Pool；Runtime 自填 version 不具權威；舊版本不能重開發送／權限 | NOT_RUN |
 | `WORLD-DISABLE-01` | 實際 Trusted-send 控制面無法確認、Runtime 可自行啟用、或 Restore 使禁用狀態倒退 | Release Preflight 失敗、正式發送停止；不得以未經證實的 `DECEIVE OFF` 字樣代替控制證據 | NOT_RUN |
 | `WORLD-AVAIL-01` | Runtime 佔滿自身連線、持鎖／慢交易 | Control／Revoke 仍可連線或明確停用服務；記錄延遲與不符項 | NOT_RUN |
 | `WORLD-AVAIL-02` | R3-A Caller 搶先提交合法且與 JWS 一致的資料、批量消耗不同 JTI；Verifier Caller 身分／Session／Scope 限流 | 不得宣稱已驗證真實入口；依受保護 Caller 認證及總量防護拒絕／告警；已消費 JTI 不復活，未知 Commit 不重試 | NOT_RUN |
 
-**測試 ID 精度**：上方 `WORLD-RECOVERY-03` 是文件群組索引，不可把 A～F 合計為一個不明確的 JUnit PASS。實作測試時，須分別產生 `WORLD-RECOVERY-03A`、`WORLD-RECOVERY-03B`、`WORLD-RECOVERY-03C`、`WORLD-RECOVERY-03D`、`WORLD-RECOVERY-03E`、`WORLD-RECOVERY-03F`（各 `NOT_RUN`），其預期結果以本表 A～F 唯一對照為準；其他文件引用父 ID 不能覆寫子案語意。文件檢查器的 ID 唯一性只是**靜態保護**，不證明真實回歸已執行。
+**測試 ID 精度**：`WORLD-RECOVERY-03` 是**不具可執行 PASS 的父索引**；上方 `03A`～`03F` 已各自寫明 Given／Action／Expected 並維持 NOT_RUN，未來 JUnit 只准以各子案產生實際結果，不得把父索引或跨文件重述當作同一測試。文件檢查器的 ID 唯一性只是**靜態保護**，不證明真實回歸已執行。
 
 ## 5. 已有回歸與本輪證據不可混淆
 
