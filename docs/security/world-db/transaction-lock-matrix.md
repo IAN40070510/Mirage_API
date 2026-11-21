@@ -69,6 +69,8 @@ Tx B (Session epoch rollover)：
 - **權威決策時間**：每個 Protected Tx 先取得全部必要鎖，再只讀一次 DB `clock_timestamp()` 得 `decision_time` 並持久化；同交易所有期限／GC／Lease 均使用此值。Claim 判 `authorization_deadline`，Authorize/StartSend 判 `transmission_deadline`，`decision_time < deadline` 不代表 COMMIT 必須早於 deadline；COMMIT 未知一律拒絕猜測。Runtime now、時鐘回退／不可驗證 skew 均 Fail-Closed。
 - **BD-11 OPEN 時的預設停用**：不能把 decision-time 合法冒稱 commit-before-deadline；如果產品需要後者，正式送出功能保持 DISABLED。未知 COMMIT 不得新起送／重試；但已實際完成的 `SEND_AUTHORIZED` 不因 ACK 遺失而回溯變成未授權。權威 DB 時間不可檢證時停止新的授權與 StartSend。
 - **Purge Fence 不是 Policy Revocation**：僅受保護的 Snapshot 安全不可用／不可逆 GC 事實可封鎖已授權執行；Runtime 或控制介面不得在授權後藉自填 Fence 達成第二次政策否決（`WORLD-PROTOCOL-02` NOT_RUN）。
+- **三軸資料一致性**：Admission 授權狀態、Candidate 原始 Payload retention、已綁 Authorized Snapshot 的 `AVAILABLE/PURGE_PENDING/PURGED/CORRUPT/UNAVAILABLE` 執行資格是不同狀態域。GC 清除 Candidate 原始 bytes 不能直接封鎖完整 Snapshot；Snapshot 真實 Purge/Integrity 失效則只封鎖新 StartSend，不回溯寫掉 SEND_AUTHORIZED；實際 Schema／轉移仍屬 Proposed，`WORLD-PURGE-BOUNDARY-01` NOT_RUN。
+- **Restore Fence**：只有還原範圍外的最高受信任 checkpoint head、單調世代、DB timeline/position 與 canonical digest 覆蓋清單能建立防重播／未倒退邊界；若缺 Candidate Tombstone/Binding/Operation/Replay/Revocation 涵蓋、或來源權威不可核對，必須持續 Quarantine（`WORLD-RESTORE-FENCE-01` NOT_RUN）。
 - `SELECT FOR UPDATE／FOR SHARE／FOR KEY SHARE`、FK INSERT/DELETE implicit row-lock／advisory lock 順序須列入同一 lock graph；Key／Profile／Emergency 與 **Authorize** 並行驗證，**不得**把本來已凍結的 Policy 又塞回 StartSend。
 - `lock_timeout`、`statement_timeout`、`idle_in_transaction_session_timeout` 與角色 CONN LIMIT 是**可用性限制**，數值須由容量與延遲測試訂定；不是替代狀態機正確性的證據。
 
