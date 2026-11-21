@@ -63,7 +63,17 @@
 | D-46 | 一切新控制先 NOT_IMPLEMENTED／NOT_RUN，原 PG 13/13 有 3 個漏洞重現案例 | 不以歷史測試或文件審查替代原生修補 |
 | D-47 | `WORLD_COMMITTED_ADMISSION_UNAVAILABLE` 永遠僅為 reconciliation classification | 不新增 Admission enum，不將回復條件變成重試權限 |
 
-**版本與責任**：Mirage_API 原生分析 `main` `88dc2008fd35a2d3873949a769653dc9f18e8980`；MSDSS Protocol Freeze v1 整合基準 `main` `5a1ee26dcf79f04cf29345a0403e3f3f8082358b`；此組文件由 Mirage `docs/mir-sec-world-001-adr-v0.1` 的 v0.2 草稿 HEAD `003c918f142296588d2fe14b70fafe3cc5cf8458` 延續，**新變更分支／提交以 Draft PR 中實際 SHA 為準**。全部新增驗收 **NOT_RUN**。
+### v0.2 精確化補遺（D-48～D-52；仍為 Proposed）
+
+| ID | 具體修正 | 證據／限制 |
+| --- | --- | --- |
+| D-48 | Protocol Freeze v1 的**目標協定**以 MSDSS 固定 SHA 為準，但不能把 Mirage 上游舊版 `start_send` 的 Emergency 再查視為已符合 | Mirage `88dc2008...` 原生函式仍查 Generation/Profile Emergency；MSDSS `5a1ee26...` Freeze v1 授權提交後不二次查。需要 Mirage Owner 原生移交、相容測試，不能只改文件 |
+| D-49 | Candidate 使用完整六欄 Version Identity，另永久保留不允許重用的五欄 Logical Key；Payload Purge Tombstone 必須受 Restore Quarantine 保護 | `migrations/001_world_runtime.sql` 現有五欄主鍵**沒有** `candidate_version`；新增版本／不可逆鍵保留是擬議 Migration，不能虛稱現有 ACL 已保證 |
+| D-50 | Rollback 重試須具 DB **明確 rollback 證明**、World/External/HTTP **零不可逆效果證明**、原 Operation Identity/Digest 未執行及全部權威期限／Scope 仍有效 | 查無 Receipt、JTI 尚未消費或換新 JWS 單獨都不夠；未知 COMMIT 維持 UNVERIFIABLE，不得自動重試 |
+| D-51 | ADR 版本、歷史分支名、兩份 Source SHA、當前文件 Commit、實作與新驗收狀態**分欄追溯** | 同一追蹤 Markdown 無法可靠內嵌自己的 HEAD SHA（寫入會改變 Commit）；實際 Document Commit／文件檢查結果由 Git/PR 外部證據提供 |
+| D-52 | 區分鎖後 DB `decision_time` 與最後 `SEND_AUTHORIZED` COMMIT，並保留跨 Deadline 延遲與 DB 時鐘回撥的 Owner 決策 | `decision_time < deadline` 只證明判定當下合法；不能推出 COMMIT 必然在期限前。StartSend 仍按 Freeze v1 的 transmission deadline，不能自行引入第二授權 |
+
+**版本與責任**：Mirage_API 原生分析 `main` `88dc2008fd35a2d3873949a769653dc9f18e8980`；MSDSS Protocol Freeze v1 整合基準 `main` `5a1ee26dcf79f04cf29345a0403e3f3f8082358b`；此組文件由 Mirage `docs/mir-sec-world-001-adr-v0.1` 的 v0.2 草稿舊提交 `003c918f142296588d2fe14b70fafe3cc5cf8458` 延續。**該 SHA 只是來源歷史，不是當前 ADR Commit**；後者與文件檢查結果須由 Draft PR／`git rev-parse HEAD` 的外部證據留存，不能在自身追蹤檔案內寫入自身 Commit SHA。全部新增安全驗收 **NOT_RUN**。
 
 ### v0.2 新增／修訂測試 ID 交接清單（22 項，全部 NOT_RUN）
 
