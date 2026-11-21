@@ -12,6 +12,8 @@
 
 **跨輪修復總表**：[安全漏洞、整合阻礙與 HTTP 效能優化清單](security/world-db/remediation-and-performance-register.md)。此清單分開標示已重現的原始 SQL 權限缺口、隔離 PostgreSQL 局部 PASS、實際 Send／Purge／Restore 未完成的受保護整合，以及目前沒有端到端 HTTP P50／P95／P99 的效能缺口；效能門檻仍是提議，不能當成測試 PASS。
 
+**本輪修補切面**：[G3 Grant Binding／Authorizer 實作與未決驗收](security/world-db/grant-binding-implementation-status.md)。獨立分支新增 Promotion／Binding／受保護 Grant 草案；Row Lock 最小權限、實體 PostgreSQL 驗證、G4 Send Lease／Snapshot 與 G5 Restore 競態仍未完成，正式發送保持關閉。
+
 **ADR 三層證據狀態**：MSDSS Freeze v1 baseline **ACCEPTED**、Mirage Owner adoption **ACCEPTED（D-68）**、Mirage native conformance **NOT_RUN**；新增 `WORLD-PROTOCOL-MATRIX-01`、`WORLD-RESTORE-FENCE-01`、`WORLD-PURGE-BOUNDARY-01` 仍為設計中的驗收，完整內容見 [World DB 驗收計畫](security/world-db/verification-plan.md)，並非已通過測試。
 
 | 工具／介面 | 程式位置 | 說明文件 |

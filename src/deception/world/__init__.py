@@ -18,6 +18,7 @@ from .models import (
 )
 from .postgres_admission import PostgresAdmissionControl
 from .postgres_candidate import PostgresCandidateStore
+from .protected_grant import PostgresCandidatePromoter, PostgresProtectedAuthorizer, ProtectedGrantError
 from .postgres_replay import PostgresReplayStore
 from .postgres_store import PostgresWorldStore
 from .projection_registry import (
@@ -61,6 +62,9 @@ __all__ = [
     "ProjectionEvidence",
     "PostgresAdmissionControl",
     "PostgresCandidateStore",
+    "PostgresCandidatePromoter",
+    "PostgresProtectedAuthorizer",
+    "ProtectedGrantError",
     "PostgresReplayStore",
     "PostgresWorldStore",
     "ProjectionAuthorization",

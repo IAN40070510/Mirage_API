@@ -122,6 +122,14 @@ class PostgresCandidateStore:
                     DELETE FROM candidate_records
                     WHERE expires_at <= %s
                       AND NOT (candidate_ref = ANY(%s))
+                      AND NOT EXISTS (
+                          SELECT 1 FROM protected_candidate_promotions p
+                          WHERE p.environment_id=candidate_records.environment_id
+                            AND p.deployment_id=candidate_records.deployment_id
+                            AND p.session_id=candidate_records.session_id
+                            AND p.world_generation_id=candidate_records.world_generation_id
+                            AND p.candidate_ref=candidate_records.candidate_ref
+                      )
                     RETURNING environment_id, deployment_id, session_id,
                               world_generation_id, candidate_ref,
                               candidate_hash, body, expires_at
