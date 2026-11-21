@@ -13,6 +13,7 @@
 | `src/deception/world/postgres_candidate.py` | Candidate GC 不使用呼叫者提供的 `protected_refs` 當唯一判據；已 Promotion 的來源候選不得被刪除。此為暫時偏向安全的保留策略，日後需分離可清理 Bytes 與永久 Metadata。 |
 | `src/deception/security/world_acl.py` | 增加 Runtime 對兩張新表的有效 DML 拒絕查核。 |
 | `tests/test_protected_grant.py` | 擬定真實 PostgreSQL 正向 Grant、Receipt 重綁／交易回滾、偽造 Fingerprint、未 Promotion、錯誤 Login、Candidate GC 與不可變資料負面測試；使用一次性真 SCRAM Login 及欄位級最低權限驗證。 |
+| `.github/workflows/world-security-contract.yml` | 獨立、無正式憑證的 PostgreSQL 17.6 快速驗收；只針對 Protected Grant / SCRAM 角色，保留 JUnit，不取代全套 CI。 |
 
 ## 本輪發現並保持阻擋的關鍵事項
 
@@ -28,7 +29,8 @@
 | Python 語法與模組匯入 | PASS | `compileall`；`PYTHONPATH=src python -c ...` |
 | 函式中文註解／文件檢查 | PASS | `python tools/check_documentation.py` |
 | Git Patch whitespace | PASS | `git diff --check` |
-| PostgreSQL 17 ACL / Grant 原子性 / 並行競爭 | NOT_RUN | 需可登入的一次性 PostgreSQL 服務及受限 Role |
+| PostgreSQL 17 管理登入下的 Grant / 回滾子驗收 | PASS（初版 SHA `cb1369e0da408bf5c3114657099432201fad4b7d`） | GitHub Python tests [run 44955152598](https://github.com/IAN40070510/Mirage_API/actions/runs/44955152598)：`1278 passed / 21 skipped`；容器 [run 44955152642](https://github.com/IAN40070510/Mirage_API/actions/runs/44955152642) PASS。這只覆蓋該 SHA 的原子性子測試，不能沿用為後續 Row Lock／SCRAM PASS。 |
+| 最新 Row Lock 函式／角色分離／並行安全 | NOT_RUN | 後續 SHA `66ae37d675eee6437ead53a1cc5e819d9c89afda` 正執行全套 CI；本次又新增專用 SCRAM Role 測試和快速 CI，需另取結果。 |
 | Snapshot、Send Lease、Restoration Fence | NOT_IMPLEMENTED | G4／G5 未接線 |
 | 全套 Python／HTTP 效能回歸 | NOT_RUN | 不可將 Static PASS 當成 P95 測試 |
 

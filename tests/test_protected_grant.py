@@ -9,7 +9,7 @@ from uuid import uuid4
 import pytest
 
 from deception.world import (
-    PostgresAdmissionControl, PostgresCandidatePromoter, PostgresCandidateStore,
+    AdmissionOperationResult, PostgresCandidatePromoter, PostgresCandidateStore,
     PostgresProtectedAuthorizer, PostgresProjectionRegistry, ProtectedGrantError,
     SnapshotSource,
 )
@@ -171,6 +171,47 @@ def test_protected_grant_requires_promotion_and_db_role(isolated_test_dsn):
     with pytest.raises(ProtectedGrantError, match="protected_service_login_mismatch"):
         PostgresProtectedAuthorizer(isolated_test_dsn, expected_login="mirage_http_runtime").lookup(
             uuid4(), input_digest=digest("a"))
+
+
+def test_protected_authorizer_claim_and_freeze_linearization(isolated_test_dsn):
+    """只有已 Binding 的 Admission 能 Claim→Authorize；同 owner 不能重複授權。"""
+    import psycopg
+
+    seeded = _seed(isolated_test_dsn)
+    _promote(isolated_test_dsn, seeded)
+    admission = _grant(isolated_test_dsn, seeded)
+    authorizer = PostgresProtectedAuthorizer(isolated_test_dsn, expected_login=_login(isolated_test_dsn))
+    assert authorizer.claim(admission.admission_id, owner="sender-1") is AdmissionOperationResult.SUCCESS
+    assert authorizer.claim(admission.admission_id, owner="sender-2") is AdmissionOperationResult.REJECTED
+    assert authorizer.authorize_send(admission.admission_id, owner="sender-2") is AdmissionOperationResult.REJECTED
+    assert authorizer.authorize_send(admission.admission_id, owner="sender-1") is AdmissionOperationResult.SUCCESS
+    assert authorizer.authorize_send(admission.admission_id, owner="sender-1") is AdmissionOperationResult.REJECTED
+    with psycopg.connect(isolated_test_dsn) as connection:
+        state, claim, revision = connection.execute(
+            "SELECT state,claim_owner,send_authorization_revision FROM response_admissions "
+            "WHERE admission_id=%s", (admission.admission_id,)).fetchone()
+    assert (state, claim, revision) == ("SEND_AUTHORIZED", "sender-1", 3)
+
+
+def test_protected_authorizer_rechecks_revocation_before_authorized(isolated_test_dsn):
+    """Grant 和最終授權之間若 Key 撤銷，禁止新 SEND_AUTHORIZED。"""
+    import psycopg
+    from deception.security.key_revocation import PostgresTrustedKeyRevocations
+
+    seeded = _seed(isolated_test_dsn)
+    _promote(isolated_test_dsn, seeded)
+    admission = _grant(isolated_test_dsn, seeded)
+    authorizer = PostgresProtectedAuthorizer(isolated_test_dsn, expected_login=_login(isolated_test_dsn))
+    assert authorizer.claim(admission.admission_id, owner="sender-1") is AdmissionOperationResult.SUCCESS
+    PostgresTrustedKeyRevocations(isolated_test_dsn,
+                                  environment_id=seeded[0].environment_id,
+                                  deployment_id=seeded[0].deployment_id).revoke(
+                                      "gateway", "kid", revision=1)
+    assert authorizer.authorize_send(admission.admission_id, owner="sender-1") is AdmissionOperationResult.REJECTED
+    with psycopg.connect(isolated_test_dsn) as connection:
+        state = connection.execute("SELECT state FROM response_admissions WHERE admission_id=%s",
+                                   (admission.admission_id,)).fetchone()[0]
+    assert state == "ABANDONED"
 
 
 def test_candidate_gc_cannot_delete_promoted_payload(isolated_test_dsn):
