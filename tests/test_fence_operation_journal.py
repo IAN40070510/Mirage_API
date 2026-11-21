@@ -40,6 +40,11 @@ class JournalTests(unittest.TestCase):
         """A matching PENDING intent may be registered."""
         register_operation(FakeCursor(("START_SEND", "a" * 64, "PENDING")), self.op)
 
+    def test_duplicate_pending_operation_denied(self):
+        """Even identical pending IDs cannot start a second World DB action."""
+        with self.assertRaises(RestoreFenceDenied):
+            register_operation(FakeCursor(("START_SEND", "a" * 64, "PENDING"), rowcount=0), self.op)
+
     def test_reused_resolved_operation_denied(self):
         """A resolved operation ID cannot be silently replayed."""
         with self.assertRaises(RestoreFenceDenied):

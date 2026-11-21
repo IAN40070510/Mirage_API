@@ -30,6 +30,8 @@ def register_operation(cursor, operation: FenceOperation) -> None:
            VALUES (%s,%s,%s,%s,'PENDING') ON CONFLICT DO NOTHING""",
         (operation.namespace, operation.operation_id, operation.kind, operation.world_digest),
     )
+    if cursor.rowcount != 1:
+        raise RestoreFenceDenied("operation ID already registered; reconcile before retry")
     cursor.execute(
         """SELECT kind,world_digest,state FROM restore_operation_intents
            WHERE namespace=%s AND operation_id=%s FOR UPDATE""",

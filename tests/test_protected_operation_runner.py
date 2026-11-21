@@ -15,6 +15,7 @@ class Cursor:
         """Keep a reference to the transactional fixture."""
         self.connection = connection
         self.sql = ""
+        self.rowcount = 1
 
     def __enter__(self):
         """Open a fake cursor."""
