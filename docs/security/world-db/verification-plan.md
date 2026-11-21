@@ -59,7 +59,7 @@
 | `WORLD-OPERATION-02` | 第一次持久化 Snapshot Proposal A，Binding A 後嘗試 B、重試 A、COMMIT ACK unknown、Restore 缺 Binding | B→SNAPSHOT_BINDING_CONFLICT；A→讀回原 Binding 且不重新授權；UNKNOWN→唯讀對帳；缺 Binding 不得改選 | NOT_RUN |
 | `WORLD-OPERATION-03` | 建新 Namespace Epoch、新 JWS 或重試時試圖重建 external_effect_key；Operation 多個副作用 | 原業務副作用 Key 不變且每個效果有獨立穩定鍵；不可藉新 Epoch 重做已提交外部效果 | NOT_RUN |
 | `WORLD-LIFECYCLE-01` | SUBMITTED/VALIDATED/PROMOTED、Raw Payload、Binding、Snapshot、Policy 的合法／不合法組合 | SUBMITTED+VALID BINDING 禁止；PROMOTED+PURGED+ACTIVE BINDING 只保留證據、若快照完整可依原授權執行；Policy REVOKED 禁新 Grant/Authorize | NOT_RUN |
-| `WORLD-LIFECYCLE-02` | Purged Candidate 用相同完整 Scope/ref/version 重新 INSERT/Promotion 或重新掛載 bytes | Purged→Available 不可逆，保留 Tombstone，所有復活路徑拒絕 | NOT_RUN |
+| `WORLD-LIFECYCLE-02` | Purged Candidate 以相同五欄 Logical Key＋原 version、新 version、跨 Session／Generation、Rollback Restore 遺失墓碑後重新 INSERT/Promotion／掛回 bytes | 六欄完整 Identity 與五欄不可重用邏輯鍵均由受保護約束拒絕替換；DB 還原無法證明墓碑未倒退時 Quarantine；先驗證**既有 Schema 無 version、必須 Migration** | NOT_RUN |
 | `WORLD-LIFECYCLE-03` | Validation→Promotion、Binding→GC、FK INSERT/DELETE 相互競爭與次序變化 | 跨表約束由完整 FK/受限轉移/真 PostgreSQL row/advisory/FK 鎖強制，無 TOCTOU/可逃過的 precheck | NOT_RUN |
 | `WORLD-PAYLOAD-03` | 原 Candidate 已 Purged 但已綁完整 Snapshot；Snapshot 本身 Purged／Corrupt；Sender 開始後 Pin 到期 | 前者在既有授權與期限內可 StartSend；後兩者不可新起送；原已在途 Sender 使用原 Snapshot 直到終態/受控中止，不回抓 Candidate/Object | NOT_RUN |
 | `WORLD-SNAPSHOT-01` | Status／ordered headers／body bytes／encoding v1／Snapshot id/version/hash 與 Admission/Operation 變動，ASGI 訊息不同；合法 HTTP framing | 應用層 Envelope 任何未授權變更拒絕；合法 framing 轉換允許；不把 Hash 宣稱為 TCP wire hash | NOT_RUN |
@@ -75,7 +75,7 @@
 | `WORLD-LOCK-01` | 真 PG 多 Backend: Candidate/Binding/Admission/Generation/Session Head/Key/Policy/Snapshot/GC；列出 READ COMMITTED 或實際 Isolation、FOR UPDATE/SHARE/KEY SHARE、FK INSERT/DELETE 隱含鎖、advisory lock 及 40P01/40001/timeout | 必須提供無循環 lock graph、真阻塞證據與 retry safety；任何未知 commit／已外部副作用不重試；**NOT_RUN 時不能宣稱全域無死鎖** | NOT_RUN |
 | `WORLD-FRESH-01` | Profile／Key Revocation 分別在 SEND_AUTHORIZED 前／後 COMMIT | 前者拒絕 Authorize；後者不回溯已完成授權，StartSend 只檢執行條件 | NOT_RUN |
 | `WORLD-FRESH-02` | Profile／Key Emergency 與 AuthorizeSend 多 Backend barrier | 以 Freeze v1 最終 COMMIT 線性化；後提交的撤銷不可改寫已提交授權 | NOT_RUN |
-| `WORLD-TIME-01` | (A) Runtime 偽造過去 now；(B) Claim／Authorize／StartSend 各交易獨立 DB decision_time；(C) 同交易多期限只用一筆 decision_time；(D) 鎖等待跨過 deadline；(E) 判定後 COMMIT 延遲跨 deadline；(F) DB 時鐘倒退／skew／無法驗證時間 | 使用鎖後單次 DB 權威時間判定；Claim 用 authorization_deadline，Authorize/Start 用 transmission_deadline；decision_time 時有效不代表 COMMIT 期限保證；UNKNOWN COMMIT 不起送；F Fail-Closed | NOT_RUN |
+| `WORLD-TIME-01` | (A) Runtime 偽造過去 now；(B) Claim／Authorize／StartSend 各交易獨立 DB decision_time；(C) 同交易多期限只用一筆 decision_time；(D) 鎖等待跨過 deadline；(E) 判定後 COMMIT 延遲跨 deadline；(F) DB 時鐘倒退／skew／無法驗證時間 | 使用鎖後單次 DB 權威時間判定；Claim 用 authorization_deadline，Authorize/Start 用 transmission_deadline；E 必須保留 decision_time、**實際 COMMIT 時點／未知結果及後續起送是否拒絕**，依 BD-11 核准政策判定，**未定案不能宣稱 PASS**；F 需驗證時鐘下界／偏差監控，失去權威則 Fail-Closed | NOT_RUN |
 | `WORLD-TIME-02` | Grant 後 JWS exp 已過、但 AuthorizeSend／StartSend 仍有 transmission_deadline | **不得**在 StartSend 加新 Token/Policy 撤銷檢查；依 Freeze v1 既有 transmission_deadline 及已核准的 Grant/Token window，未核准 grace 不啟用 | NOT_RUN |
 | `WORLD-TIME-03` | StartSend Tx 開始時尚有效，等待 Admission/Pin 鎖跨 deadline | DB 鎖後 decision_time >= transmission_deadline → 拒絕，不得使用 transaction_timestamp() 或 Runtime now 當權威 | NOT_RUN |
 | `WORLD-ROTATE-01` | 新增 K2、K1 仍可信且未撤銷 | 按明訂輪替政策，不由 Runtime 自選 key | NOT_RUN |
@@ -100,12 +100,13 @@
 | `WORLD-FAIL-04` | SEND_STARTED 之後 Runtime Crash／TCP 失聯 | 結果 UNKNOWN／UNRESOLVED；無自動重送 | NOT_RUN |
 | `WORLD-RECOVERY-01` | 未知 COMMIT（before／after ACK loss） | 有相同 ID／digest 可信結果才唯讀查回；不能盲目重試 | NOT_RUN |
 | `WORLD-RECOVERY-02` | Operation ID 相同但 input digest 改變／ID 碰撞 | 明確拒絕而不轉移別的 Operation 結果 | NOT_RUN |
-| `WORLD-RECOVERY-03` | A 明確 DB Rollback 且外部無效果；B JTI 已提交消費但 Grant 失敗；C DB COMMIT/ACK loss 而要求新 JWS；D World 已提交 Admission 未知；E 外部 HTTP 已開始而 Audit 未知；F Object 已刪但 DB 未更新 | A 同 operation/digest 且政策有效可受限重試；B 不復活 JTI、不自動重做；C 只對帳；D 保留部分完成，不再 World Mutation；E 不自動重送；F Quarantine/Fail-Closed；`WORLD_COMMITTED_ADMISSION_UNAVAILABLE` 僅對帳分類 | NOT_RUN |
+| `WORLD-RECOVERY-03` | **群組索引** A DB 明確 rollback 且有 World/External/HTTP 零效果證據；B JTI 已提交消費但 Grant 失敗；C COMMIT/ACK loss 卻要求新 JWS；D World 已提交 Admission 未知；E HTTP 已起送而 Audit 未知；F Object 已刪但 DB 未更新 | A 僅在原 immutable operation/digest 未執行、JWS exp／Session／Generation／Policy 仍有效時受限重試；**JTI 未消費／查無 Receipt 本身不是證明**；B 不復活 JTI；C 只對帳；D 不重做 World；E 不重送；F Quarantine；各子案須有獨立結果，不得把群組當單一 PASS | NOT_RUN |
 | `WORLD-GC-01` | GC 對未過期 JTI／在途 Binding／UNRESOLVED 操作嘗試清理 | 全部保留；超過所有保留窗口才有權 GC | NOT_RUN |
 | `WORLD-GC-02` | 多 Backend GC 對同 Candidate Full Scope/Version 的 FK/Binding/Grant/SnapshotPin 競爭；protected_refs 提示過時；deadlock/lock timeout | 真 DB 的 FK 隱含鎖＋受保護轉移防止 orphan／TOCTOU；GC 不以 Runtime protected_refs 為權威，未知 COMMIT 不猜測 | NOT_RUN |
 | `WORLD-GC-03` | 長期保留 Evidence／Binding，原 Candidate Raw Payload 已到期；比較 Active Snapshot、未解傳輸／Unknown 結果與有限保留窗口 | 原 Candidate 已 Purged，但合法 Snapshot 可用時不影響已提交授權；Snapshot 欄位／Purge Tombstone 不被刪成可重送；Active/Unknown 需有安全保留／有界中止 | NOT_RUN |
 | `WORLD-RESTORE-OP-01` | 舊 DB 回滾至 Operation Identity 建立前，但外部已執行 OP-100；新 Namespace/Epoch 下再次發起同一意圖 | 先 Quarantine 並向外部 Effect/World Receipt 對帳；未知不可重新發送或產生新外部 Key，沒有穩定證據就永久阻擋或人工處置 | NOT_RUN |
 | `WORLD-RECOVERY-04` | SEND_STARTED commit ACK 遺失：A 原 Sender 仍持原連線；B 對帳查得 SEND_STARTED；C 查無／仍未知 | A 只允許原本已開始的傳輸按期限結束；B 只證明 DB 狀態，不得新建 HTTP；C at-most-once 禁自動重試／新 JWS／Snapshot | NOT_RUN |
+
 | `WORLD-RESTORE-01` | World DB 還原到舊 Replay／Revocation／Epoch 快照 | 發送 Quarantine；舊 Receipt／Token 不重新有效 | NOT_RUN |
 | `WORLD-RESTORE-02` | 還原後清理計算、Clock Skew、Key Rotation 不確定 | 不自動提前解除隔離；有可驗證的完整恢復證據 | NOT_RUN |
 | `WORLD-MIGRATION-01` | Schema／ACL／函式版本不匹配 | Startup/Release Preflight Fail-Closed；正式發送不能開始 | NOT_RUN |
@@ -113,6 +114,8 @@
 | `WORLD-DISABLE-01` | 實際 Trusted-send 控制面無法確認、Runtime 可自行啟用、或 Restore 使禁用狀態倒退 | Release Preflight 失敗、正式發送停止；不得以未經證實的 `DECEIVE OFF` 字樣代替控制證據 | NOT_RUN |
 | `WORLD-AVAIL-01` | Runtime 佔滿自身連線、持鎖／慢交易 | Control／Revoke 仍可連線或明確停用服務；記錄延遲與不符項 | NOT_RUN |
 | `WORLD-AVAIL-02` | R3-A Caller 搶先提交合法且與 JWS 一致的資料、批量消耗不同 JTI；Verifier Caller 身分／Session／Scope 限流 | 不得宣稱已驗證真實入口；依受保護 Caller 認證及總量防護拒絕／告警；已消費 JTI 不復活，未知 Commit 不重試 | NOT_RUN |
+
+**測試 ID 精度**：上方 `WORLD-RECOVERY-03` 是文件群組索引，不可把 A～F 合計為一個不明確的 JUnit PASS。實作測試時，須分別產生 `WORLD-RECOVERY-03A`、`WORLD-RECOVERY-03B`、`WORLD-RECOVERY-03C`、`WORLD-RECOVERY-03D`、`WORLD-RECOVERY-03E`、`WORLD-RECOVERY-03F`（各 `NOT_RUN`），其預期結果以本表 A～F 唯一對照為準；其他文件引用父 ID 不能覆寫子案語意。文件檢查器的 ID 唯一性只是**靜態保護**，不證明真實回歸已執行。
 
 ## 5. 已有回歸與本輪證據不可混淆
 
