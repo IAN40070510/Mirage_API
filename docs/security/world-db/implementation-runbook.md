@@ -27,6 +27,8 @@
 
 **G2 子切面（本輪待 CI 驗證）**：`TrustedSessionVerifier` 配合 `PostgresTrustedKeyRevocations.consume_guarded_replay` 與 `PostgresReplayStore._consume_on_cursor`，使**現有 Key Revocation Guard＋Replay JTI INSERT** 在同一 PostgreSQL connection／READ COMMITTED transaction 執行。不同 DSN 或非 PostgreSQL Replay Store 拒絕；新增真實 PostgreSQL 的單連線、INSERT 後 rollback、COMMIT ACK loss 負面案例。這**尚未涵蓋 Ingress Receipt、由可信 Verifier 獨立寫入的證據、Operation ID 對帳或正式 Role ACL**。G2 仍為 `NOT_RUN`；正式入口 Release Fuse 不變。
 
+**G2 Receipt Schema 子切面（2026-11-21 修補候選，尚待真 PostgreSQL／CI 驗證）**：新增 `migrations/017_trusted_ingress_receipts.sql`，只建立 `ingress_receipts` 的受保護儲存欄位、`(issuer,audience,jti)` 一次性約束及回指既有 `replay_entries` 的 `ON DELETE RESTRICT` FK；`tests/test_ingress_receipt_schema.py` 驗證同交易 rollback、孤兒 Receipt 拒絕、JTI 重用／提前 Replay 刪除失敗，以及隔離真 SCRAM Runtime／Verifier Role 的 `42501` 與有限合法 INSERT。這個 Migration **沒有**提供驗章服務、可信 Caller Context、綁定 Candidate 的 GrantTx、受限資料庫函式或未知 COMMIT 對帳。為維持 Fail-Closed，仍被 Receipt 引用的 Replay 不可被舊 GC 刪除；正式 Receipt/Replay 同步 Retention／GC、還原隔離方案須另行實作，不能將此 Schema 視為已完成 G2 或准予正式發送。
+
 ## 不得由工程師自行猜測的決策
 
 1. **Mirage Owner adoption／Protocol Freeze v1：ACCEPTED（2026-11-21 使用者明確決策）。** `SEND_AUTHORIZED` 提交後不以 Policy／Emergency 做第二次授權；`StartSend` 保留 owner、deadline、single-use 與真實 Snapshot 執行前置條件。這只解除協定選擇阻塞，**不代表** DB 角色分離、Snapshot 完整性、未知 COMMIT 或原生端到端符合性已經驗證。
