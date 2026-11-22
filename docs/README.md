@@ -18,6 +18,7 @@
 
 | 工具／介面 | 程式位置 | 說明文件 |
 | --- | --- | --- |
+| 獨立受保護 mTLS RPC（sealed） | `src/deception/security/protected_rpc.py`、`tests/test_protected_rpc_mtls.py` | [雙向憑證、服務隔離、固定拒絕與未完成的業務接線](protected-rpc.md) |
 | 獨立 HTTPX 請求摘要 | `src/deception/api/fingerprint.py` | [不依賴外部 Gateway 的客戶端摘要](trusted-session.md#獨立客戶端的請求摘要) |
 | 請求與驗證結果 Audit | `src/deception/world/request_audit.py`、`migrations/016_request_observations.sql` | [假名化觀察、原子 Grant 關聯與故障處理](request-audit.md) |
 | 共用事件提交與標準結果 | `src/deception/world/commit.py`、`event_store.py`、`migrations/015_world_operation_result_digests.sql` | [五類結果、原子事件與唯讀恢復](commit-results.md) |
