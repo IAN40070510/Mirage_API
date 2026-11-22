@@ -48,6 +48,22 @@
 
 ## 接續順序
 
+### 2026-11-22 接續分支 G3b 增量（尚未驗收）
+
+`fix/mir-sec-world-001-resume-20261122` 新增 `020_protected_cart_lineage.sql` 與
+`PostgresProtectedWorldExecutor.create_cart()`，把 creator Receipt 與新建 cart
+Session／World／resource 的 lineage 原子寫入；新增一次性 Receipt／Cart 唯一約束，
+在首次受保護呼叫發現舊 `guest_cart_creations` 時拒絕補簽。
+`SyntheticCarts.create_cart()` 另支援 Executor 專用的共交易連線，不改公開呼叫預設行為。
+Runtime ACL preflight 同步列入新 lineage 表；獨立 PostgreSQL 測試新增同 Receipt
+重試、錯 idempotency key 重綁阻擋。
+
+此增量**僅限合成 Cart 的專用 Executor 業務 primitive**。HTTP Runtime 尚未接到
+獨立驗證的服務入口；Medusa native_context、初始品項、合法 400／409 受保護
+拒絕證據、G4 Snapshot／Lease、G5 外部 Fence 均未完成。不能宣稱 G3b PASS。
+本機 `compileall`／文件檢查及非 PostgreSQL 回歸通過；因本機沒有隔離 PG DSN，
+本輪 PostgreSQL 新增測試為 SKIP，須以固定 SHA 的 CI 真 PG 結果補驗。
+
 1. 以獨立 Lab 或 GitHub CI PostgreSQL 17 修正 ACL／受限鎖定程序，完成 Candidate Validator、Authorizer、Grant Binding 的正反面驗收。
 2. 將 `World.resolve()`／`SyntheticCarts.create_cart()` 的衍生 Scope 與合法拒絕模板納入受保護 Executor 來源合約，連接 `trusted_http.create_app()` 原生 Cart／Inventory／Medusa 業務；驗證所有既有 2xx／4xx 結果與冪等／未知 COMMIT。原生 HTTP 入口尚未接線時不得將 G3 視為完整。
 3. 建立實體 Authorized Snapshot／Pin 與一次性 Send Lease，讓 ASGI 起送前的 Snapshot 與 Fence 檢查具同一安全協定；不在 `SEND_AUTHORIZED` 後重判政策。

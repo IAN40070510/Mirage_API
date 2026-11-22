@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - fix/mir-sec-world-001-protected-grant
+      - fix/mir-sec-world-001-resume-20261122
   pull_request:
     branches:
       - main

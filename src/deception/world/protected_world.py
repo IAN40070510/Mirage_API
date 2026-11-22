@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from uuid import UUID
 
 from deception.security.key_revocation import PostgresTrustedKeyRevocations
@@ -18,7 +19,8 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
     """僅用專用實體 DB Login 執行固定 World 業務與來源見證，不共用 HTTP Runtime Pool。"""
 
     def __init__(self, dsn: str, *, expected_login: str,
-                 world_store: PostgresEventWorldStore) -> None:
+                 world_store: PostgresEventWorldStore,
+                 cart_initial_state: dict | None = None) -> None:
         """綁定由部署者預先配置固定 handlers／write_modes 的 World Store。
 
         所有信任用的 DB 交易都經 `_connection` 檢查實體 Login。正式 HTTP
@@ -29,6 +31,97 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
             raise ProtectedGrantError("protected_world_store_mismatch")
         self._world_store = world_store
         self._reads = PostgresSessionWorlds(dsn, compatibility=world_store._compatibility)
+        self._cart_initial_state = deepcopy(cart_initial_state)
+
+    def create_cart(self, *, receipt_id: UUID, creator: SessionBinding,
+                    request_fingerprint: str, idempotency_key: UUID,
+                    commit_attempt_id: UUID, creation_digest: str,
+                    ttl: int) -> object:
+        """在同一受保護交易產生衍生 Cart Scope、資源映射及一次性 Creator Lineage。
+
+        僅支援部署端預先固定的合成 Cart 初始資料；不能使用 Runtime 提供的
+        catalog、inventory 或任意初始世界。Receipt 的 creator Scope 不等於
+        新 Cart Scope；重試只回傳完全相同的既有結果，否則整筆回滾。
+        """
+        from deception.domains.ecommerce.carts import SyntheticCarts
+
+        if not isinstance(self._world_store, SyntheticCarts) or self._cart_initial_state is None:
+            raise ProtectedGrantError("protected_cart_handler_unavailable")
+        if type(ttl) is not int or not 60 <= ttl <= 3600:
+            raise ProtectedGrantError("protected_cart_ttl_out_of_policy")
+        if not isinstance(self._cart_initial_state, dict) or set(self._cart_initial_state) != {"catalog", "inventory"}:
+            raise ProtectedGrantError("protected_cart_initial_state_invalid")
+        _require_digest(creation_digest)
+        if creator.access_mode != "cart" or creator.resource_id is not None:
+            raise ProtectedGrantError("protected_cart_creator_capability_invalid")
+        with self._connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SET LOCAL lock_timeout='3s'")
+                self._verify_receipt(cursor, receipt_id=receipt_id, binding=creator,
+                                     fingerprint=request_fingerprint)
+                cursor.execute(
+                    """SELECT environment_id,deployment_id,creator_session_id,creator_epoch,
+                              idempotency_key,commit_attempt_id,request_fingerprint,
+                              operation_digest,derived_session_id,derived_world_generation_id,
+                              resource_id FROM protected_cart_creations WHERE receipt_id=%s""",
+                    (receipt_id,),
+                )
+                previous = cursor.fetchone()
+                expected = (*PostgresSessionWorlds._binding_params(creator),
+                            idempotency_key, commit_attempt_id, request_fingerprint,
+                            creation_digest)
+                if previous is not None and previous[:8] != expected:
+                    raise ProtectedGrantError("protected_cart_receipt_rebound")
+                if previous is None:
+                    cursor.execute(
+                        """SELECT 1 FROM guest_cart_creations
+                           WHERE environment_id=%s AND deployment_id=%s
+                             AND creator_session_id=%s AND creator_epoch=%s
+                             AND idempotency_key=%s""", expected[:5],
+                    )
+                    if cursor.fetchone() is not None:
+                        raise ProtectedGrantError("untrusted_prior_cart_creation")
+                cursor.execute("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
+                now = cursor.fetchone()[0]
+                initial = self._cart_initial_state
+                created = self._world_store.create_cart(
+                    creator, catalog=deepcopy(initial["catalog"]),
+                    inventory=deepcopy(initial["inventory"]),
+                    idempotency_key=idempotency_key, commit_attempt_id=commit_attempt_id,
+                    creation_digest=creation_digest, now=now, ttl=ttl,
+                    _trusted_connection=connection,
+                )
+                derived_scope = self._world_store._resource_binding(
+                    connection, created.binding.resource_id, creator.environment_id,
+                    creator.deployment_id, now,
+                )
+                if derived_scope != created.binding:
+                    raise ProtectedGrantError("protected_cart_resource_binding_mismatch")
+                cursor.execute(
+                    """SELECT world_generation_id FROM session_world_bindings
+                       WHERE environment_id=%s AND deployment_id=%s AND session_id=%s
+                         AND session_epoch=%s""",
+                    PostgresSessionWorlds._binding_params(created.binding),
+                )
+                generation = cursor.fetchone()
+                if generation is None:
+                    raise ProtectedGrantError("protected_cart_generation_missing")
+                actual = (created.binding.session_id, generation[0],
+                          created.binding.resource_id)
+                if previous is not None:
+                    if previous[8:] != actual:
+                        raise ProtectedGrantError("protected_cart_derived_scope_mismatch")
+                    return created
+                cursor.execute(
+                    """INSERT INTO protected_cart_creations (
+                           receipt_id,environment_id,deployment_id,creator_session_id,
+                           creator_epoch,idempotency_key,commit_attempt_id,
+                           request_fingerprint,operation_digest,derived_session_id,
+                           derived_world_generation_id,resource_id)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                    (receipt_id, *expected, *actual),
+                )
+                return created
 
     def _verify_receipt(self, cursor, *, receipt_id: UUID, binding: SessionBinding,
                         fingerprint: str) -> WorldScope:

@@ -13,6 +13,7 @@ from deception.world import (CommitSource, SnapshotSource, PostgresCandidateProm
                              PostgresProjectionRegistry, ProtectedGrantError)
 from deception.world.session import SessionBinding
 from deception.world.transmission import response_envelope, response_hashes
+from deception.domains.ecommerce.carts import SyntheticCarts
 from test_postgres_conformance import (digest, isolated_test_dsn, projection_evidence)
 
 
@@ -81,6 +82,55 @@ def _candidate(dsn, *, scope, source, receipt_id, fingerprint):
         immutable_body_hash=hashes[1], semantic_headers_hash=hashes[2],
         evidence=evidence, source=source,
     )
+
+
+def test_protected_cart_creator_receipt_mints_one_derived_scope(isolated_test_dsn):
+    """Creator Receipt 只能原子建立一個衍生 Cart，重試查回且不能改綁新的建立鍵。"""
+    import psycopg
+
+    dsn = isolated_test_dsn
+    now = int(time.time())
+    creator = SessionBinding(environment_id="cart-protected", deployment_id="isolated",
+                             session_id=uuid4().hex, session_epoch=1, access_mode="cart")
+    service = SyntheticCarts(dsn)
+    initial = {"catalog": {"v1": {"sku": "sku-1", "unit_price": 100}},
+               "inventory": {"sku-1": 5}}
+    service.resolve(creator, {**initial, "reservations": {}}, now=now, ttl=180)
+    receipt, fingerprint = uuid4(), digest("a")
+    with psycopg.connect(dsn) as connection:
+        jti = uuid4().hex
+        connection.execute("INSERT INTO replay_entries VALUES ('gateway','mirage',%s,%s)",
+                           (jti, now + 120))
+        connection.execute(
+            """INSERT INTO ingress_receipts (
+                   receipt_id,issuer,audience,jti,key_id,environment_id,deployment_id,
+                   session_id,session_epoch,request_fingerprint,assessment_digest,
+                   claims_digest,verification_policy_version,token_issued_at,
+                   token_not_before,token_expires_at,access_mode)
+               VALUES (%s,'gateway','mirage',%s,'kid',%s,%s,%s,1,%s,%s,%s,
+                       'trusted-session-v1.1',%s,%s,%s,'cart')""",
+            (receipt, jti, creator.environment_id, creator.deployment_id,
+             creator.session_id, fingerprint, digest("b"), digest("c"),
+             now - 5, now - 5, now + 90),
+        )
+    executor = PostgresProtectedWorldExecutor(
+        dsn, expected_login=_real_login(dsn), world_store=service,
+        cart_initial_state=initial,
+    )
+    key, attempt = uuid4(), uuid4()
+    args = dict(receipt_id=receipt, creator=creator, request_fingerprint=fingerprint,
+                idempotency_key=key, commit_attempt_id=attempt,
+                creation_digest=digest("d"), ttl=60)
+    created = executor.create_cart(**args)
+    repeated = executor.create_cart(**args)
+    assert created.binding == repeated.binding
+    assert repeated.outcome.replayed
+    assert created.binding.session_id != creator.session_id
+    with pytest.raises(ProtectedGrantError, match="receipt_rebound"):
+        executor.create_cart(**{**args, "idempotency_key": uuid4()})
+    with psycopg.connect(dsn) as connection:
+        assert connection.execute("SELECT count(*) FROM protected_cart_creations").fetchone()[0] == 1
+        assert connection.execute("SELECT count(*) FROM guest_cart_creations").fetchone()[0] == 1
 
 
 def test_protected_read_and_commit_sources_remain_distinct_and_usable(isolated_test_dsn):
