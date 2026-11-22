@@ -47,6 +47,7 @@ def _ca(directory: Path, label: str) -> tuple[Path, Path]:
     _openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
              "-subj", "/CN=Mirage CI " + label,
              "-addext", "basicConstraints=critical,CA:TRUE",
+             "-addext", "keyUsage=critical,keyCertSign,cRLSign",
              "-out", str(cert), "-keyout", str(key))
     return cert, key
 
@@ -58,6 +59,8 @@ def _leaf(directory: Path, ca_cert: Path, ca_key: Path, name: str, *,
     csr, ext = directory / (name + ".csr"), directory / (name + ".ext")
     ext.write_text("basicConstraints=critical,CA:FALSE\n"
                    + ("subjectAltName=DNS:" + name + "\n" if server else "")
+                   + ("keyUsage=critical,digitalSignature,keyEncipherment\n"
+                      if server else "keyUsage=critical,digitalSignature\n")
                    + ("extendedKeyUsage=serverAuth\n" if server else "extendedKeyUsage=clientAuth\n"),
                    encoding="ascii")
     _openssl("req", "-newkey", "rsa:2048", "-nodes", "-subj", "/CN=" + name,

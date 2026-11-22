@@ -273,6 +273,7 @@ def test_g3b_ci_validator_ca_key_stays_distinct_from_server_key(tmp_path):
     """真 OpenSSL 簽發第二張 Validator Client 憑證仍必須使用 CA key，不可誤用 Server key。"""
     import importlib.util
     import subprocess
+    from cryptography import x509
 
     root = Path(__file__).resolve().parents[1]
     path = root / "deploy/security-lab/g3b_ci_prepare.py"
@@ -284,10 +285,20 @@ def test_g3b_ci_validator_ca_key_stays_distinct_from_server_key(tmp_path):
     (tmp_path / "probe").mkdir()
     module._identity_material(tmp_path, {role: "postgresql://role.invalid/db" for role in (
         "verifier", "inventory", "cart", "validator", "runtime")})
+    for directory in ("gateway-ca", "executor-ca", "validator-ca"):
+        ca_certificate = x509.load_pem_x509_certificate(
+            (tmp_path / directory / "ca.pem").read_bytes())
+        usage = ca_certificate.extensions.get_extension_for_class(x509.KeyUsage).value
+        assert usage.key_cert_sign and usage.crl_sign
     ca = tmp_path / "validator-ca/ca.pem"
     for name in ("native-validator", "verifier-validator"):
         cert = tmp_path / "validator-ca" / (name + ".pem")
-        result = subprocess.run(["openssl", "verify", "-CAfile", str(ca), str(cert)],
+        usage = x509.load_pem_x509_certificate(cert.read_bytes()).extensions.get_extension_for_class(
+            x509.KeyUsage).value
+        assert usage.digital_signature and not usage.key_cert_sign
+        purpose = "sslserver" if name == "native-validator" else "sslclient"
+        result = subprocess.run(["openssl", "verify", "-purpose", purpose,
+                                 "-CAfile", str(ca), str(cert)],
                                 capture_output=True, check=True, text=True)
         assert result.stdout.strip().endswith(": OK")
     assert (tmp_path / "secrets/g3b_native_validator_server_key").read_bytes() != (
