@@ -24,17 +24,18 @@ from deception.domains.ecommerce.cart_http import cart_specification
 from deception.domains.ecommerce.inventory_http import inventory_specification
 
 
-def _twenty_native_routes() -> tuple[tuple[str, str, str], ...]:
-    """由三份正式固定 Operation Registry 產生 20 條可實際送到 Verifier 的安全探針。"""
+def _twenty_native_routes() -> tuple[tuple[str, str, str, str], ...]:
+    """由三份固定 Operation Registry 推導平台／方法／路由／Handler 的 20 個實測案例。"""
     cases = []
     for platform, specification in (
             ("synthetic-inventory", inventory_specification()),
             ("synthetic-carts", cart_specification())):
         for path, methods in specification["paths"].items():
             for method, data in methods.items():
-                cases.append((platform, method.upper(), "/synthetic" + path))
-    for path, method, _ in _pinned_medusa_operations():
-        cases.append(("medusa-native-cart", method.upper(), path))
+                cases.append((platform, method.upper(), "/synthetic" + path,
+                              data["operationId"]))
+    for path, method, operation_id in _pinned_medusa_operations():
+        cases.append(("medusa-native-cart", method.upper(), path, operation_id))
     if len(cases) != 20 or len(set(cases)) != 20:
         raise RuntimeError("g3b_ci_twenty_route_contract_drift")
     return tuple(cases)
@@ -104,7 +105,7 @@ def _gateway() -> None:
         if gateway.post(origin + "/internal/v1/execute", json={
                 "operation": "forged", "binding": {}}).status_code != 503:
             raise RuntimeError("g3b_ci_verifier_runtime_rpc_open")
-        for platform, method, template in _twenty_native_routes():
+        for platform, method, template, operation_id in _twenty_native_routes():
             headers = {"x-request-id": "g3b-unsigned-" + uuid4().hex[:16]}
             if platform == "medusa-native-cart":
                 headers["x-publishable-api-key"] = "pk_g3b_ci_only"
@@ -114,8 +115,16 @@ def _gateway() -> None:
                 method, origin + _probe_path(template), content=b"{}" if method != "GET" else b"",
                 headers=headers,
             )
-            if gateway.send(unsigned).status_code != 403:
+            status = gateway.send(unsigned).status_code
+            if status != 403:
                 raise RuntimeError("g3b_ci_unsigned_operation_not_denied:" + method + " " + template)
+            # 每條直接 HTTPS 入口留下獨立路由證據；此紀錄僅證明無 JWS 拒絕，
+            # 不代表 Executor 原生 2xx 或業務 4xx 已通過。
+            print("G3B_ROUTE_UNAUTHENTICATED_DENIAL " + json.dumps({
+                "platform": platform, "operation_id": operation_id,
+                "method": method, "template": template, "status": status,
+                "provenance": "gateway-mtls-verifier", "native_business_response": False,
+            }, sort_keys=True))
         body = json.dumps({"sku": "sku-1", "quantity": 2, "expected_version": 1,
                            "idempotency_key": "g3b-container-once",
                            "commit_attempt_id": str(uuid4())}).encode("utf-8")
@@ -142,6 +151,11 @@ def _gateway() -> None:
         if (inventory_result.get("operation_id") != "reserveSyntheticInventory"
                 or inventory_result.get("executor_result", {}).get("status") != "committed"):
             raise RuntimeError("g3b_ci_inventory_handler_mismatch")
+        print("G3B_ROUTE_PROTECTED_COMMIT " + json.dumps({
+            "operation_id": "reserveSyntheticInventory", "http_status": accepted.status_code,
+            "executor_kind": inventory_result["executor_result"]["kind"],
+            "source": "protected_world_commit_sources", "native_business_response": False,
+        }, sort_keys=True))
         if gateway.send(request).status_code != 403:
             raise RuntimeError("g3b_ci_replay_accepted")
         for suffix, payload, status, template in (
@@ -172,6 +186,11 @@ def _gateway() -> None:
                     or projection.get("envelope_hash") != result.get("envelope_hash")
                     or gateway.send(raw).status_code != 403):
                 raise RuntimeError("g3b_ci_medusa_rejection_proof_mismatch")
+            print("G3B_ROUTE_PROTECTED_MEDUSA_REJECTION " + json.dumps({
+                "operation_id": "PostCartsIdLineItems", "http_status": response.status_code,
+                "validated_native_status": status, "template_id": template,
+                "source": "protected_medusa_rejection_sources", "native_business_response": False,
+            }, sort_keys=True))
     with httpx.Client(verify=ssl.create_default_context(cafile=str(root / "gateway-ca.pem")),
                       trust_env=False, timeout=2.0) as anonymous:
         try:

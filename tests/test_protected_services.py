@@ -251,8 +251,8 @@ def test_g3b_ci_signed_claims_are_pinned_and_short_lived():
     assert len(base64.urlsafe_b64decode(signature + "=" * (-len(signature) % 4))) == 64
 
 
-def test_g3b_ci_twenty_signed_routes_have_distinct_live_probes():
-    """從原生三規格推導 20 個 HTTPS 探針，不把無 JWS 403 冒充原生業務錯誤。"""
+def test_g3b_ci_twenty_unsigned_routes_have_distinct_live_probes():
+    """二十條 HTTPS 拒絕探針均含固定 Handler ID，並明確排除原生業務回應簽收。"""
     import importlib.util
 
     root = Path(__file__).resolve().parents[1]
@@ -263,8 +263,9 @@ def test_g3b_ci_twenty_signed_routes_have_distinct_live_probes():
     spec.loader.exec_module(module)
     cases = module._twenty_native_routes()
     assert len(cases) == 20
-    assert all("{" not in module._probe_path(template) for _, _, template in cases)
-    assert {platform for platform, _, _ in cases} == {
+    assert all("{" not in module._probe_path(template) for _, _, template, _ in cases)
+    assert all(operation_id for _, _, _, operation_id in cases)
+    assert {platform for platform, _, _, _ in cases} == {
         "synthetic-inventory", "synthetic-carts", "medusa-native-cart",
     }
 

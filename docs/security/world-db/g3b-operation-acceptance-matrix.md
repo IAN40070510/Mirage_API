@@ -34,14 +34,28 @@ Operation Proof 或 `SET ROLE` 成為 Executor。這是**實體登入及 ACL 的
 Executor／Validator 不同 CA 的拒絕測試。這是**實驗室子項 PASS**，尚未完成
 四個容器在正式網路／Secret／pg_hba 的部署級簽收，也未核准 Client HTTP Send。
 
+**四個真容器、獨立 Secret／Network／實體 ACL 增量實測**：隔離分支固定
+程式 SHA `327743e8f1244515af961c9423db529c63db5499`，
+[真容器 CI 45065339872](https://github.com/IAN40070510/Mirage_API/actions/runs/45065339872)
+`success`；日誌記錄 `G3B_CI_PREPARED roles=5 ca_roots=3 services=4`、
+`G3B_GATEWAY_PASS unsigned_routes=20/20 inventory_commit=1 medusa_400=1 medusa_404=1`
+以及 `G3B_CONTAINER_AUDIT_PASS services=4 networks=3 distinct_mounts=verified runtime_acl=denied`。
+這證明在一次性 PostgreSQL 17.6／Docker Compose 隔離環境中，四個實體容器均
+通過不公開埠、專屬 Secret 可見性、三網路隔離、不同 SCRAM 物理角色／禁止
+Runtime DML、實際 mTLS、可信 Inventory 一次 Commit、Medusa M-03 的
+400／404 Executor+獨立 Validator 內部來源對帳及缺 JWS 的 20 條入口 403 拒絕。
+**此為隔離 CI 的部署級子項 PASS，不是 staging／production ACL／Secret
+實地簽核；20 個 403 不是 20 個原生業務 4xx，Medusa 的客戶端仍收到內部
+對帳封套 200 而非原生 400／404。**
+
 | G3b 子門檻 | 獨立實測結果 | 正式簽收 |
 | --- | --- | --- |
 | 真 HTTPS Gateway→Verifier→Executor、互異 Client CA、拒絕重播／竄改 | 隔離 CI PASS | 僅實驗室傳輸子項 PASS |
 | 三個實體 PostgreSQL SCRAM Login、無跨角色 DML／SET ROLE | 隔離 CI PASS | 僅實驗室 ACL 子項 PASS |
-| 20 路由 Method／Path Template／Operation ID 與三份固定規格集合同步 | 逐路由 Parameterized Proof 單元測試 PASS | 僅靜態 Operation Mapping 子項 PASS；未證明每條真 JWS／mTLS／HTTP 結果 |
-| 可配置的隔離 Verifier／雙 Executor／Native Validator、專用 DSN Secret、Role／Schema／ACL 啟動檢查 | 已實作四角色啟動工廠與無公開埠的 Compose 範本；待部署級真容器驗證 | OPEN：程式入口不等於部署隔離簽核 |
+| 20 路由 Method／Path Template／Operation ID 與三份固定規格集合同步 | 靜態 Mapping PASS，真容器 HTTPS 入口缺 JWS 的 20/20 逐路由 403 PASS | 隔離入口拒絕子項 PASS；每條合法 JWS、原生 2xx／業務 4xx 仍 OPEN |
+| 可配置的隔離 Verifier／雙 Executor／Native Validator、專用 DSN Secret、Role／Schema／ACL 啟動檢查 | 真四容器啟動／實體角色／mTLS／密鑰用途 PASS | 隔離部署子項 PASS；正式環境另驗 |
 | Medusa M-03 特定 400／404 的原生 JSON 從獨立 Rejection Source 重建 | 真 PG、唯讀 Validator 來源投影、第二 mTLS CA PASS | 實驗室子項 PASS；正式 Client HTTP 回應與全操作兼容 OPEN |
-| 正式獨立服務部署、Secret Mount／網路來源、無共享憑證可見性 | 未實測 | OPEN |
+| 正式獨立服務部署、Secret Mount／網路來源、無共享憑證可見性 | 一次性 Docker CI 真容器角色隔離 PASS | 隔離環境 PASS；staging／production 正式部署 OPEN |
 | 20 條正式原生 2xx／4xx Payload 與獨立來源／Validator | 20 條均未具全套證據 | OPEN |
 | G3b 整體解封並移交 G4 Sender | 前述兩項未完成 | **NO-GO** |
 
