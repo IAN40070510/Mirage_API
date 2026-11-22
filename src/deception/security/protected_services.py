@@ -105,6 +105,10 @@ def _login_preflight(dsn: str, login: str, *, role: str, schema: str,
                      ("session_world_bindings", "INSERT"),
                      ("generation_controls", "INSERT"),
                      ("world_snapshots", "INSERT"))
+        # Cart Executor 是唯一允許建立 Medusa 400/404 來源的執行身分；
+        # Inventory Executor 仍必須拒絕同一資料表的 INSERT。
+        forbidden = tuple((table, privilege) for table, privilege in forbidden
+                          if (table, privilege) != ("protected_medusa_rejection_sources", "INSERT"))
     try:
         with psycopg.connect(dsn, connect_timeout=5) as connection:
             identity = connection.execute(

@@ -12,7 +12,7 @@ from deception.security.protected_rpc import (
     ProtectedRpcConfigurationError, create_native_validator_app,
 )
 from deception.security.protected_services import (
-    _json_secret, _verifier_key_registry, create_executor_service,
+    _json_secret, _login_preflight, _verifier_key_registry, create_executor_service,
     create_native_validator_service,
     create_verifier_service, from_environment,
 )
@@ -20,6 +20,57 @@ from deception.world.protected_grant import ProtectedGrantError
 from deception.world.protected_native_http import (
     PostgresProtectedNativeProjector, fixed_medusa_rejection_bytes,
 )
+
+
+def test_g3b_cart_executor_requires_medusa_insert_but_inventory_denies_it(monkeypatch):
+    """模擬實體 ACL：Cart 可寫固定拒絕來源，Inventory 不得借用這項特權。"""
+    import psycopg
+
+    class FakeConnection:
+        """僅模擬角色身分與 ACL 查詢，強制觀察是否錯判 Cart 權限。"""
+
+        def __enter__(self):
+            """模擬開啟單一實體角色的資料庫連線。"""
+            return self
+
+        def __exit__(self, *_):
+            """模擬關閉唯讀的預檢交易。"""
+            return False
+
+        def execute(self, query, params=()):
+            """對 ACL 探查回傳明確的允許／拒絕結果。"""
+            statement = str(query)
+            if "SELECT session_user,current_user" in statement:
+                self.value = ("cart_login", "cart_login", False, False, False,
+                              False, False, False)
+            elif "SELECT current_schema()" in statement:
+                self.value = ("public",)
+            elif "has_schema_privilege" in statement:
+                self.value = (False,)
+            elif "FROM pg_auth_members" in statement:
+                self.value = (0,)
+            elif "has_table_privilege" in statement:
+                table, privilege = params
+                denied = {("ingress_receipts", "INSERT"),
+                          ("protected_http_operation_bindings", "INSERT"),
+                          ("protected_candidate_promotions", "INSERT")}
+                self.value = ((table, privilege) not in denied,)
+            elif "has_function_privilege" in statement:
+                self.value = (True,)
+            else:
+                raise AssertionError("unexpected ACL query: " + statement)
+            return self
+
+        def fetchone(self):
+            """回傳最近一次 ACL 或身分預檢結果。"""
+            return self.value
+
+    monkeypatch.setattr(psycopg, "connect", lambda *_args, **_kwargs: FakeConnection())
+    _login_preflight("postgresql://unused", "cart_login", role="executor",
+                     schema="public", platform="synthetic-carts")
+    with pytest.raises(ProtectedRpcConfigurationError, match="forbidden_acl_detected"):
+        _login_preflight("postgresql://unused", "cart_login", role="executor",
+                         schema="public", platform="synthetic-inventory")
 
 
 def test_g3b_service_bootstrap_rejects_missing_role_and_unsafe_sender(monkeypatch):

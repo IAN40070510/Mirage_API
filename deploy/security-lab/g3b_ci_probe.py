@@ -87,16 +87,18 @@ def _gateway() -> None:
                             str(root / "gateway-client.key"))
     origin = "https://verifier:8443"
     with httpx.Client(verify=context, trust_env=False, timeout=8.0) as gateway:
+        last_error = "no_connection_attempt"
         for _ in range(60):
             try:
                 ready = gateway.get(origin + "/internal/ready")
                 if ready.status_code == 200:
                     break
-            except httpx.ConnectError:
-                pass
+                last_error = "http_status_" + str(ready.status_code)
+            except httpx.ConnectError as exc:
+                last_error = type(exc).__name__ + ":" + str(exc)
             time.sleep(0.2)
         else:
-            raise RuntimeError("g3b_ci_verifier_not_ready")
+            raise RuntimeError("g3b_ci_verifier_not_ready:" + last_error)
         if ready.json().get("trusted_send") != "disabled":
             raise RuntimeError("g3b_ci_trusted_send_enabled")
         if gateway.post(origin + "/internal/v1/execute", json={
