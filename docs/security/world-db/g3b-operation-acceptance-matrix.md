@@ -24,13 +24,23 @@ Executor 能完成固定 Inventory Commit 而不能建立 Receipt，Runtime 不�
 Operation Proof 或 `SET ROLE` 成為 Executor。這是**實體登入及 ACL 的隔離測試**，
 不是正式容器的 Secret 不可見、NetworkPolicy、Gateway 部署或全操作相容驗收。
 
+**四角色服務／原生 Medusa 拒絕候選增量實測**：固定程式 SHA
+`7987467a171bd7fdacda81b4484b0b9837770538`，
+[PostgreSQL 17.6 CI 45062662638](https://github.com/IAN40070510/Mirage_API/actions/runs/45062662638)
+`92 passed`、獨立 mTLS `4 passed`、文件檢查成功；
+[容器示範 CI 45062662627](https://github.com/IAN40070510/Mirage_API/actions/runs/45062662627)
+另行執行。驗證項含 Verifier/Executor 實體受限登入、固定路由、另一個
+唯讀 Validator Login 重建 Medusa M-03 指定 400／404 來源與封套，及
+Executor／Validator 不同 CA 的拒絕測試。這是**實驗室子項 PASS**，尚未完成
+四個容器在正式網路／Secret／pg_hba 的部署級簽收，也未核准 Client HTTP Send。
+
 | G3b 子門檻 | 獨立實測結果 | 正式簽收 |
 | --- | --- | --- |
 | 真 HTTPS Gateway→Verifier→Executor、互異 Client CA、拒絕重播／竄改 | 隔離 CI PASS | 僅實驗室傳輸子項 PASS |
 | 三個實體 PostgreSQL SCRAM Login、無跨角色 DML／SET ROLE | 隔離 CI PASS | 僅實驗室 ACL 子項 PASS |
 | 20 路由 Method／Path Template／Operation ID 與三份固定規格集合同步 | 逐路由 Parameterized Proof 單元測試 PASS | 僅靜態 Operation Mapping 子項 PASS；未證明每條真 JWS／mTLS／HTTP 結果 |
 | 可配置的隔離 Verifier／雙 Executor／Native Validator、專用 DSN Secret、Role／Schema／ACL 啟動檢查 | 已實作四角色啟動工廠與無公開埠的 Compose 範本；待部署級真容器驗證 | OPEN：程式入口不等於部署隔離簽核 |
-| Medusa M-03 特定 400／404 的原生 JSON 從獨立 Rejection Source 重建 | 已接入唯讀 Validator 投影原語、獨立 mTLS RPC；待真 PG／CA 回歸 | OPEN：Validator 對帳摘要不是客戶端 HTTP 發送授權 |
+| Medusa M-03 特定 400／404 的原生 JSON 從獨立 Rejection Source 重建 | 真 PG、唯讀 Validator 來源投影、第二 mTLS CA PASS | 實驗室子項 PASS；正式 Client HTTP 回應與全操作兼容 OPEN |
 | 正式獨立服務部署、Secret Mount／網路來源、無共享憑證可見性 | 未實測 | OPEN |
 | 20 條正式原生 2xx／4xx Payload 與獨立來源／Validator | 20 條均未具全套證據 | OPEN |
 | G3b 整體解封並移交 G4 Sender | 前述兩項未完成 | **NO-GO** |

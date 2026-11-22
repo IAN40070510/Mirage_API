@@ -8,7 +8,7 @@ Executor 真 mTLS 入口提升為**可從受控環境配置的獨立進程啟動
 **不同的 Secret Mount**，嚴禁使用舊 `MIRAGE_POSTGRES_DSN` 或收到另一個
 角色的 DSN。程序在綁定 Listener 前連到 PostgreSQL，檢查 `session_user`
 等於 `current_user` 與指定 Login，且 Role 為 `NOINHERIT`、沒有超級使用者、
-`BYPASSRLS` 或建立資料庫／角色權，最後逐表核對必要與禁止的 ACL。
+`BYPASSRLS`、`REPLICATION` 或建立資料庫／角色權，最後逐表核對必要與禁止的 ACL。
 此外核對**唯一 schema** 與禁止任何 PostgreSQL 角色成員資格，不能靠
 `SET ROLE` 轉入另一個授權域。
 
@@ -143,6 +143,12 @@ Executor 亦不得取得 Verifier 的 DSN 或 JWS 公鑰清單。Role 不可取�
 tests/test_protected_rpc_mtls.py tests/test_ingress_receipts.py`。真 PostgreSQL Role
 測試須設於明確**可拋棄**的 `MIRAGE_WORLD_ROLE_TEST_ISOLATED=true` CI，
 而非正式 DB。檢查 `python tools/check_documentation.py`。
+
+隔離回歸證據：
+[GitHub Actions 45062662638](https://github.com/IAN40070510/Mirage_API/actions/runs/45062662638)
+在固定提交 `7987467a171bd7fdacda81b4484b0b9837770538` 的 PostgreSQL
+17.6 CI 得到 `92 passed`，獨立 mTLS 子集 `4 passed`；這仍不是
+正式 Compose 容器實體 Secret／Network Policy 的部署級 ACL 證據。
 
 尚待驗收：正式 Gateway 端原始網路連線、Secret 不可見性、pg_hba、兩個
 Executor 都可用的真容器端到端正反面、20 條原生 HTTP 200／400／404／409

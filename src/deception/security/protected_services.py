@@ -109,10 +109,10 @@ def _login_preflight(dsn: str, login: str, *, role: str, schema: str,
         with psycopg.connect(dsn, connect_timeout=5) as connection:
             identity = connection.execute(
                 """SELECT session_user,current_user,r.rolinherit,r.rolsuper,r.rolbypassrls,
-                          r.rolcreaterole,r.rolcreatedb
+                          r.rolcreaterole,r.rolcreatedb,r.rolreplication
                    FROM pg_roles r WHERE r.rolname=session_user"""
             ).fetchone()
-            if identity != (login, login, False, False, False, False, False):
+            if identity != (login, login, False, False, False, False, False, False):
                 raise ProtectedRpcConfigurationError("g3b_service_physical_login_denied")
             if connection.execute("SELECT current_schema()").fetchone() != (schema,):
                 raise ProtectedRpcConfigurationError("g3b_service_schema_mismatch")
