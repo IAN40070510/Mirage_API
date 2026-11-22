@@ -138,8 +138,8 @@ def _provision_roles(admin_dsn: str) -> dict[str, str]:
                 "GRANT EXECUTE ON FUNCTION protected_lock_reference(text,jsonb) TO {}"
             ).format(sql.Identifier(ROLES[role])))
         for name in ROLES.values():
-            if admin.execute("SELECT rolpassword LIKE 'SCRAM-SHA-256$%' FROM pg_authid "
-                             "WHERE rolname=%s", (name,)).fetchone() != (True,):
+            if admin.execute("SELECT rolpassword LIKE %s FROM pg_authid "
+                             "WHERE rolname=%s", ("SCRAM-SHA-256$%", name)).fetchone() != (True,):
                 raise RuntimeError("g3b_ci_scram_required")
     return {role: make_conninfo(host="g3b-postgres", dbname="mirage_g3b_ci",
                                 user=name, password=password, connect_timeout=5,
