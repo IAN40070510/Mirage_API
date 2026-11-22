@@ -195,7 +195,7 @@ def create_direct_verifier_app(
         raise HTTPException(status_code=503, detail="direct_verifier_execution_not_available")
 
     @app.api_route("/{original_path:path}", methods=["GET", "POST", "DELETE"])
-    async def verify_original(request: Request, original_path: str) -> dict[str, str]:
+    async def verify_original(request: Request, original_path: str) -> dict[str, object]:
         """先從 ASGI 取得可信原始快照，再驗簽並原子記錄 Replay／Receipt／Operation。
 
         不接受 http／proxy header 模擬 TLS；只有 mTLS Listener 的真實 HTTPS
@@ -241,7 +241,8 @@ def create_direct_verifier_app(
                 raise HTTPException(status_code=503,
                                     detail="direct_verifier_executor_unverifiable") from exc
         # 不能在 HTTP 回應暴露已驗證 claims 或受保護 DB Secret；此結果非 Sender。
-        result = {"receipt_id": str(receipt_id), "operation_id": operation.operation_id}
+        result: dict[str, object] = {"receipt_id": str(receipt_id),
+                                     "operation_id": operation.operation_id}
         if outcome is not None:
             result["executor_result"] = outcome
         return result

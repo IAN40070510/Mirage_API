@@ -166,6 +166,10 @@ def test_inventory_http_proof_selects_handler_and_rejects_rpc_substitution(isola
         with TestClient(rpc, base_url="http://executor.test") as plaintext:
             assert plaintext.post("/internal/v1/execute", json=wire).status_code == 503
         accepted = client.post("/internal/v1/execute", json=wire)
+        if accepted.status_code != 200:
+            # 此處只供 PG CI 呈現底層失敗原因；不得把 Exception 回傳 HTTP Caller。
+            executor.execute_verified_http(receipt_id=receipt_id, raw_path=request.raw_path,
+                                           raw_body=request.body)
         assert accepted.status_code == 200
         outcome = accepted.json()
         assert outcome["kind"] == "world_mutation" and outcome["operation"] == "reserveSyntheticInventory"
