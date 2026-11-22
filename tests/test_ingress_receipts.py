@@ -389,6 +389,149 @@ def test_direct_verifier_medusa_400_over_real_executor_mtls(isolated_test_dsn, t
             worker.join(timeout=5)
 
 
+def test_three_process_gateway_verifier_executor_distinct_mtls_roots(isolated_test_dsn, tmp_path):
+    """真三程序與兩條獨立 CA：原始 HTTP Gateway 不經 Runtime 建立 Proof 並固定執行一次。"""
+    import json
+    import multiprocessing
+    import ssl
+    import time as clock
+
+    import httpx
+    import psycopg
+
+    from deception.domains.ecommerce.inventory import SyntheticInventory
+    from deception.security.protected_rpc import (
+        FixedExecutorMTLSClient, create_fixed_executor_app, serve_direct_verifier_mtls,
+        serve_fixed_executor_mtls,
+    )
+    from deception.world.protected_world import PostgresProtectedWorldExecutor
+    from deception.world.session import SessionBinding
+    from test_protected_rpc_mtls import _issue_mtls_certificates, _unused_local_port
+
+    dsn, now = isolated_test_dsn, int(clock.time())
+    binding = SessionBinding(environment_id="env", deployment_id="deploy",
+                             session_id="session", session_epoch=1, access_mode="inventory")
+    world = SyntheticInventory(dsn)
+    snapshot = world.resolve(binding, {"inventory": {"sku-1": 5}, "reservations": {}},
+                             now=now, ttl=120)
+    with psycopg.connect(dsn) as connection:
+        login = connection.execute("SELECT session_user").fetchone()[0]
+    trusted_executor = PostgresProtectedWorldExecutor(dsn, expected_login=login, world_store=world)
+    gateway_ca_root, executor_ca_root = tmp_path / "gateway-root", tmp_path / "executor-root"
+    gateway_ca_root.mkdir()
+    executor_ca_root.mkdir()
+    gateway_ca, verifier_cert, verifier_key, gateway_cert, gateway_key = _issue_mtls_certificates(
+        gateway_ca_root)
+    executor_ca, executor_cert, executor_key, verifier_client_cert, verifier_client_key = (
+        _issue_mtls_certificates(executor_ca_root))
+    assert gateway_ca.read_bytes() != executor_ca.read_bytes()
+    verifier_port, executor_port = _unused_local_port(), _unused_local_port()
+    while verifier_port == executor_port:
+        executor_port = _unused_local_port()
+    signer = Ed25519PrivateKey.generate()
+    executor_client = FixedExecutorMTLSClient(
+        origin=f"https://127.0.0.1:{executor_port}", client_cert=verifier_client_cert,
+        client_key=verifier_client_key, server_ca=executor_ca,
+    )
+    verifier_app = create_direct_verifier_app(
+        verifier=verifier(dsn, {"old": signer}), postgres_dsn=dsn,
+        environment_id="env", deployment_id="deploy",
+        expected_issuer="gateway", expected_audience="mirage",
+        executor_client=executor_client,
+    )
+    executor_worker = multiprocessing.Process(target=serve_fixed_executor_mtls, kwargs={
+        "app": create_fixed_executor_app(executor=trusted_executor),
+        "host": "127.0.0.1", "port": executor_port,
+        "server_cert": executor_cert, "server_key": executor_key,
+        "verifier_client_ca": executor_ca,
+    })
+    verifier_worker = multiprocessing.Process(target=serve_direct_verifier_mtls, kwargs={
+        "app": verifier_app, "host": "127.0.0.1", "port": verifier_port,
+        "server_cert": verifier_cert, "server_key": verifier_key, "client_ca": gateway_ca,
+    })
+    executor_worker.start()
+    verifier_worker.start()
+    try:
+        executor_context = ssl.create_default_context(cafile=str(executor_ca))
+        executor_context.load_cert_chain(str(verifier_client_cert), str(verifier_client_key))
+        with httpx.Client(verify=executor_context, trust_env=False, timeout=2.0) as internal:
+            for _ in range(70):
+                try:
+                    assert internal.get(f"https://127.0.0.1:{executor_port}/internal/ready").status_code == 200
+                    break
+                except httpx.ConnectError:
+                    if not executor_worker.is_alive():
+                        pytest.fail("fixed executor terminated before readiness")
+                    clock.sleep(0.1)
+            else:
+                pytest.fail("three-process executor did not become ready")
+        gateway_context = ssl.create_default_context(cafile=str(gateway_ca))
+        gateway_context.load_cert_chain(str(gateway_cert), str(gateway_key))
+        with httpx.Client(verify=gateway_context, trust_env=False, timeout=8.0) as gateway:
+            url = f"https://127.0.0.1:{verifier_port}/synthetic/inventory/reservations"
+            for _ in range(70):
+                try:
+                    ready = gateway.get(f"https://127.0.0.1:{verifier_port}/internal/ready")
+                    assert ready.status_code == 200
+                    break
+                except httpx.ConnectError:
+                    if not verifier_worker.is_alive() or not executor_worker.is_alive():
+                        pytest.fail("independent mTLS service terminated before readiness")
+                    clock.sleep(0.1)
+            else:
+                pytest.fail("three-process verifier did not become ready")
+            body = json.dumps({"sku": "sku-1", "quantity": 2, "expected_version": 1,
+                               "idempotency_key": "three-process-once",
+                               "commit_attempt_id": str(uuid4())}).encode()
+            outbound = gateway.build_request(
+                "POST", url, content=body,
+                headers={"x-request-id": "gateway-three-process-1",
+                         "content-type": "application/json"},
+            )
+            fingerprint = fingerprint_httpx_request(outbound, "gateway-three-process-1")
+            assert gateway.send(outbound).status_code == 403
+            outbound.headers["x-trusted-session"] = signed(
+                signer, jti=uuid4().hex, fingerprint=fingerprint, access_mode="inventory",
+            )
+            tampered = gateway.build_request(
+                "POST", url, content=body.replace(b'"sku-1"', b'"sku-2"'),
+                headers=dict(outbound.headers),
+            )
+            assert gateway.send(tampered).status_code == 403
+            accepted = gateway.send(outbound)
+            assert accepted.status_code == 200, accepted.text
+            result = accepted.json()
+            assert result["operation_id"] == "reserveSyntheticInventory"
+            assert result["executor_result"]["status"] == "committed"
+            assert result["executor_result"]["operation"] == result["operation_id"]
+            assert gateway.send(outbound).status_code == 403
+        with httpx.Client(verify=ssl.create_default_context(cafile=str(gateway_ca)),
+                          trust_env=False, timeout=2.0) as anonymous:
+            with pytest.raises(httpx.TransportError):
+                anonymous.get(f"https://127.0.0.1:{verifier_port}/internal/ready")
+        wrong_ca = ssl.create_default_context(cafile=str(gateway_ca))
+        wrong_ca.load_cert_chain(str(verifier_client_cert), str(verifier_client_key))
+        with httpx.Client(verify=wrong_ca, trust_env=False, timeout=2.0) as wrong_role:
+            with pytest.raises(httpx.TransportError):
+                wrong_role.get(f"https://127.0.0.1:{verifier_port}/internal/ready")
+        with psycopg.connect(dsn) as connection:
+            assert connection.execute(
+                "SELECT state->'inventory'->>'sku-1' FROM world_snapshots WHERE world_generation_id=%s",
+                (snapshot.scope.world_generation_id,),
+            ).fetchone()[0] == "3"
+            assert connection.execute("SELECT count(*) FROM protected_http_operation_bindings"
+                                      ).fetchone()[0] == 1
+            assert connection.execute("SELECT count(*) FROM protected_world_commit_sources"
+                                      ).fetchone()[0] == 1
+    finally:
+        for worker in (verifier_worker, executor_worker):
+            worker.terminate()
+            worker.join(timeout=5)
+            if worker.is_alive():
+                worker.kill()
+                worker.join(timeout=5)
+
+
 def test_ingress_receipt_failure_rolls_back_consumed_replay(isolated_test_dsn):
     """Receipt 寫入失敗時，同一連線已 INSERT 的 Replay 必須一同回滾。"""
     import psycopg

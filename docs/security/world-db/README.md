@@ -34,6 +34,7 @@
 | [驗收計畫](verification-plan.md) | 真 PostgreSQL／非特權 Role、Snapshot/Purge、Policy Race、外部 side effect／Restore、Mixed Runtime、未知 COMMIT（37 個必檢 ID，全 NOT_RUN） | 6 |
 | [修補執行與驗收順序](implementation-runbook.md) | 固定原生缺口、獨立角色與交易分段、G0–G6 Gate、待 Owner 採納決策與證據規則；目前尚未實作／驗收 | 6 |
 | [G3 Grant Binding 實作紀錄](grant-binding-implementation-status.md) | 獨立分支實際修補切面、Role／Row Lock 新阻礙、真 PostgreSQL 未驗證及下一階段清單 | 6 |
+| [G3b 全 20 操作逐項簽收矩陣](g3b-operation-acceptance-matrix.md) | 分開標示固定 HTTP Proof、內部 Executor 與原生 2xx／4xx 相容，不將隔離 PASS 當正式發送資格 | 6 |
 | [Oracle 隔離權限驗收 Lab](isolated-oracle-lab.md) | 新建 Internal Network、專用 PostgreSQL、Verifier／Authorizer SCRAM Role Probes；不是正式服務或 G1/G2 完整通過證據 | 7 |
 | [Restore Anchor Option B 已核准契約](restore-anchor-option-b.md) | World DB 還原域之外的 Anchor 與不可回退最高 Head；核准方向不等於已部署 | 8 |
 | [BD-05 自動驗證解除 Quarantine](bd-05-restore-quarantine-release.md) | 證據全 PASS 自動放行；異常維持隔離，人工僅修復、不能繞過 | 8 |

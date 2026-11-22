@@ -119,6 +119,11 @@ Inventory Commit 一次，重送遭 Replay 拒絕。它只證明**測試用**隔
 `test_direct_verifier_medusa_400_over_real_executor_mtls` 另驗證原始
 publishable key／Body 經 Fingerprint 在 Verifier→Executor 雙程序 mTLS 傳輸後，
 才能建立 400 Read Source；簽發後改 key 為 403 且不得消耗 Replay／新建來源。
+`test_three_process_gateway_verifier_executor_distinct_mtls_roots` 新增真 HTTPX
+Gateway→Uvicorn Verifier→另一 Uvicorn Executor 三程序與相互獨立 CA：
+含真 JWS、拒絕無憑證／錯誤 Client CA、未簽或簽後改 Body、Replay 單次副作用。
+此項仍使用隔離 CI 的同一 DB Login，且無完整候選回應與正式 Gateway 路由，
+僅為跨程序傳輸來源正反面子證據，不是 G3b 放行簽核。
 隔離資料庫的 404 另以可信 Cart catalog 缺失和 Candidate Promotion 驗證，
 尚未涵蓋全部原生 Medusa 路由。
 
