@@ -48,6 +48,16 @@
 
 ## 接續順序
 
+### 獨立 mTLS 服務決策及 sealed 入口（2026-11-22）
+
+Owner 已核准獨立 mTLS Trusted Service；`src/deception/security/protected_rpc.py`
+建立只允許 Client Certificate、預設 loopback 的封閉傳輸服務。
+未具證書拒絕 TLS 握手，具證書仍只能獲得 `sealed` 健康狀態，不能觸發業務；
+短期測試 CA／EKU 握手驗收見 `tests/test_protected_rpc_mtls.py`。
+此批不把 mTLS 當成 Operation 來源證明，也不讓 HTTP Runtime 藉 RPC 執行
+自選 Handler。原始 HTTP Operation／Request Snapshot 仍需由獨立可信入口建立
+不可偽造的 Receipt 綁定，G3b／G4／G5／G6 仍 OPEN，正式 Send OFF。
+
 ### 2026-11-22 接續分支 G3b 增量（尚未驗收）
 
 下一批增量新增 `021_protected_business_rejections.sql`：只允許固定 World

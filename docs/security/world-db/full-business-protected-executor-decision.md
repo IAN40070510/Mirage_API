@@ -2,6 +2,8 @@
 
 **Decision (2026-11-22): ADOPT full business capability.** Preserve inventory, cart, orders and Medusa synthetic API operations, including successful and legitimate failure responses. This does **not** authorize production Trusted Send, branch merge, or deployment.
 
+**Transport decision (2026-11-22): ADOPT independent mTLS trusted services.** HTTP Runtime must not share Verifier／Executor／Validator／Authorizer DB credentials. Service certificates and private keys belong to separate deployment secrets and dedicated trust roots. An authenticated mTLS channel alone does **not** prove the original HTTP request or authorize arbitrary RPC operations. The first implementation remains `sealed` (only mTLS readiness + fixed 503 for business requests); see [Protected RPC](../../protected-rpc.md). The protocol cannot be opened until trusted HTTP operation identity and Receipt/Handler binding are complete and independently tested.
+
 ## Security invariants
 
 1. An untrusted HTTP Runtime never receives the Executor, Ingress Verifier, Candidate Validator or Authorizer database credentials; role inheritance and direct DML on protected state/proof tables are prohibited. Privileged service calls must be authenticated, policy-scoped and independently authorized. A mere `expected_login` argument is **not** a secure remote service boundary.
