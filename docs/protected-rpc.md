@@ -116,6 +116,11 @@ Direct Verifier 的真實 mTLS listener 與 PostgreSQL Receipt/Proof 同交易�
 PostgreSQL CI 以不同程序、測試 CA 與 HTTPS 驗證單一 JWS→Proof→固定
 Inventory Commit 一次，重送遭 Replay 拒絕。它只證明**測試用**隔離鏈路，
 測試仍使用同一 DB Login，不能替代部署級獨立 SCRAM／Secret 負面測試。
+`test_direct_verifier_medusa_400_over_real_executor_mtls` 另驗證原始
+publishable key／Body 經 Fingerprint 在 Verifier→Executor 雙程序 mTLS 傳輸後，
+才能建立 400 Read Source；簽發後改 key 為 403 且不得消耗 Replay／新建來源。
+隔離資料庫的 404 另以可信 Cart catalog 缺失和 Candidate Promotion 驗證，
+尚未涵蓋全部原生 Medusa 路由。
 
 仍須獨立完成：部署級 Gateway→Verifier 原始 HTTP 來源證明、
 Service Caller 認證政策、角色與憑證隔離、完整業務 RPC、未知 COMMIT 對帳、
