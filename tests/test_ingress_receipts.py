@@ -22,14 +22,14 @@ from test_trusted_session import encode
 
 
 def signed(key, *, jti: str, reference_time: int | None = None,
-           fingerprint: str = "a" * 64) -> str:
+           fingerprint: str = "a" * 64, access_mode: str = "read_only") -> str:
     """依目前時間簽發有效 JWS，讓 DB lock 後的權威時鐘檢查能實測。"""
     now = int(time.time()) if reference_time is None else reference_time
     prefix = encode(dict(alg="Ed25519", kid="old", protocol_version="1.1",
                          typ="mirage-trusted-session+jwt")) + "." + encode(dict(
         iss="gateway", aud="mirage", iat=now - 5, nbf=now - 5, exp=now + 45,
         jti=jti, environment_id="env", deployment_id="deploy", session_id="session",
-        session_epoch=1, request_fingerprint=fingerprint, assessment_id="assessment",
+        session_epoch=1, access_mode=access_mode, request_fingerprint=fingerprint, assessment_id="assessment",
         assessment_digest="b" * 64))
     return prefix + "." + base64.urlsafe_b64encode(key.sign(prefix.encode())).decode().rstrip("=")
 
@@ -161,6 +161,99 @@ def test_direct_https_verifier_captures_actual_request_and_mints_atomic_proof(is
                                  "/synthetic/inventory/reservations")
         assert rows[0][4] == hashlib.sha256(b"{}").hexdigest()
         assert connection.execute("SELECT count(*) FROM replay_entries").fetchone()[0] == 1
+
+
+def test_direct_verifier_dispatches_inventory_over_real_executor_mtls_once(isolated_test_dsn, tmp_path):
+    """兩個真程序與實體 TLS：原始 JWS HTTP → Verifier Proof → Executor 固定庫存提交。"""
+    import json
+    import multiprocessing
+    import ssl
+    import time as clock
+
+    import httpx
+    import psycopg
+    from fastapi.testclient import TestClient
+
+    from deception.domains.ecommerce.inventory import SyntheticInventory
+    from deception.security.protected_rpc import (
+        FixedExecutorMTLSClient, create_fixed_executor_app, serve_fixed_executor_mtls,
+    )
+    from deception.world.protected_world import PostgresProtectedWorldExecutor
+    from deception.world.session import SessionBinding
+    from test_protected_rpc_mtls import _issue_mtls_certificates, _unused_local_port
+
+    dsn = isolated_test_dsn
+    now = int(clock.time())
+    binding = SessionBinding(environment_id="env", deployment_id="deploy",
+                             session_id="session", session_epoch=1, access_mode="inventory")
+    world = SyntheticInventory(dsn)
+    snapshot = world.resolve(binding, {"inventory": {"sku-1": 4}, "reservations": {}},
+                             now=now, ttl=120)
+    with psycopg.connect(dsn) as connection:
+        login = connection.execute("SELECT session_user").fetchone()[0]
+    executor = PostgresProtectedWorldExecutor(dsn, expected_login=login, world_store=world)
+    ca, server_cert, server_key, client_cert, client_key = _issue_mtls_certificates(tmp_path)
+    port = _unused_local_port()
+    worker = multiprocessing.Process(target=serve_fixed_executor_mtls, kwargs={
+        "app": create_fixed_executor_app(executor=executor), "host": "127.0.0.1", "port": port,
+        "server_cert": server_cert, "server_key": server_key, "verifier_client_ca": ca,
+    })
+    worker.start()
+    try:
+        context = ssl.create_default_context(cafile=str(ca))
+        context.load_cert_chain(str(client_cert), str(client_key))
+        with httpx.Client(verify=context, trust_env=False, timeout=1.0) as mtls:
+            for _ in range(50):
+                try:
+                    ready = mtls.get(f"https://127.0.0.1:{port}/internal/ready")
+                    assert ready.status_code == 200
+                    break
+                except httpx.ConnectError:
+                    if not worker.is_alive():
+                        pytest.fail("Executor server crashed before readiness")
+                    clock.sleep(0.1)
+            else:
+                pytest.fail("Executor server did not become ready")
+        key = Ed25519PrivateKey.generate()
+        executor_client = FixedExecutorMTLSClient(
+            origin=f"https://127.0.0.1:{port}", client_cert=client_cert,
+            client_key=client_key, server_ca=ca,
+        )
+        verifier_app = create_direct_verifier_app(
+            verifier=verifier(dsn, {"old": key}), postgres_dsn=dsn,
+            environment_id="env", deployment_id="deploy",
+            expected_issuer="gateway", expected_audience="mirage",
+            executor_client=executor_client,
+        )
+        body = json.dumps({"sku": "sku-1", "quantity": 2, "expected_version": 1,
+                           "idempotency_key": "real-mtls-once",
+                           "commit_attempt_id": str(uuid4())}).encode()
+        with TestClient(verifier_app, base_url="https://mirage.test") as gateway:
+            request = gateway.build_request("POST", "/synthetic/inventory/reservations",
+                                           content=body, headers={"x-request-id": "two-process-1",
+                                                                  "content-type": "application/json"})
+            fingerprint = fingerprint_httpx_request(request, "two-process-1")
+            request.headers["x-trusted-session"] = signed(
+                key, jti=uuid4().hex, fingerprint=fingerprint, access_mode="inventory",
+            )
+            accepted = gateway.send(request)
+            assert accepted.status_code == 200, accepted.text
+            assert accepted.json()["executor_result"]["status"] == "committed"
+            assert accepted.json()["executor_result"]["operation"] == "reserveSyntheticInventory"
+            assert gateway.send(request).status_code == 403
+        with psycopg.connect(dsn) as connection:
+            assert connection.execute(
+                "SELECT state->'inventory'->>'sku-1' FROM world_snapshots WHERE world_generation_id=%s",
+                (snapshot.scope.world_generation_id,),
+            ).fetchone()[0] == "2"
+            assert connection.execute("SELECT count(*) FROM protected_world_commit_sources").fetchone()[0] == 1
+            assert connection.execute("SELECT count(*) FROM ingress_receipts").fetchone()[0] == 1
+    finally:
+        worker.terminate()
+        worker.join(timeout=5)
+        if worker.is_alive():
+            worker.kill()
+            worker.join(timeout=5)
 
 
 def test_ingress_receipt_failure_rolls_back_consumed_replay(isolated_test_dsn):

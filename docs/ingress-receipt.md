@@ -80,6 +80,10 @@ Execute 入口，只接受 Receipt ID／原始 Path／Body，由 Executor 受保
 自行查回 Session Binding／期限／Operation，對已核准合成 Inventory、
 Cart／Order 實際執行既有 Handler；未接受自選 action，也不執行 Medusa。
 兩個 mTLS 服務目前仍需實際跨容器接線與實體 Role／Secret 驗收。
+`FixedExecutorMTLSClient` 現讓 Verifier 在原始請求驗證成功後對 Executor
+發出**單次**認證 TLS 呼叫，對帳回應須與固定 Operation 一致；隔離 CI
+將使用兩程序、真 PostgreSQL 核對一次 World Mutation。正式部署身份隔離
+與 Medusa 400／404 來源仍待補齊，未知 ACK 一律不可盲目重做。
 合成 GET 的 `read_verified_cart_http()` 亦已在 Executor 內綁定原始
 Cart／Order／Operation 路徑與可信 Creator Lineage，不能由 Runtime
 改選資源或讀取操作 ID；但尚未成為實際 HTTP 服務。Medusa 原生表頭／身份與

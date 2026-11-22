@@ -8,9 +8,11 @@ import json
 import os
 from pathlib import Path
 import ssl
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from fastapi import FastAPI, HTTPException, Request
+import httpx
 from pydantic import Field, UUID4
 import uvicorn
 
@@ -28,6 +30,62 @@ class FixedExecutorCall(SyntheticModel):
     receipt_id: UUID4
     raw_path_b64: str = Field(min_length=4, max_length=4096)
     raw_body_b64: str = Field(max_length=1398108)
+
+
+class FixedExecutorMTLSClient:
+    """獨立 Verifier 用專屬 Client Cert 對已固定 Receipt 單次呼叫 Executor。"""
+
+    def __init__(self, *, origin: str, client_cert: Path, client_key: Path,
+                 server_ca: Path) -> None:
+        """固定 HTTPS Server 身份與專屬 Verifier 私鑰，拒絕明文／URL 注入。
+
+        不共用 HTTP Runtime Secret，不提供重試或可變 Handler 參數；
+        如果 Executor COMMIT ACK 遺失，上游只能進入 UNVERIFIABLE 對帳。
+        """
+        if not isinstance(origin, str):
+            raise ProtectedRpcConfigurationError("fixed_executor_origin_invalid")
+        url = urlsplit(origin)
+        if (url.scheme != "https" or not url.hostname or url.port is None
+                or url.path not in {"", "/"} or url.query or url.fragment
+                or url.username is not None or url.password is not None):
+            raise ProtectedRpcConfigurationError("fixed_executor_origin_invalid")
+        require_mtls_files(server_cert=client_cert, server_key=client_key, client_ca=server_ca)
+        context = ssl.create_default_context(cafile=str(server_ca))
+        context.load_cert_chain(str(client_cert), str(client_key))
+        if not context.check_hostname or context.verify_mode != ssl.CERT_REQUIRED:
+            raise ProtectedRpcConfigurationError("fixed_executor_server_verification_required")
+        self._origin = origin.rstrip("/")
+        self._tls = context
+
+    async def execute_receipt(self, *, receipt_id: UUID, operation_id: str,
+                              raw_path: bytes, raw_body: bytes) -> dict[str, object]:
+        """只傳不可變 Receipt／原始 Bytes，單次 mTLS 呼叫且拒絕回應操作錯綁。"""
+        payload = {"receipt_id": str(receipt_id),
+                   "raw_path_b64": base64.b64encode(raw_path).decode("ascii"),
+                   "raw_body_b64": base64.b64encode(raw_body).decode("ascii")}
+        async with httpx.AsyncClient(verify=self._tls, trust_env=False, timeout=8.0) as client:
+            response = await client.post(self._origin + "/internal/v1/execute", json=payload)
+        if response.status_code != 200:
+            raise ProtectedRpcConfigurationError("fixed_executor_result_unverifiable")
+        try:
+            result = response.json()
+        except ValueError as exc:
+            raise ProtectedRpcConfigurationError("fixed_executor_result_invalid") from exc
+        fields = {
+            "world_mutation": {"kind", "operation", "commit_attempt_id", "status",
+                               "state_version", "state_hash", "result_digest"},
+            "cart_created": {"kind", "operation", "resource_id", "commit_attempt_id", "status"},
+            "cart_read_admitted": {"kind", "operation", "resource_id", "attempt_id",
+                                   "world_generation_id", "state_version", "state_hash"},
+        }
+        if (not isinstance(result, dict) or result.get("operation") != operation_id
+                or result.get("kind") not in fields
+                or set(result) != fields[result["kind"]]
+                or (result["kind"] == "world_mutation" and result.get("status") not in {
+                    "committed", "already_committed", "rejected"})
+                or (result["kind"] == "cart_created" and result.get("status") != "committed")):
+            raise ProtectedRpcConfigurationError("fixed_executor_result_binding_mismatch")
+        return result
 
 
 def _canonical_base64(raw: str, *, max_bytes: int) -> bytes:
@@ -81,7 +139,10 @@ def create_fixed_executor_app(*, executor) -> FastAPI:
         try:
             parsed = json.loads(received, object_pairs_hook=unique_object,
                                 parse_constant=reject_constant)
-            call = FixedExecutorCall.model_validate(parsed)
+            if not isinstance(parsed, dict):
+                raise ValueError("fixed_executor_rpc_object_required")
+            # strict UUID4 模型允許 JSON 字串 UUID，但不接受 Python 字串隱式轉型。
+            call = FixedExecutorCall.model_validate_json(bytes(received))
             path = _canonical_base64(call.raw_path_b64, max_bytes=2048)
             body = _canonical_base64(call.raw_body_b64, max_bytes=MAX_BODY_BYTES)
         except ValueError as exc:
@@ -100,6 +161,7 @@ def create_fixed_executor_app(*, executor) -> FastAPI:
 def create_direct_verifier_app(
     *, verifier, postgres_dsn: str, environment_id: str, deployment_id: str,
     expected_issuer: str, expected_audience: str,
+    executor_client: FixedExecutorMTLSClient | None = None,
 ) -> FastAPI:
     """在獨立 Gateway mTLS 入口由實際 HTTP 訊息建立受保護 Operation Receipt。
 
@@ -112,6 +174,8 @@ def create_direct_verifier_app(
 
     if not isinstance(verifier, TrustedSessionVerifier):
         raise ProtectedRpcConfigurationError("direct_verifier_requires_trusted_verifier")
+    if executor_client is not None and not isinstance(executor_client, FixedExecutorMTLSClient):
+        raise ProtectedRpcConfigurationError("direct_verifier_executor_client_invalid")
     if not isinstance(postgres_dsn, str) or not postgres_dsn.strip():
         raise ProtectedRpcConfigurationError("direct_verifier_requires_db")
     if any(not isinstance(value, str) or not 1 <= len(value) <= 128 for value in (
@@ -122,7 +186,8 @@ def create_direct_verifier_app(
     @app.get("/internal/ready")
     async def ready() -> dict[str, str]:
         """只證明內部 Verifier HTTP Listener 存活，正式發送仍封閉。"""
-        return {"control_plane": "verifier-only", "trusted_send": "disabled"}
+        return {"control_plane": "verifier-dispatch" if executor_client else "verifier-only",
+                "trusted_send": "disabled"}
 
     @app.post("/internal/v1/execute")
     async def execute_disabled() -> dict[str, str]:
@@ -164,8 +229,22 @@ def create_direct_verifier_app(
             )
         except ValueError as exc:
             raise HTTPException(status_code=403, detail="direct_verifier_request_denied") from exc
-        # 不能在 HTTP 回應暴露驗證後 claims 或受保護 DB Secret。
-        return {"receipt_id": str(receipt_id), "operation_id": operation.operation_id}
+        # 已建立 Receipt 後的 RPC 結果不明，不能重新消費 JTI 或盲目重執行。
+        outcome = None
+        if executor_client is not None:
+            try:
+                outcome = await executor_client.execute_receipt(
+                    receipt_id=receipt_id, operation_id=operation.operation_id,
+                    raw_path=normalized.raw_path, raw_body=normalized.body,
+                )
+            except Exception as exc:
+                raise HTTPException(status_code=503,
+                                    detail="direct_verifier_executor_unverifiable") from exc
+        # 不能在 HTTP 回應暴露已驗證 claims 或受保護 DB Secret；此結果非 Sender。
+        result = {"receipt_id": str(receipt_id), "operation_id": operation.operation_id}
+        if outcome is not None:
+            result["executor_result"] = outcome
+        return result
 
     return app
 

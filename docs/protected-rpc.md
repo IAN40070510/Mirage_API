@@ -23,8 +23,11 @@ Header 身分旗標，也不接受代理 `X-Forwarded-Proto` 取代 TLS；Uvicor
 `proxy_headers=False`。真正的 mTLS Gateway 呼叫可取得 `receipt_id` 與固定
 `operation_id` 供後續專用服務查回，**不是給一般 Client 的已授權回應**。
 部署拓樸須保證 Gateway→Verifier 路徑沒有 Runtime 中介，並獨立驗證 Gateway
-Client CA／DB SCRAM Role／網路來源。此函式目前沒有正式部署環境入口，也
-沒有直接呼叫 Executor 的 mTLS Service；不能視為 G3b 整體接線完成。
+Client CA／DB SCRAM Role／網路來源。`FixedExecutorMTLSClient` 可由獨立
+Verifier 持專用 mTLS 憑證使用：驗證成功後只傳 Receipt ID／原始 Path／Body
+至已驗證主機名稱的 HTTPS Executor，完全不傳 Runtime 自選 Handler／Scope，
+並禁止 HTTPX 自動使用環境 Proxy。ACK 不明只回固定 503，**不重試副作用**。
+此函式目前沒有正式部署環境入口，不能視為 G3b 整體接線完成。
 
 ### G3b 固定 Executor HTTP（隔離增量）
 
@@ -40,8 +43,9 @@ ReadAdmission；原始操作驗證通過後，Read 與受保護 World Commit 才
 同一 Receipt 的精確重試只使用既有 Commit Key；無可信 Medusa 400／404
 證據時，Medusa 一律拒絕。返回值屬於**受保護內部執行結果**，尚非
 正式回給 Client 的業務回應，也不提供 Candidate Validation／Grant／Send。
-既有 `create_sealed_app()` 與 `from_environment()` 依舊封閉；當前尚缺
-真正 Gateway→Verifier→Executor 跨程序串接、正式 SCRAM／CA 配置驗收、
+既有 `create_sealed_app()` 與 `from_environment()` 依舊封閉；隔離測試現
+已可經真 HTTPS/mTLS 完成 Verifier→Executor 兩程序固定 Inventory 提交，
+但尚缺實際部署的 Gateway 網路路由、正式 SCRAM／CA 配置驗收、
 合成 Session Bootstrap 及 Medusa 拒絕來源，不能切換到正式流量。
 
 目前服務特意維持 `sealed`：沒有 Executor、Validator 或 Authorizer DB DSN；
@@ -94,6 +98,10 @@ Lab，禁止將 `/internal/ready` 的成功當成開放 Trusted Send 的依據�
 Direct Verifier 的真實 mTLS listener 與 PostgreSQL Receipt/Proof 同交易測試
 分別在 `tests/test_protected_rpc_mtls.py`、`tests/test_ingress_receipts.py`；
 本地缺 PG 時後者 SKIP，須查固定 SHA 的真 PostgreSQL CI。
+`test_direct_verifier_dispatches_inventory_over_real_executor_mtls_once` 在真
+PostgreSQL CI 以不同程序、測試 CA 與 HTTPS 驗證單一 JWS→Proof→固定
+Inventory Commit 一次，重送遭 Replay 拒絕。它只證明**測試用**隔離鏈路，
+測試仍使用同一 DB Login，不能替代部署級獨立 SCRAM／Secret 負面測試。
 
 仍須獨立完成：可信入口對原始 HTTP Request/Operation 的不可偽造綁定、
 Service Caller 認證政策、角色與憑證隔離、固定業務 RPC、未知 COMMIT 對帳、
