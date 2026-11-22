@@ -1,6 +1,6 @@
 # MIR-SEC-WORLD-001 — G3 Grant Binding 實作紀錄
 
-**修補分支**：`fix/mir-sec-world-001-protected-grant`（與 `main` 隔離）。
+**修補分支**：前置 `fix/mir-sec-world-001-protected-grant`；續作 `fix/mir-sec-world-001-resume-20261122`（皆與 `main` 隔離）。
 
 **2026-11-22 狀態**：`IMPLEMENTATION IN PROGRESS / NOT ACCEPTED`。這份文件保留本輪實作選擇及阻礙，**不是 G3 PASS**。`MIR-SEC-WORLD-001=OPEN`、`MSDSS P2=NO-GO`、正式 Trusted Send／Production DECEIVE **OFF**；原有 `from_environment()` 的 Release Fuse 不移除。
 
@@ -17,7 +17,7 @@
 | `src/deception/world/postgres_candidate.py` | Candidate GC 不使用呼叫者提供的 `protected_refs` 當唯一判據；已 Promotion 的來源候選不得被刪除。此為暫時偏向安全的保留策略，日後需分離可清理 Bytes 與永久 Metadata。 |
 | `src/deception/security/world_acl.py` | 擴大 Runtime 對 World State／Operation／ReadAdmission／Protected Sources 的有效 DML 拒絕查核，並驗證無 Executor membership 或 Row Lock 特權執行權。正式 Runtime 的原生 Write／ReadAdmission 必須改走可信 Executor，不能共用舊 DB Role。 |
 | `tests/test_protected_grant.py` | 擬定真實 PostgreSQL 正向 Grant、Receipt 重綁／交易回滾、偽造 Fingerprint、未 Promotion、錯誤 Login、Candidate GC 與不可變資料負面測試；使用一次性真 SCRAM Login 及欄位級最低權限驗證。 |
-| `tests/test_protected_world_executor.py` | 新增 Read＋Commit 正向、錯誤 Mode／Fingerprint、Commit 來源寫入故障的原子 rollback、舊業務列不得自動受信任、真 SCRAM Executor／Runtime 權限分離等測試；**本新增批次尚未經 PG CI 執行**。 |
+| `tests/test_protected_world_executor.py` | 新增 Read＋Commit 正向、錯誤 Mode／Fingerprint、Commit 來源寫入故障的原子 rollback、舊業務列不得自動受信任、真 SCRAM Executor／Runtime 權限分離等測試；續作 G3b 的 Cart Creator／GET 證據另見下方固定 SHA 的 PG CI。 |
 | `.github/workflows/world-security-contract.yml` | 獨立、無正式憑證的 PostgreSQL 17.6 快速驗收；只針對 Protected Grant / SCRAM 角色，保留 JUnit，不取代全套 CI。 |
 
 ## 本輪發現並保持阻擋的關鍵事項
@@ -43,9 +43,13 @@
 | 不可信 `committed_operation` 來源阻擋、ReadAdmission Runtime 權限拒絕 | PASS（限 SHA `0b1650583f794d1c47c0646bcb0ef7c2197ae966`） | GitHub 隔離 PostgreSQL 17.6 [run 44956251385](https://github.com/IAN40070510/Mirage_API/actions/runs/44956251385)：`9 passed in 3.46s`；仍未證明正式 World Executor／ReadAdmission provenance 或部署隔離。 |
 | 可信 World Executor／兩種受保護來源及 Rollback | PASS（限 SHA `9c0cf210f82c5958256da5c85869b60d43c3505e`） | GitHub 隔離 PostgreSQL 17.6 [run 44979074395](https://github.com/IAN40070510/Mirage_API/actions/runs/44979074395)：`14 passed in 6.62s`；容器 [run 44979074359](https://github.com/IAN40070510/Mirage_API/actions/runs/44979074359) PASS。新加「不同 Receipt 同 Fingerprint」與「沒有 Proof 的 ReadAdmission」案例待下次 CI；正式業務入口與 Oracle 部署仍未驗收。 |
 | 相同 Fingerprint、不同 Receipt 與無 Provenance 的 ReadAdmission | PASS（限 SHA `92be17aa0b756aba048904a65b47c99394612a11`） | GitHub 隔離 PostgreSQL 17.6 [run 44979254933](https://github.com/IAN40070510/Mirage_API/actions/runs/44979254933)：`16 passed in 7.01s`；容器 [run 44979255001](https://github.com/IAN40070510/Mirage_API/actions/runs/44979255001) PASS。僅為新增原子性與來源完整性子合約。 |
+| G3b Inventory／Cart／Order 固定 HTTP 命令與 Creator Lineage | PARTIAL PASS（限隔離分支 commit `dbf96706ba9852c6499284eae15ecf7cedf85f6b`） | GitHub 隔離 PostgreSQL 17.6 [run 45050313704](https://github.com/IAN40070510/Mirage_API/actions/runs/45050313704)：`52 passed`；獨立 sealed mTLS `2 passed`；容器 [run 45050313673](https://github.com/IAN40070510/Mirage_API/actions/runs/45050313673) PASS。不能視為 HTTP 接線。 |
+| G3b 可信 createGuestCart、穩定衍生世界／重試 | PARTIAL PASS（限隔離分支 commit `5cd1d551e5bf313526a919a071b3264739f91a4b`） | GitHub 隔離 PostgreSQL 17.6 [run 45050573588](https://github.com/IAN40070510/Mirage_API/actions/runs/45050573588)：`55 passed`；mTLS `2 passed`；容器 [run 45050573766](https://github.com/IAN40070510/Mirage_API/actions/runs/45050573766) PASS。不能視為 Medusa 400／404 驗收。 |
+| G3b Cart／Order／Operation 原始 GET 與來源鏈 | PARTIAL PASS（限隔離分支 commit `cdf5ecd95b6b22f2b91e57878ef5e25a0a4a5ee3`） | GitHub 隔離 PostgreSQL 17.6 [run 45050921787](https://github.com/IAN40070510/Mirage_API/actions/runs/45050921787)：`60 passed`；sealed mTLS `2 passed`；容器 [run 45050921824](https://github.com/IAN40070510/Mirage_API/actions/runs/45050921824) PASS。實際 mTLS 業務 RPC 仍固定 503，HTTP E2E 未驗收。 |
 | G4 Snapshot Pin／一次性 Lease／ASGI 守衛 | PARTIAL / NOT WIRED | 內部隔離 Primitive 已實作；獨立 Sender RPC／真實 G5 Fence／正式端到端仍未驗收 |
 | G5 Restoration／Purge Fence | NOT_IMPLEMENTED | 跨資料庫隔離權威／還原競態未接線 |
-| 全套 Python／HTTP 效能回歸 | NOT_RUN | 不可將 Static PASS 當成 P95 測試 |
+| 本地全套 Python 相容回歸 | PASS / PG SKIPPED | 續作分支本地 `python -m pytest -q`：`1110 passed / 240 skipped / 2 deprecation warnings`，`147.31s`；PG 類別靠上述 CI，**HTTP P95／真部署級故障注入仍 NOT_RUN**。 |
+| 隔離 Fence 實體盤點 | OBSERVED / G5 NOT_RUN | Gateway 唯讀 Docker 檢視找到獨立 `postgres:17.6-alpine` Fence 容器與專屬資料 Volume；未驗證最高可信 Head、跨 DB Protocol、Root 隔離、發送守衛或 Purge/Restore 競態，不能當作 G5 PASS。 |
 
 ## 接續順序
 
