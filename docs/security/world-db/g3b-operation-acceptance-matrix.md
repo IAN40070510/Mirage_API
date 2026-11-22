@@ -28,6 +28,7 @@ Operation Proof 或 `SET ROLE` 成為 Executor。這是**實體登入及 ACL 的
 | --- | --- | --- |
 | 真 HTTPS Gateway→Verifier→Executor、互異 Client CA、拒絕重播／竄改 | 隔離 CI PASS | 僅實驗室傳輸子項 PASS |
 | 三個實體 PostgreSQL SCRAM Login、無跨角色 DML／SET ROLE | 隔離 CI PASS | 僅實驗室 ACL 子項 PASS |
+| 20 路由 Method／Path Template／Operation ID 與三份固定規格集合同步 | 逐路由 Parameterized Proof 單元測試 PASS | 僅靜態 Operation Mapping 子項 PASS；未證明每條真 JWS／mTLS／HTTP 結果 |
 | 正式獨立服務部署、Secret Mount／網路來源、無共享憑證可見性 | 未實測 | OPEN |
 | 20 條正式原生 2xx／4xx Payload 與獨立來源／Validator | 20 條均未具全套證據 | OPEN |
 | G3b 整體解封並移交 G4 Sender | 前述兩項未完成 | **NO-GO** |

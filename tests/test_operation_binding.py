@@ -11,8 +11,87 @@ from deception.security.operation_binding import (
     OperationBindingError, decode_verified_cart_creation, decode_verified_cart_mutation,
     decode_verified_cart_read,
     decode_verified_inventory_mutation,
-    derive_verified_operation,
+    derive_verified_operation, _pinned_medusa_operations,
 )
+
+
+PINNED_HTTP_CASES = (
+    ("I-01", "synthetic-inventory", "POST", "/synthetic/inventory/reservations",
+     "/synthetic/inventory/reservations", "reserveSyntheticInventory"),
+    ("I-02", "synthetic-inventory", "POST", "/synthetic/inventory/reservations/" + "a" * 32 + "/cancel",
+     "/synthetic/inventory/reservations/{reservation_id}/cancel", "cancelSyntheticInventory"),
+    ("I-03", "synthetic-inventory", "GET", "/synthetic/operations/" + str(uuid4()),
+     "/synthetic/operations/{attempt}", "getSyntheticOperation"),
+    ("I-04", "synthetic-inventory", "GET", "/synthetic/inventory/sku-1",
+     "/synthetic/inventory/{sku}", "getSyntheticInventory"),
+    ("C-01", "synthetic-carts", "POST", "/synthetic/carts",
+     "/synthetic/carts", "createGuestCart"),
+    ("C-02", "synthetic-carts", "GET", "/synthetic/carts/cart_" + "a" * 32,
+     "/synthetic/carts/{cart_id}", "getGuestCart"),
+    ("C-03", "synthetic-carts", "POST", "/synthetic/carts/cart_" + "a" * 32 + "/line-items",
+     "/synthetic/carts/{cart_id}/line-items", "addGuestCartItem"),
+    ("C-04", "synthetic-carts", "POST", "/synthetic/carts/cart_" + "a" * 32 + "/line-items/item_" + "b" * 32,
+     "/synthetic/carts/{cart_id}/line-items/{item_id}", "updateGuestCartItem"),
+    ("C-05", "synthetic-carts", "DELETE", "/synthetic/carts/cart_" + "a" * 32 + "/line-items/item_" + "b" * 32,
+     "/synthetic/carts/{cart_id}/line-items/{item_id}", "removeGuestCartItem"),
+    ("C-06", "synthetic-carts", "POST", "/synthetic/carts/cart_" + "a" * 32 + "/complete",
+     "/synthetic/carts/{cart_id}/complete", "completeGuestCart"),
+    ("C-07", "synthetic-carts", "GET", "/synthetic/orders/order_" + "c" * 32,
+     "/synthetic/orders/{order_id}", "getSyntheticOrder"),
+    ("C-08", "synthetic-carts", "POST", "/synthetic/orders/order_" + "c" * 32 + "/cancel",
+     "/synthetic/orders/{order_id}/cancel", "cancelSyntheticOrder"),
+    ("C-09", "synthetic-carts", "GET", "/synthetic/carts/cart_" + "a" * 32 + "/operations/" + str(uuid4()),
+     "/synthetic/carts/{cart_id}/operations/{attempt}", "getCartOperation"),
+    ("M-01", "medusa-native-cart", "POST", "/store/carts", "/store/carts", "PostCarts"),
+    ("M-02", "medusa-native-cart", "GET", "/store/carts/cart_" + "a" * 32,
+     "/store/carts/{id}", "GetCartsId"),
+    ("M-03", "medusa-native-cart", "POST", "/store/carts/cart_" + "a" * 32 + "/line-items",
+     "/store/carts/{id}/line-items", "PostCartsIdLineItems"),
+    ("M-04", "medusa-native-cart", "POST", "/store/carts/cart_" + "a" * 32 + "/line-items/" + "b" * 32,
+     "/store/carts/{id}/line-items/{line_id}", "PostCartsIdLineItemsLine_id"),
+    ("M-05", "medusa-native-cart", "DELETE", "/store/carts/cart_" + "a" * 32 + "/line-items/" + "b" * 32,
+     "/store/carts/{id}/line-items/{line_id}", "DeleteCartsIdLineItemsLine_id"),
+    ("M-06", "medusa-native-cart", "POST", "/store/carts/cart_" + "a" * 32 + "/complete",
+     "/store/carts/{id}/complete", "PostCartsIdComplete"),
+    ("M-07", "medusa-native-cart", "GET", "/store/orders/order_" + "c" * 32,
+     "/store/orders/{id}", "GetOrdersId"),
+)
+
+
+@pytest.mark.parametrize("case", PINNED_HTTP_CASES, ids=lambda case: case[0])
+def test_each_pinned_http_operation_has_unique_original_request_proof(case):
+    """逐一核對二十條 HTTP 入口的 Method／Path／Operation，不能只抽測路由。"""
+    _, platform, method, path, template, operation = case
+    request = original_request(path=path, method=method)
+    if method == "GET":
+        request = replace(request, body=b"")
+    proof = derive_verified_operation(request)
+    assert (proof.platform, proof.method, proof.path_template, proof.operation_id) == (
+        platform, method, template, operation,
+    )
+    assert proof.request_path == path
+
+
+def test_pinned_http_matrix_exhausts_all_three_contract_registries():
+    """固定二十路由來源集合；規格新增操作時必須更新逐項驗收而不能默默繞過。"""
+    from deception.domains.ecommerce.cart_http import cart_specification
+    from deception.domains.ecommerce.inventory_http import inventory_specification
+
+    actual = {
+        (platform, method.upper(), "/synthetic" + path, data["operationId"])
+        for platform, specification in (
+            ("synthetic-inventory", inventory_specification()),
+            ("synthetic-carts", cart_specification()),
+        )
+        for path, methods in specification["paths"].items()
+        for method, data in methods.items()
+    }
+    actual.update(("medusa-native-cart", method.upper(), path, operation)
+                  for path, method, operation in _pinned_medusa_operations())
+    expected = {(platform, method, template, operation)
+                for _, platform, method, _, template, operation in PINNED_HTTP_CASES}
+    assert len(PINNED_HTTP_CASES) == len(expected) == 20
+    assert actual == expected
 
 
 def original_request(*, path="/synthetic/inventory/reservations", method="POST") -> NormalizedRequest:
