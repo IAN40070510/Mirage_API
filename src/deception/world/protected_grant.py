@@ -179,7 +179,8 @@ class PostgresCandidatePromoter(_ProtectedConnection):
                     raise ProtectedGrantError("candidate_hash_components_mismatch")
                 if _authorized_registry_revision(cursor, checked) is None:
                     raise ProtectedGrantError("candidate_policy_not_authorized")
-                if not self._source_matches(cursor, receipt_id, scope, request_fingerprint, source):
+                if not self._source_matches(cursor, receipt_id, scope, request_fingerprint,
+                                            source, envelope_hash):
                     raise ProtectedGrantError("candidate_source_unverifiable")
                 cursor.execute("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
                 if candidate[2] <= cursor.fetchone()[0]:
@@ -202,8 +203,9 @@ class PostgresCandidatePromoter(_ProtectedConnection):
 
     @staticmethod
     def _source_matches(cursor, receipt_id: UUID, scope: WorldScope,
-                        fingerprint: str, source: ResponseSource) -> bool:
-        """只接受同 Receipt 與完整 Scope 的受保護 Read／Commit 交易來源。"""
+                        fingerprint: str, source: ResponseSource,
+                        envelope_hash: str) -> bool:
+        """只接受同 Receipt、完整 Scope 且綁定精確封套的受保護來源證明。"""
         if source.kind == "snapshot":
             if not _protected_lock(cursor, "read_admission", {"read_admission_id": source.read_admission_id}):
                 return False
@@ -241,6 +243,25 @@ class PostgresCandidatePromoter(_ProtectedConnection):
                 (receipt_id, *_scope_values(scope), fingerprint,
                  source.operation_result_digest, source.committed_state_version,
                  source.committed_state_hash),
+            )
+            return cursor.fetchone() is not None
+        if source.kind == "security_error":
+            # 只有固定 Handler 的持久化拒絕結果能生成 409；Runtime 自填模板無效。
+            cursor.execute(
+                """SELECT 1 FROM protected_world_rejection_sources p
+                   JOIN world_operations o ON o.commit_attempt_id=p.commit_attempt_id
+                   WHERE p.receipt_id=%s AND p.environment_id=%s AND p.deployment_id=%s
+                     AND p.session_id=%s AND p.world_generation_id=%s
+                     AND p.request_fingerprint=%s AND p.template_id=%s
+                     AND p.contract_revision=%s AND p.envelope_hash=%s
+                     AND o.operation=p.operation AND o.status='rejected'
+                     AND o.result_digest=p.result_digest
+                     AND o.result->>'code'=p.template_id
+                     AND (o.environment_id,o.deployment_id,o.session_id,o.world_generation_id)
+                         =(p.environment_id,p.deployment_id,p.session_id,p.world_generation_id)
+                """,
+                (receipt_id, *_scope_values(scope), fingerprint,
+                 source.template_id, source.contract_revision, envelope_hash),
             )
             return cursor.fetchone() is not None
         # 無受保護來源的安全錯誤模板不得借 Candidate Promotion 混入授權。

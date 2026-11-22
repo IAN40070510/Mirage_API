@@ -50,6 +50,14 @@
 
 ### 2026-11-22 接續分支 G3b 增量（尚未驗收）
 
+下一批增量新增 `021_protected_business_rejections.sql`：只允許固定 World
+Handler 實際保存 `rejected` 操作時，Executor 同交易生成受保護 409 錯誤來源。
+Validator 必須比對來源 Receipt／完整 Scope／Fingerprint、固定錯誤模板、
+Contract Revision、持久化 Operation Result Digest 與精確 Envelope Hash。
+Runtime 單獨提交 `SecurityErrorSource` 仍然不能 Promotion。初期僅覆蓋
+合成 Inventory／Cart 的固定 `{"code":...}` 409，Medusa 400／404、
+未持久化的輸入驗證錯誤尚需各自權威證據，不能把此批視為完整 400／409 PASS。
+
 `fix/mir-sec-world-001-resume-20261122` 新增 `020_protected_cart_lineage.sql` 與
 `PostgresProtectedWorldExecutor.create_cart()`，把 creator Receipt 與新建 cart
 Session／World／resource 的 lineage 原子寫入；新增一次性 Receipt／Cart 唯一約束，

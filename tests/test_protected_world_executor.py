@@ -10,7 +10,7 @@ import pytest
 
 from deception.world import (CommitSource, SnapshotSource, PostgresCandidatePromoter, PostgresCandidateStore,
                              PostgresEventWorldStore, PostgresProtectedWorldExecutor,
-                             PostgresProjectionRegistry, ProtectedGrantError)
+                             PostgresProjectionRegistry, ProtectedGrantError, SecurityErrorSource)
 from deception.world.session import SessionBinding
 from deception.world.transmission import response_envelope, response_hashes
 from deception.domains.ecommerce.carts import SyntheticCarts
@@ -22,6 +22,11 @@ def _counter_add(state, command):
     updated = deepcopy(state)
     updated["value"] += command["amount"]
     return updated, {"value": updated["value"]}, True
+
+
+def _counter_reject(state, command):
+    """固定測試 Handler 拒絕寫入，保留 World 版本並回傳業務錯誤碼。"""
+    return state, {"code": "insufficient_synthetic_inventory"}, False
 
 
 def _real_login(dsn):
@@ -40,7 +45,8 @@ def _trusted_world(dsn):
     session = uuid4().hex
     binding = SessionBinding(environment_id="world-protected", deployment_id="isolated",
                              session_id=session, session_epoch=1, access_mode="inventory")
-    store = PostgresEventWorldStore(dsn, handlers={"counter.add": _counter_add},
+    store = PostgresEventWorldStore(dsn, handlers={"counter.add": _counter_add,
+                                                   "counter.reject": _counter_reject},
                                     write_modes={"inventory"})
     snapshot = store.resolve(binding, {"value": 0}, now=now, ttl=120)
     receipt_id = uuid4()
@@ -63,16 +69,18 @@ def _trusted_world(dsn):
         )
     executor = PostgresProtectedWorldExecutor(
         dsn, expected_login=_real_login(dsn), world_store=store,
+        rejection_templates={"insufficient_synthetic_inventory": "synthetic-inventory-1"},
     )
     return executor, store, binding, snapshot, receipt_id, fingerprint, now
 
 
-def _candidate(dsn, *, scope, source, receipt_id, fingerprint):
+def _candidate(dsn, *, scope, source, receipt_id, fingerprint,
+               status=200, body=b'{"ok":true}'):
     """將本交易的受保護來源交由 Candidate Validator 綁定，不採信舊業務列。"""
     evidence = projection_evidence()
     PostgresProjectionRegistry(dsn).ensure_registered_batch((evidence,))
-    envelope = response_envelope(200, [("content-type", "application/json")], b'{"ok":true}')
-    hashes = response_hashes(200, [("content-type", "application/json")], b'{"ok":true}')
+    envelope = response_envelope(status, [("content-type", "application/json")], body)
+    hashes = response_hashes(status, [("content-type", "application/json")], body)
     ref = uuid4().hex
     PostgresCandidateStore(dsn).put(scope, ref, envelope, expires_at=int(time.time()) + 80)
     validator = PostgresCandidatePromoter(dsn, expected_login=_real_login(dsn))
@@ -160,6 +168,40 @@ def test_protected_read_and_commit_sources_remain_distinct_and_usable(isolated_t
                           committed_state_hash=outcome.committed_state_hash)
     assert _candidate(isolated_test_dsn, scope=snapshot.scope, source=source,
                       receipt_id=receipt, fingerprint=fingerprint) == 1
+
+
+def test_protected_409_requires_real_rejected_handler_and_exact_envelope(isolated_test_dsn):
+    """合法業務拒絕可 Promotion；錯封套、錯模板及無來源的錯誤不能升格。"""
+    import psycopg
+
+    executor, _, binding, snapshot, receipt, fingerprint, now = _trusted_world(isolated_test_dsn)
+    executor.admit_read(receipt_id=receipt, binding=binding,
+                        request_fingerprint=fingerprint, expires_at=now + 30)
+    attempt = uuid4()
+    args = dict(receipt_id=receipt, binding=binding, request_fingerprint=fingerprint,
+                authorized_scope=snapshot.scope, operation="counter.reject", command={},
+                expected_version=1, idempotency_key="reject-once", commit_attempt_id=attempt)
+    rejected = executor.commit_event(**args)
+    assert rejected.status == "rejected"
+    assert executor.commit_event(**args).result_digest == rejected.result_digest
+    source = SecurityErrorSource(template_id="insufficient_synthetic_inventory",
+                                 contract_revision="synthetic-inventory-1")
+    with pytest.raises(ProtectedGrantError, match="candidate_source_unverifiable"):
+        _candidate(isolated_test_dsn, scope=snapshot.scope, source=source,
+                   receipt_id=receipt, fingerprint=fingerprint, status=409,
+                   body=b'{"code":"forged"}')
+    wrong_revision = source.model_copy(update={"contract_revision": "synthetic-inventory-2"})
+    with pytest.raises(ProtectedGrantError, match="candidate_source_unverifiable"):
+        _candidate(isolated_test_dsn, scope=snapshot.scope, source=wrong_revision,
+                   receipt_id=receipt, fingerprint=fingerprint, status=409,
+                   body=b'{"code":"insufficient_synthetic_inventory"}')
+    assert _candidate(isolated_test_dsn, scope=snapshot.scope, source=source,
+                      receipt_id=receipt, fingerprint=fingerprint, status=409,
+                      body=b'{"code":"insufficient_synthetic_inventory"}') == 1
+    with psycopg.connect(isolated_test_dsn) as connection:
+        assert connection.execute("SELECT count(*) FROM protected_world_rejection_sources").fetchone()[0] == 1
+        assert connection.execute("SELECT version FROM world_snapshots WHERE world_generation_id=%s",
+                                  (snapshot.scope.world_generation_id,)).fetchone()[0] == 1
 
 
 def test_protected_world_refuses_forged_mode_and_request_fingerprint(isolated_test_dsn):

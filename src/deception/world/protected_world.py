@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
+import re
+from types import MappingProxyType
 from uuid import UUID
 
 from deception.security.key_revocation import PostgresTrustedKeyRevocations
@@ -13,6 +16,7 @@ from .models import WorldScope
 from .protected_grant import (_ProtectedConnection, ProtectedGrantError,
                               _protected_lock, _require_digest, _scope_values)
 from .session import PostgresSessionWorlds, SessionBinding, WorldRead
+from .transmission import response_hashes
 
 
 class PostgresProtectedWorldExecutor(_ProtectedConnection):
@@ -20,7 +24,8 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
 
     def __init__(self, dsn: str, *, expected_login: str,
                  world_store: PostgresEventWorldStore,
-                 cart_initial_state: dict | None = None) -> None:
+                 cart_initial_state: dict | None = None,
+                 rejection_templates: dict[str, str] | None = None) -> None:
         """綁定由部署者預先配置固定 handlers／write_modes 的 World Store。
 
         所有信任用的 DB 交易都經 `_connection` 檢查實體 Login。正式 HTTP
@@ -32,6 +37,13 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
         self._world_store = world_store
         self._reads = PostgresSessionWorlds(dsn, compatibility=world_store._compatibility)
         self._cart_initial_state = deepcopy(cart_initial_state)
+        templates = rejection_templates or {}
+        if not isinstance(templates, dict) or any(
+                not isinstance(code, str) or re.fullmatch(r"[a-z][a-z0-9_]{0,127}", code) is None
+                or not isinstance(revision, str) or not 1 <= len(revision) <= 128
+                for code, revision in templates.items()):
+            raise ProtectedGrantError("protected_rejection_templates_invalid")
+        self._rejection_templates = MappingProxyType(dict(templates))
 
     def create_cart(self, *, receipt_id: UUID, creator: SessionBinding,
                     request_fingerprint: str, idempotency_key: UUID,
@@ -286,6 +298,41 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
                     proof = cursor.fetchone()
                     if proof is None or proof[0] != result.result_digest:
                         raise ProtectedGrantError("untrusted_prior_world_commit")
+                    return result
+                if result.status == "rejected" and result.result is not None:
+                    code = result.result.get("code")
+                    revision = self._rejection_templates.get(code) if isinstance(code, str) else None
+                    if revision is None or result.failure_code != code:
+                        raise ProtectedGrantError("protected_world_rejection_template_denied")
+                    body = json.dumps({"code": code}, ensure_ascii=False, sort_keys=True,
+                                      separators=(",", ":")).encode("utf-8")
+                    envelope_hash = response_hashes(
+                        409, (("content-type", "application/json"),), body,
+                    )[0]
+                    if result.replayed:
+                        cursor.execute(
+                            """SELECT result_digest,template_id,contract_revision,envelope_hash
+                               FROM protected_world_rejection_sources
+                               WHERE commit_attempt_id=%s AND receipt_id=%s
+                                 AND environment_id=%s AND deployment_id=%s
+                                 AND session_id=%s AND world_generation_id=%s
+                                 AND request_fingerprint=%s AND operation=%s""",
+                            (result.commit_attempt_id, receipt_id, *_scope_values(scope),
+                             request_fingerprint, operation),
+                        )
+                        if cursor.fetchone() != (result.result_digest, code, revision, envelope_hash):
+                            raise ProtectedGrantError("untrusted_prior_world_rejection")
+                        return result
+                    cursor.execute(
+                        """INSERT INTO protected_world_rejection_sources (
+                               commit_attempt_id,receipt_id,environment_id,deployment_id,
+                               session_id,world_generation_id,request_fingerprint,
+                               operation,result_digest,template_id,contract_revision,envelope_hash)
+                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                        (result.commit_attempt_id, receipt_id, *_scope_values(scope),
+                         request_fingerprint, operation, result.result_digest,
+                         code, revision, envelope_hash),
+                    )
                     return result
                 if result.status != "committed":
                     return result
