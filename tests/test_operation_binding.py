@@ -94,6 +94,23 @@ def test_pinned_http_matrix_exhausts_all_three_contract_registries():
     assert actual == expected
 
 
+def test_pinned_medusa_operations_match_reviewed_source_bytes():
+    """逐項比對 SHA-256 固定的官方 Medusa 來源與 wheel 內建七路由，防止手抄漂移。"""
+    from pathlib import Path
+
+    from deception.domains.ecommerce.medusa_cart_projection import load_contract
+
+    source = (Path(__file__).resolve().parents[1]
+              / "domains/ecommerce/inputs/sources/medusa/openapi.yaml")
+    _, specification = load_contract(source)
+    from_reviewed_source = tuple(
+        (path, method, operation["operationId"])
+        for path, methods in specification["paths"].items()
+        for method, operation in methods.items()
+    )
+    assert _pinned_medusa_operations() == from_reviewed_source
+
+
 def original_request(*, path="/synthetic/inventory/reservations", method="POST") -> NormalizedRequest:
     """建立不經 Runtime 修改的固定 HTTP 測試快照，保留 raw path 與原始 body。"""
     return NormalizedRequest(

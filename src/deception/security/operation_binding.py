@@ -1,11 +1,9 @@
 """由可信 Ingress 的原始 HTTP 快照推導固定業務 Operation，拒絕路由歧義。"""
 
 from dataclasses import dataclass
-from functools import lru_cache
 import hashlib
 import hmac
 import json
-from pathlib import Path
 import re
 from uuid import UUID
 
@@ -154,17 +152,21 @@ def decode_verified_cart_creation(
     )
 
 
-@lru_cache(maxsize=1)
 def _pinned_medusa_operations() -> tuple[tuple[str, str, str], ...]:
-    """只從本地 SHA-256 鎖定的官方 Medusa 來源載入七個審核過的路由。"""
-    from deception.domains.ecommerce.medusa_cart_projection import load_contract
+    """回傳已審核的七個固定路由，不在實際容器由工作目錄動態選擇業務 Handler。
 
-    root = Path(__file__).resolve().parents[3]
-    source = root / "domains/ecommerce/inputs/sources/medusa/openapi.yaml"
-    _, specification = load_contract(source)
-    return tuple((template, method, data["operationId"])
-                 for template, methods in specification["paths"].items()
-                 for method, data in methods.items())
+    官方來源的 SHA-256 與每條 operationId 在契約測試核對；CI image 只執行
+    內建映射，避免 wheel 安裝路徑與 source-tree 的不同導致隱性容器失敗。
+    """
+    return (
+        ("/store/carts", "post", "PostCarts"),
+        ("/store/carts/{id}", "get", "GetCartsId"),
+        ("/store/carts/{id}/line-items", "post", "PostCartsIdLineItems"),
+        ("/store/carts/{id}/line-items/{line_id}", "post", "PostCartsIdLineItemsLine_id"),
+        ("/store/carts/{id}/line-items/{line_id}", "delete", "DeleteCartsIdLineItemsLine_id"),
+        ("/store/carts/{id}/complete", "post", "PostCartsIdComplete"),
+        ("/store/orders/{id}", "get", "GetOrdersId"),
+    )
 
 
 def _receipt_uuid4(receipt_id: UUID, purpose: bytes) -> UUID:
