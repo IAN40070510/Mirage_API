@@ -27,6 +27,8 @@
    - `committed_operation` 的舊 `world_operations` 暫非獨立不可偽造來源；新路徑只接受同一可信 Executor 交易建立且綁定同 Receipt 的 `protected_world_commit_sources`，舊列永久不因查詢成功而自動提升為權威。
    - ReadAdmission 同理只採信 `protected_world_read_sources`；Runtime 能指定 `request_fingerprint` 不等於真實入口來源證明（Fingerprint 語意 A）。需另由可信入口保證原始請求，這不屬於單一 DB R1 防護。
 3. **Transition/Send 接線**：新 World Executor／Authorizer 尚未取代 `trusted_http.create_app()` 的舊共用 DSN、`grant`／直接業務呼叫路徑；獨立服務認證、驗證器請求快照、`StartSend`／Snapshot／Send Lease、跨 DB Fence／Restore 也還沒接線。在此之前 `from_environment()` 必須繼續硬拒絕。
+   - **完整電商流程差異（阻擋）**：`CartHTTP.createGuestCart` 與 Medusa `PostCarts` 由原始 creator Session 建立**衍生的新 Cart Session／World**，不能套用一般 mutation 的「Receipt Session 必須等於目標 Session」；需正式的 `creator receipt → protected cart creation → derived scope` 單次來源鏈及同交易權威產生者。`SyntheticCarts.create_cart()`、原生資源映射與 World `resolve()` 初始寫入也必須從舊 Runtime 搬到可信 Executor，不是只移交 `world_operations`。
+   - **正常錯誤回應差異（阻擋）**：`CartHTTP`、`MedusaCartHTTP` 的合法 400／409 走 `SecurityErrorSource`，目前 Candidate Promotion 保守拒絕無受保護來源的錯誤模板；若不新增獨立可信模板／拒絕結果的權威證據，無法宣稱保留完整 API 契約，也不得把這些拒絕降級成任意成功回應。
 4. **真資料庫驗證權限**：本機沒有 PostgreSQL／pytest 服務；嘗試唯讀盤點既有 Oracle 隔離 Lab 時，Gateway 使用者對 `/var/run/docker.sock` 得到 `permission denied`（Job `job_01M8022EJE00NNKXPMDAK1YAT3`）。不得在未授權狀態下提權操作 Lab。**隔離 GitHub PostgreSQL 17.6 G3 子測試已 PASS，Oracle 既有 Lab／真實部署 G3–G5 整體驗收尚未執行**。
 
 ## 驗證證據分類
@@ -40,12 +42,14 @@
 | Row Lock 函式／實體 SCRAM Role／Grant 狀態轉移子測試 | PASS（限 SHA `a54065f2c1cf4a6b13dc34b3c7d7a2bf08e42f34`） | GitHub 隔離 PostgreSQL 17.6 [run 44955902350](https://github.com/IAN40070510/Mirage_API/actions/runs/44955902350)：`8 passed`。不代表本輪最新修改、全套並行安全或正式部署通過。 |
 | 不可信 `committed_operation` 來源阻擋、ReadAdmission Runtime 權限拒絕 | PASS（限 SHA `0b1650583f794d1c47c0646bcb0ef7c2197ae966`） | GitHub 隔離 PostgreSQL 17.6 [run 44956251385](https://github.com/IAN40070510/Mirage_API/actions/runs/44956251385)：`9 passed in 3.46s`；仍未證明正式 World Executor／ReadAdmission provenance 或部署隔離。 |
 | 可信 World Executor／兩種受保護來源及 Rollback | PASS（限 SHA `9c0cf210f82c5958256da5c85869b60d43c3505e`） | GitHub 隔離 PostgreSQL 17.6 [run 44979074395](https://github.com/IAN40070510/Mirage_API/actions/runs/44979074395)：`14 passed in 6.62s`；容器 [run 44979074359](https://github.com/IAN40070510/Mirage_API/actions/runs/44979074359) PASS。新加「不同 Receipt 同 Fingerprint」與「沒有 Proof 的 ReadAdmission」案例待下次 CI；正式業務入口與 Oracle 部署仍未驗收。 |
+| 相同 Fingerprint、不同 Receipt 與無 Provenance 的 ReadAdmission | PASS（限 SHA `92be17aa0b756aba048904a65b47c99394612a11`） | GitHub 隔離 PostgreSQL 17.6 [run 44979254933](https://github.com/IAN40070510/Mirage_API/actions/runs/44979254933)：`16 passed in 7.01s`；容器 [run 44979255001](https://github.com/IAN40070510/Mirage_API/actions/runs/44979255001) PASS。僅為新增原子性與來源完整性子合約。 |
 | Snapshot、Send Lease、Restoration Fence | NOT_IMPLEMENTED | G4／G5 未接線 |
 | 全套 Python／HTTP 效能回歸 | NOT_RUN | 不可將 Static PASS 當成 P95 測試 |
 
 ## 接續順序
 
 1. 以獨立 Lab 或 GitHub CI PostgreSQL 17 修正 ACL／受限鎖定程序，完成 Candidate Validator、Authorizer、Grant Binding 的正反面驗收。
-2. 建立實體 Authorized Snapshot／Pin 與一次性 Send Lease，讓 ASGI 起送前的 Snapshot 與 Fence 檢查具同一安全協定；不在 `SEND_AUTHORIZED` 後重判政策。
-3. 完成 World DB 還原範圍外的持久化 Quarantine Fence 與不同 DB Commit 失敗對帳，並封住 Send／Purge／Restore 並行放行競態。
-4. Owner／DBA／Security 審核、G0–G6 真實安全驗收與量測通過前，不解除 Release Fuse。
+2. 將 `World.resolve()`／`SyntheticCarts.create_cart()` 的衍生 Scope 與合法拒絕模板納入受保護 Executor 來源合約，連接 `trusted_http.create_app()` 原生 Cart／Inventory／Medusa 業務；驗證所有既有 2xx／4xx 結果與冪等／未知 COMMIT。原生 HTTP 入口尚未接線時不得將 G3 視為完整。
+3. 建立實體 Authorized Snapshot／Pin 與一次性 Send Lease，讓 ASGI 起送前的 Snapshot 與 Fence 檢查具同一安全協定；不在 `SEND_AUTHORIZED` 後重判政策。
+4. 完成 World DB 還原範圍外的持久化 Quarantine Fence 與不同 DB Commit 失敗對帳，並封住 Send／Purge／Restore 並行放行競態。
+5. Owner／DBA／Security 審核、G0–G6 真實安全驗收與量測通過前，不解除 Release Fuse。
