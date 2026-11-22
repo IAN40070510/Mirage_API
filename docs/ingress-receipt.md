@@ -72,6 +72,9 @@ Lineage；catalog／inventory 僅由 Executor 部署設定取得。
 
 Medusa 的七個本地核准路由現從 SHA-256 固定的官方 OpenAPI 來源載入
 Operation 身分，**這只有 Verifier 綁定證據、沒有開啟 Medusa 事件執行**。
+`protected_rpc.create_direct_verifier_app()` 現提供隔離的 ASGI 原始 HTTP
+Verifier 接入點，搭配 mTLS 專用 Gateway 憑證及單一 IngressTx 生成此證據；
+但尚未完成正式 Gateway 拓樸／Executor 呼叫，也不能透過這個入口獲得 Send。
 合成 GET 的 `read_verified_cart_http()` 亦已在 Executor 內綁定原始
 Cart／Order／Operation 路徑與可信 Creator Lineage，不能由 Runtime
 改選資源或讀取操作 ID；但尚未成為實際 HTTP 服務。Medusa 原生表頭／身份與

@@ -1,6 +1,7 @@
 """真實 PostgreSQL Key Guard／Replay／Ingress Receipt 單交易驗收。"""
 
 import base64
+import hashlib
 import time
 from uuid import uuid4
 
@@ -10,6 +11,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from deception.security import TrustedSessionError
 from deception.security.ingress_receipt import IngressReceiptError, PostgresIngressReceiptWriter
 from deception.api.fingerprint import fingerprint_request
+from deception.api.fingerprint import fingerprint_httpx_request
+from deception.security.protected_rpc import create_direct_verifier_app
 from test_operation_binding import original_request
 from deception.world import PostgresReplayStore
 from deception.world.replay import ReplayConsumeResult
@@ -101,6 +104,63 @@ def test_verified_http_operation_is_atomic_with_ingress_receipt(isolated_test_ds
         assert connection.execute("SELECT count(*) FROM ingress_receipts WHERE jti=%s",
                                   (wrong_jti,)).fetchone()[0] == 0
         assert connection.execute("SELECT count(*) FROM protected_http_operation_bindings").fetchone()[0] == 1
+
+
+def test_direct_https_verifier_captures_actual_request_and_mints_atomic_proof(isolated_test_dsn):
+    """真 PostgreSQL：ASGI 原始 HTTP 進入獨立 Verifier 才能原子寫 Replay／Proof。"""
+    import psycopg
+    from fastapi.testclient import TestClient
+
+    key = Ed25519PrivateKey.generate()
+    app = create_direct_verifier_app(
+        verifier=verifier(isolated_test_dsn, {"old": key}),
+        postgres_dsn=isolated_test_dsn, environment_id="env", deployment_id="deploy",
+        expected_issuer="gateway", expected_audience="mirage",
+    )
+    headers = {"x-request-id": "direct-original-1", "content-type": "application/json"}
+    with TestClient(app, base_url="https://mirage.test") as client:
+        unsigned = client.build_request("POST", "/synthetic/inventory/reservations",
+                                        content=b"{}", headers=headers)
+        fingerprint = fingerprint_httpx_request(unsigned, "direct-original-1")
+        jti = uuid4().hex
+        token = signed(key, jti=jti, fingerprint=fingerprint)
+        unsigned.headers["x-trusted-session"] = token
+        accepted = client.send(unsigned)
+        assert accepted.status_code == 200
+        receipt_id = accepted.json()["receipt_id"]
+        assert accepted.json()["operation_id"] == "reserveSyntheticInventory"
+        again = client.send(unsigned)
+        assert again.status_code == 403
+        forged = client.build_request("POST", "/synthetic/inventory/reservations",
+                                      content=b'{"body":"substituted"}', headers=headers)
+        forged.headers["x-trusted-session"] = signed(
+            key, jti=uuid4().hex, fingerprint=fingerprint,
+        )
+        assert client.send(forged).status_code == 403
+        unknown = client.build_request("POST", "/synthetic/unapproved", content=b"{}", headers=headers)
+        unknown.headers["x-trusted-session"] = signed(
+            key, jti=uuid4().hex,
+            fingerprint=fingerprint_httpx_request(unknown, "direct-original-1"),
+        )
+        assert client.send(unknown).status_code == 403
+        with TestClient(app, base_url="http://mirage.test") as plaintext:
+            request = plaintext.build_request("POST", "/synthetic/inventory/reservations",
+                                               content=b"{}", headers=headers)
+            request.headers["x-trusted-session"] = signed(key, jti=uuid4().hex,
+                fingerprint=fingerprint_httpx_request(request, "direct-original-1"))
+            assert plaintext.send(request).status_code == 503
+    with psycopg.connect(isolated_test_dsn) as connection:
+        rows = connection.execute(
+            """SELECT i.receipt_id,i.request_fingerprint,p.operation_id,p.request_path,
+                      p.request_body_sha256 FROM ingress_receipts i
+               JOIN protected_http_operation_bindings p ON p.receipt_id=i.receipt_id""",
+        ).fetchall()
+        assert len(rows) == 1
+        assert str(rows[0][0]) == receipt_id
+        assert rows[0][1:4] == (fingerprint, "reserveSyntheticInventory",
+                                 "/synthetic/inventory/reservations")
+        assert rows[0][4] == hashlib.sha256(b"{}").hexdigest()
+        assert connection.execute("SELECT count(*) FROM replay_entries").fetchone()[0] == 1
 
 
 def test_ingress_receipt_failure_rolls_back_consumed_replay(isolated_test_dsn):

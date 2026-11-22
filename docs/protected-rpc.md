@@ -8,6 +8,24 @@ TLS 握手；它不採信 HTTP header 所宣稱的「已驗證身分」。正式
 **僅供該內部 RPC Caller 使用的 CA／信任集**，不可把一般 Gateway 或公共
 服務用戶端 CA 混入。
 
+### G3b Direct Verifier HTTP 入口（隔離增量）
+
+`create_direct_verifier_app()` 與 `serve_direct_verifier_mtls()` 為獨立 Verifier
+程序提供**直接接收原始 HTTP** 的入口。TLS Client CA 必須只核發給可信原始
+Ingress Gateway，不得簽發給 HTTP Runtime；原始 Request 必須由該 Gateway
+直送 Verifier，不能由 Runtime 改寫後當作觀測的 HTTP。Verifier 從 ASGI
+`raw_path`、原始 header、body、完整 URL 及實際 HTTP Method 推導唯一
+Operation，計算 Fingerprint，再用固定 Key Registry 驗章及在同一 PostgreSQL
+IngressTx 生成 Replay Tombstone／Receipt／`protected_http_operation_bindings`。
+
+入口不接受 `operation`、claims、`verified=true` 或可由 Runtime 製造的
+Header 身分旗標，也不接受代理 `X-Forwarded-Proto` 取代 TLS；Uvicorn
+`proxy_headers=False`。真正的 mTLS Gateway 呼叫可取得 `receipt_id` 與固定
+`operation_id` 供後續專用服務查回，**不是給一般 Client 的已授權回應**。
+部署拓樸須保證 Gateway→Verifier 路徑沒有 Runtime 中介，並獨立驗證 Gateway
+Client CA／DB SCRAM Role／網路來源。此函式目前沒有正式部署環境入口，也
+沒有直接呼叫 Executor 的 mTLS Service；不能視為 G3b 整體接線完成。
+
 目前服務特意維持 `sealed`：沒有 Executor、Validator 或 Authorizer DB DSN；
 `POST /internal/v1/execute` 永遠返回 503，不得執行業務。`GET /internal/ready`
 只回報 `control_plane=sealed` 與 `trusted_send=disabled`，不是正式健康或放行證據。
@@ -42,12 +60,19 @@ Lab，禁止將 `/internal/ready` 的成功當成開放 Trusted Send 的依據�
 - 無有效 Client Certificate：TLS 握手被拒，不落入 HTTP Handler。
 - 使用有效 Client Certificate 呼叫業務：固定 503，沒有 World Side Effect。
 - CA Rotation／RPC 服務失聯：Fail-Closed；上游不得退回舊共用 DSN。
+- Direct Verifier 收到未知／有歧義的路由或錯 Fingerprint／JWS：HTTP 403，
+  不得建立 Replay／Receipt／Operation。缺 TLS HTTPS Scope 固定 503；
+  `x-trusted-session` 重複欄位亦拒絕。這些是**內部驗證錯誤**，不是
+  Medusa 合法 400／404 的受保護業務來源證明。
 
 ## 驗證與未完成項目
 
 執行 `python -m pytest -q tests/test_protected_rpc_mtls.py`；真實 OpenSSL
 產生短期 Server/Client EKU 憑證，在獨立程序驗證成功、無 Client Cert 拒絕
 及業務 RPC 固定 503，再執行 `python tools/check_documentation.py`。
+Direct Verifier 的真實 mTLS listener 與 PostgreSQL Receipt/Proof 同交易測試
+分別在 `tests/test_protected_rpc_mtls.py`、`tests/test_ingress_receipts.py`；
+本地缺 PG 時後者 SKIP，須查固定 SHA 的真 PostgreSQL CI。
 
 仍須獨立完成：可信入口對原始 HTTP Request/Operation 的不可偽造綁定、
 Service Caller 認證政策、角色與憑證隔離、固定業務 RPC、未知 COMMIT 對帳、

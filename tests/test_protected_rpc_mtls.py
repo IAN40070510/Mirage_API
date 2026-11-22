@@ -11,8 +11,8 @@ import httpx
 import pytest
 
 from deception.security.protected_rpc import (
-    ProtectedRpcConfigurationError, create_sealed_app, require_mtls_files,
-    serve_sealed_mtls,
+    ProtectedRpcConfigurationError, create_direct_verifier_app, create_sealed_app,
+    require_mtls_files, serve_direct_verifier_mtls, serve_sealed_mtls,
 )
 
 
@@ -94,6 +94,60 @@ def test_protected_rpc_real_mtls_rejects_missing_client_identity(tmp_path):
             assert denied.status_code == 503
         anonymous_context = ssl.create_default_context(cafile=str(ca))
         with httpx.Client(verify=anonymous_context, trust_env=False, timeout=2.0) as anonymous:
+            with pytest.raises(httpx.TransportError):
+                anonymous.get(f"https://127.0.0.1:{port}/internal/ready")
+    finally:
+        worker.terminate()
+        worker.join(timeout=5)
+        if worker.is_alive():
+            worker.kill()
+            worker.join(timeout=5)
+
+
+def test_direct_verifier_uses_distinct_mtls_listener_and_keeps_executor_sealed(tmp_path):
+    """真 TLS：只有持 Gateway clientAuth 憑證可接觸 Verifier，且沒有自由執行入口。"""
+    from deception.security.key_revocation import PostgresTrustedKeyRevocations
+    from deception.security.trusted_session import TrustedKeyRegistry, TrustedSessionVerifier
+    from deception.world.postgres_replay import PostgresReplayStore
+
+    ca, server_cert, server_key, client_cert, client_key = _issue_mtls_certificates(tmp_path)
+    dsn = "postgresql://unused.invalid/direct-verifier"
+    app = create_direct_verifier_app(
+        verifier=TrustedSessionVerifier(
+            keys=TrustedKeyRegistry({}), replay_store=PostgresReplayStore(dsn),
+            key_revocations=PostgresTrustedKeyRevocations(
+                dsn, environment_id="env", deployment_id="deploy"),
+        ),
+        postgres_dsn=dsn, environment_id="env", deployment_id="deploy",
+        expected_issuer="gateway", expected_audience="mirage",
+    )
+    port = _unused_local_port()
+    worker = multiprocessing.Process(target=serve_direct_verifier_mtls, kwargs={
+        "app": app, "host": "127.0.0.1", "port": port,
+        "server_cert": server_cert, "server_key": server_key, "client_ca": ca,
+    })
+    worker.start()
+    try:
+        context = ssl.create_default_context(cafile=str(ca))
+        context.load_cert_chain(str(client_cert), str(client_key))
+        with httpx.Client(verify=context, trust_env=False, timeout=1.0) as trusted:
+            for _ in range(50):
+                try:
+                    response = trusted.get(f"https://127.0.0.1:{port}/internal/ready")
+                    break
+                except httpx.ConnectError:
+                    if not worker.is_alive():
+                        pytest.fail("direct verifier TLS listener terminated during startup")
+                    time.sleep(0.1)
+            else:
+                pytest.fail("direct verifier TLS listener did not start")
+            assert response.status_code == 200
+            assert response.json() == {"control_plane": "verifier-only", "trusted_send": "disabled"}
+            blocked = trusted.post(f"https://127.0.0.1:{port}/internal/v1/execute",
+                                   json={"operation": "cart.complete"})
+            assert blocked.status_code == 503
+        with httpx.Client(verify=ssl.create_default_context(cafile=str(ca)),
+                          trust_env=False, timeout=2.0) as anonymous:
             with pytest.raises(httpx.TransportError):
                 anonymous.get(f"https://127.0.0.1:{port}/internal/ready")
     finally:
