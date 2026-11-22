@@ -29,7 +29,7 @@ claims, receipt_id = verifier.verify_with_receipt(
 
 ## 驗證
 
-### G3b：固定 HTTP Operation 證據（增量，未接線）
+### G3b：固定 HTTP Operation 證據（隔離 HTTP 增量）
 
 獨立 Verifier 可使用 `PostgresIngressReceiptWriter(..., verified_request=normalized)`；
 `normalized` 必須是 Verifier 直接取得的 `NormalizedRequest`，不能由 Runtime

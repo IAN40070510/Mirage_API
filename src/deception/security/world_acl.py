@@ -85,6 +85,7 @@ def inspect_runtime_world_acl(dsn: str, *, schema: str = "public") -> WorldAclAs
                     ("protected_world_commit_sources", ("INSERT", "UPDATE", "DELETE", "TRUNCATE")),
                     ("protected_cart_creations", ("INSERT", "UPDATE", "DELETE", "TRUNCATE")),
                     ("protected_world_rejection_sources", ("INSERT", "UPDATE", "DELETE", "TRUNCATE")),
+                    ("protected_medusa_rejection_sources", ("INSERT", "UPDATE", "DELETE", "TRUNCATE")),
                     ("protected_authorized_http_snapshots", ("INSERT", "UPDATE", "DELETE", "TRUNCATE")),
                     ("protected_send_leases", ("INSERT", "UPDATE", "DELETE", "TRUNCATE")),
                     ("protected_http_operation_bindings", ("INSERT", "UPDATE", "DELETE", "TRUNCATE")),

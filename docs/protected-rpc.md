@@ -34,14 +34,24 @@ Verifier 持專用 mTLS 憑證使用：驗證成功後只傳 Receipt ID／原始
 `create_fixed_executor_app()`／`serve_fixed_executor_mtls()` 可使用與 Gateway
 不同的 **Verifier→Executor 專用 Client CA** 啟動隔離業務 RPC。
 `POST /internal/v1/execute` 的唯一輸入是 `receipt_id` 及原始
-`raw_path_b64`、`raw_body_b64`；不接受 Handler、Session Binding、Scope、
+`raw_path_b64`、`raw_body_b64`；另可提供只含 Fingerprint 綁定欄位的
+`original_http`（`request_id`／`raw_url`／核准 Headers），供 Medusa 核對
+原始 `x-publishable-api-key`、Content-Type 與 Header 次序。此資料不轉送 JWS，
+且完整 Fingerprint 必須與不可變 Proof 相符。服務不接受 Handler、Session Binding、Scope、
 價格或預期版本等 RPC 欄位。服務先用專屬 Executor 實體 DB Login 查回
 `ingress_receipts`／不可變 Operation Proof，再確定性選擇合成 Inventory
 或 Cart／Order 的既定 Handler。錯 Body、路由／資源錯配時，禁止先建立
 ReadAdmission；原始操作驗證通過後，Read 與受保護 World Commit 才可落地。
 
-同一 Receipt 的精確重試只使用既有 Commit Key；無可信 Medusa 400／404
-證據時，Medusa 一律拒絕。返回值屬於**受保護內部執行結果**，尚非
+同一 Receipt 的精確重試只使用既有 Commit Key；Medusa 僅允許已固定
+`POST /store/carts/{id}/line-items` 的合法拒絕：錯誤 publishable key／
+NativeItemBody（400），或已受保護 Cart catalog 中確實沒有 variant（404）。
+每種拒絕都必須從同 Receipt 的受保護 ReadAdmission 取得來源，寫入
+`protected_medusa_rejection_sources` 不可變資料表，精確固定原生 JSON 封套
+摘要；Candidate Promoter 核對原始 Operation、Scope、Fingerprint、
+Read Source 和封套 hash。Runtime 自填 `SecurityErrorSource` 無受保護來源
+不能 Promotion，未實作的原生成功操作和其他錯誤一律 503。
+返回值屬於**受保護內部執行結果**，尚非
 正式回給 Client 的業務回應，也不提供 Candidate Validation／Grant／Send。
 已存在可信 Read Source 的重試只查回既有唯一來源的完整 Scope／Fingerprint／
 State Version／Hash／期限，不能再 INSERT 第二個 ReadAdmission 來源；來源錯配
@@ -49,7 +59,8 @@ State Version／Hash／期限，不能再 INSERT 第二個 ReadAdmission 來源�
 既有 `create_sealed_app()` 與 `from_environment()` 依舊封閉；隔離測試現
 已可經真 HTTPS/mTLS 完成 Verifier→Executor 兩程序固定 Inventory 提交，
 但尚缺實際部署的 Gateway 網路路由、正式 SCRAM／CA 配置驗收、
-合成 Session Bootstrap 及 Medusa 拒絕來源，不能切換到正式流量。
+合成 Session Bootstrap、全 Medusa 原生成功回應與 400／404 相容性、
+實體部署角色隔離，不能切換到正式流量。
 
 目前服務特意維持 `sealed`：沒有 Executor、Validator 或 Authorizer DB DSN；
 `POST /internal/v1/execute` 永遠返回 503，不得執行業務。`GET /internal/ready`
@@ -106,8 +117,8 @@ PostgreSQL CI 以不同程序、測試 CA 與 HTTPS 驗證單一 JWS→Proof→�
 Inventory Commit 一次，重送遭 Replay 拒絕。它只證明**測試用**隔離鏈路，
 測試仍使用同一 DB Login，不能替代部署級獨立 SCRAM／Secret 負面測試。
 
-仍須獨立完成：可信入口對原始 HTTP Request/Operation 的不可偽造綁定、
-Service Caller 認證政策、角色與憑證隔離、固定業務 RPC、未知 COMMIT 對帳、
+仍須獨立完成：部署級 Gateway→Verifier 原始 HTTP 來源證明、
+Service Caller 認證政策、角色與憑證隔離、完整業務 RPC、未知 COMMIT 對帳、
 Snapshot／Send Lease／外部 Restore Fence、真容器網路及故障注入。以上
 未通過前 `MIR-SEC-WORLD-001=OPEN`、`MSDSS P2=NO-GO`。
 

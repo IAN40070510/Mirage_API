@@ -246,7 +246,7 @@ class PostgresCandidatePromoter(_ProtectedConnection):
             )
             return cursor.fetchone() is not None
         if source.kind == "security_error":
-            # 只有固定 Handler 的持久化拒絕結果能生成 409；Runtime 自填模板無效。
+            # 真正 Handler 的 409 或獨立 Executor 已驗證原始 HTTP 的 Medusa 400/404。
             cursor.execute(
                 """SELECT 1 FROM protected_world_rejection_sources p
                    JOIN world_operations o ON o.commit_attempt_id=p.commit_attempt_id
@@ -259,6 +259,34 @@ class PostgresCandidatePromoter(_ProtectedConnection):
                      AND o.result->>'code'=p.template_id
                      AND (o.environment_id,o.deployment_id,o.session_id,o.world_generation_id)
                          =(p.environment_id,p.deployment_id,p.session_id,p.world_generation_id)
+                """,
+                (receipt_id, *_scope_values(scope), fingerprint,
+                 source.template_id, source.contract_revision, envelope_hash),
+            )
+            if cursor.fetchone() is not None:
+                return True
+            cursor.execute(
+                """SELECT 1 FROM protected_medusa_rejection_sources p
+                   JOIN protected_http_operation_bindings b ON b.receipt_id=p.receipt_id
+                   WHERE p.receipt_id=%s
+                     AND p.environment_id=%s AND p.deployment_id=%s
+                     AND p.session_id=%s AND p.world_generation_id=%s
+                     AND p.request_fingerprint=%s
+                     AND b.platform='medusa-native-cart' AND b.operation_id=p.operation_id
+                     AND b.request_fingerprint=p.request_fingerprint
+                     AND p.template_id=%s AND p.contract_revision=%s AND p.envelope_hash=%s
+                     AND p.status_code IN (400,404)
+                     AND EXISTS (
+                            SELECT 1 FROM protected_world_read_sources r
+                            JOIN read_admissions a USING (read_admission_id)
+                            WHERE r.read_admission_id=p.read_admission_id
+                              AND r.receipt_id=p.receipt_id
+                              AND (r.environment_id,r.deployment_id,r.session_id,r.world_generation_id)
+                                  =(p.environment_id,p.deployment_id,p.session_id,p.world_generation_id)
+                              AND r.request_fingerprint=p.request_fingerprint
+                              AND a.state_version=r.state_version AND a.state_hash=r.state_hash
+                              AND a.request_binding_digest=p.request_fingerprint
+                              AND a.expires_at>floor(extract(epoch FROM clock_timestamp()))::bigint)
                 """,
                 (receipt_id, *_scope_values(scope), fingerprint,
                  source.template_id, source.contract_revision, envelope_hash),

@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
+import hashlib
+import hmac
 import json
 import re
 from types import MappingProxyType
 from uuid import UUID
 
+from deception.api.fingerprint import fingerprint_request
+from deception.api.ingress import NormalizedRequest
 from deception.security.key_revocation import PostgresTrustedKeyRevocations
 from deception.security.operation_binding import (
     VerifiedCartRead, VerifiedOperationBinding, decode_verified_cart_creation, decode_verified_cart_mutation,
@@ -30,7 +35,8 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
     def __init__(self, dsn: str, *, expected_login: str,
                  world_store: PostgresEventWorldStore,
                  cart_initial_state: dict | None = None,
-                 rejection_templates: dict[str, str] | None = None) -> None:
+                 rejection_templates: dict[str, str] | None = None,
+                 medusa_publishable_key: str | None = None) -> None:
         """綁定由部署者預先配置固定 handlers／write_modes 的 World Store。
 
         所有信任用的 DB 交易都經 `_connection` 檢查實體 Login。正式 HTTP
@@ -42,6 +48,11 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
         self._world_store = world_store
         self._reads = PostgresSessionWorlds(dsn, compatibility=world_store._compatibility)
         self._cart_initial_state = deepcopy(cart_initial_state)
+        if medusa_publishable_key is not None and (
+                not isinstance(medusa_publishable_key, str)
+                or not 1 <= len(medusa_publishable_key) <= 256):
+            raise ProtectedGrantError("protected_medusa_key_invalid")
+        self._medusa_publishable_key = medusa_publishable_key
         templates = rejection_templates or {}
         if not isinstance(templates, dict) or any(
                 not isinstance(code, str) or re.fullmatch(r"[a-z][a-z0-9_]{0,127}", code) is None
@@ -52,13 +63,14 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
 
     def execute_verified_http(
         self, *, receipt_id: UUID, raw_path: bytes, raw_body: bytes,
+        original_http: NormalizedRequest | None = None,
     ) -> dict[str, object]:
         """只接受 Receipt ID 與原始 Path／Body，由受保護 DB 推導完整業務身份。
 
         不接受 Caller 自填 Handler、Binding、Scope、期限或世界初始資料。
         在任何 ReadAdmission／World 副作用前驗證固定路由及內容，僅支援已
-        保護的 Inventory／合成 Cart 路徑；Medusa Native 尚無可信 400/404
-        來源，因此一律拒絕。回傳僅供獨立 mTLS 內部服務對帳，不是發送授權。
+        保護的 Inventory／合成 Cart 路徑；Medusa 僅特許受保護且獨立驗證的
+        400／404 原生拒絕來源，不執行原生成功交易。內部回傳不是發送授權。
         """
         from deception.domains.ecommerce.carts import SyntheticCarts
         from deception.domains.ecommerce.inventory import SyntheticInventory
@@ -92,6 +104,12 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
                     "commit_attempt_id": str(created.outcome.commit_attempt_id),
                     "status": created.outcome.status}
         deadline = min(row[6], row[7] + 20)
+        if proof.platform == "medusa-native-cart":
+            return self._execute_verified_medusa_rejection(
+                receipt_id=receipt_id, proof=proof, binding=binding,
+                raw_path=raw_path, raw_body=raw_body, original_http=original_http,
+                expires_at=deadline,
+            )
         if (proof.platform == "synthetic-inventory"
                 and isinstance(self._world_store, SyntheticInventory)
                 and not isinstance(self._world_store, SyntheticCarts)):
@@ -137,6 +155,153 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
                 "status": result.status, "state_version": result.committed_state_version,
                 "state_hash": result.committed_state_hash,
                 "result_digest": result.result_digest}
+
+    def _execute_verified_medusa_rejection(
+        self, *, receipt_id: UUID, proof: VerifiedOperationBinding,
+        binding: SessionBinding, raw_path: bytes, raw_body: bytes,
+        original_http: NormalizedRequest | None, expires_at: int,
+    ) -> dict[str, object]:
+        """以原始 Fingerprint+固定 Body Model/World 判定 Medusa 400 或 404。
+
+        此隔離增量只涵蓋 Cart line-items 加入：原生 header/body 400 和
+        固定 Cart catalog 缺少 variant 的 404；所有其餘原生操作維持 503。
+        400／404 都須有同一 Receipt 的可信 Read Source；拒絕表
+        與既有 Runtime SecurityErrorSource 完全隔離且資料不可更新。
+        """
+        from deception.domains.ecommerce.carts import SyntheticCarts
+        from deception.domains.ecommerce.inventory_http import InventoryHTTP
+        from deception.domains.ecommerce.medusa_cart_http import NativeItemBody
+        from deception.security.operation_binding import OperationBindingError
+        from mirage_validator.json_utils import reject_constant, unique_object
+
+        if (not isinstance(self._world_store, SyntheticCarts)
+                or not self._medusa_publishable_key
+                or proof.operation_id != "PostCartsIdLineItems"
+                or proof.method != "POST"
+                or proof.path_template != "/store/carts/{id}/line-items"
+                or not isinstance(original_http, NormalizedRequest)
+                or not isinstance(raw_path, bytes) or not isinstance(raw_body, bytes)
+                or len(raw_body) > 1048576
+                or not isinstance(proof.request_path, str)
+                or raw_path != proof.request_path.encode("utf-8")
+                or not hmac.compare_digest(hashlib.sha256(raw_body).hexdigest(),
+                                           proof.request_body_sha256)):
+            raise OperationBindingError("verified_medusa_http_snapshot_denied")
+        match = re.fullmatch(rb"/store/carts/(cart_[0-9a-f]{32})/line-items", raw_path)
+        if (match is None or binding.access_mode != "cart"
+                or binding.resource_id != match[1].decode("ascii")):
+            raise OperationBindingError("verified_medusa_resource_denied")
+        candidate = replace(original_http, method=proof.method, path=proof.request_path,
+                            raw_path=raw_path, body=raw_body)
+        if not hmac.compare_digest(fingerprint_request(candidate), proof.request_fingerprint):
+            raise OperationBindingError("verified_medusa_full_fingerprint_denied")
+        keys = [value for name, value in candidate.headers
+                if name.lower() == "x-publishable-api-key"]
+        reason = None
+        if len(keys) != 1 or not hmac.compare_digest(keys[0], self._medusa_publishable_key):
+            reason = "native_bad_key"
+        else:
+            try:
+                # 錯誤格式須與現有 NativeItemBody 路徑使用相同驗證器。
+                InventoryHTTP._json_body(candidate, NativeItemBody)
+                json.loads(raw_body, object_pairs_hook=unique_object,
+                           parse_constant=reject_constant)
+            except (ValueError, UnicodeError):
+                reason = "native_bad_item_body"
+        # 已通過原生路由；每種錯誤都要先綁定真實世界讀取，重放只重用來源。
+        with self._connection() as connection:
+            previous = connection.execute(
+                """SELECT reason_code,read_admission_id
+                   FROM protected_medusa_rejection_sources
+                   WHERE receipt_id=%s AND request_fingerprint=%s""",
+                (receipt_id, proof.request_fingerprint),
+            ).fetchone()
+        if previous is not None:
+            if previous[0] != (reason or "native_variant_absent"):
+                raise ProtectedGrantError("verified_medusa_prior_rejection_invalid")
+            return self._record_verified_medusa_rejection(
+                receipt_id=receipt_id, binding=binding, fingerprint=proof.request_fingerprint,
+                operation_id=proof.operation_id, reason=previous[0],
+                read_admission_id=previous[1],
+            )
+        read = self.admit_read(receipt_id=receipt_id, binding=binding,
+                               request_fingerprint=proof.request_fingerprint,
+                               expires_at=expires_at)
+        if (reason != "native_bad_key" and
+                ("native_context" not in read.snapshot.state
+                 or not isinstance(read.snapshot.state.get("catalog"), dict))):
+            raise ProtectedGrantError("verified_medusa_native_context_missing")
+        if reason is None:
+            native = NativeItemBody.model_validate_json(raw_body)
+            if native.variant_id in read.snapshot.state["catalog"]:
+                raise ProtectedGrantError("verified_medusa_success_not_approved")
+            reason = "native_variant_absent"
+        return self._record_verified_medusa_rejection(
+            receipt_id=receipt_id, binding=binding, fingerprint=proof.request_fingerprint,
+            operation_id=proof.operation_id, reason=reason,
+            read_admission_id=read.source.read_admission_id,
+        )
+
+    def _record_verified_medusa_rejection(
+        self, *, receipt_id: UUID, binding: SessionBinding, fingerprint: str,
+        operation_id: str, reason: str, read_admission_id: str,
+    ) -> dict[str, object]:
+        """在專用 Executor 交易核准 Receipt Scope 和可驗證原生錯誤封套。"""
+        status = 404 if reason == "native_variant_absent" else 400
+        template = "native-cart-rejected" if status == 404 else "native-cart-invalid"
+        payload = ({"type": "not_found", "message": "The requested cart operation could not be completed."}
+                   if status == 404 else
+                   {"type": "invalid_data", "message": "The requested cart operation is not supported."})
+        body = json.dumps(payload, ensure_ascii=False, sort_keys=True,
+                          separators=(",", ":")).encode("utf-8")
+        envelope_hash = response_hashes(status, (("content-type", "application/json"),), body)[0]
+        with self._connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SET LOCAL lock_timeout='3s'")
+                scope = self._verify_receipt(
+                    cursor, receipt_id=receipt_id, binding=binding, fingerprint=fingerprint,
+                )
+                cursor.execute(
+                        """SELECT 1 FROM protected_world_read_sources r
+                           JOIN read_admissions a USING (read_admission_id)
+                           WHERE r.read_admission_id=%s AND r.receipt_id=%s
+                             AND r.environment_id=%s AND r.deployment_id=%s
+                             AND r.session_id=%s AND r.world_generation_id=%s
+                             AND r.request_fingerprint=%s
+                             AND a.state_version=r.state_version AND a.state_hash=r.state_hash
+                             AND a.request_binding_digest=r.request_fingerprint
+                             AND a.expires_at>floor(extract(epoch FROM clock_timestamp()))::bigint""",
+                    (read_admission_id, receipt_id, *_scope_values(scope), fingerprint),
+                )
+                if cursor.fetchone() is None:
+                    raise ProtectedGrantError("verified_medusa_read_source_missing")
+                values = (receipt_id, *_scope_values(scope), fingerprint,
+                          operation_id, status, reason, template, "medusa-cart-1",
+                          envelope_hash, read_admission_id)
+                cursor.execute(
+                    """SELECT receipt_id,environment_id,deployment_id,session_id,
+                              world_generation_id,request_fingerprint,operation_id,
+                              status_code,reason_code,template_id,contract_revision,
+                              envelope_hash,read_admission_id
+                       FROM protected_medusa_rejection_sources WHERE receipt_id=%s""",
+                    (receipt_id,),
+                )
+                existing = cursor.fetchone()
+                if existing is not None and existing != values:
+                    raise ProtectedGrantError("verified_medusa_rejection_rebound")
+                if existing is None:
+                    cursor.execute(
+                        """INSERT INTO protected_medusa_rejection_sources (
+                               receipt_id,environment_id,deployment_id,session_id,
+                               world_generation_id,request_fingerprint,operation_id,
+                               status_code,reason_code,template_id,contract_revision,
+                               envelope_hash,read_admission_id)
+                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                        values,
+                    )
+        return {"kind": "medusa_rejection", "operation": operation_id,
+                "status_code": status, "template_id": template,
+                "contract_revision": "medusa-cart-1", "envelope_hash": envelope_hash}
 
     def _verified_mutation_read_scope(
         self, *, receipt_id: UUID, binding: SessionBinding,
@@ -197,8 +362,20 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
             raise ProtectedGrantError("protected_cart_handler_unavailable")
         if type(ttl) is not int or not 60 <= ttl <= 3600:
             raise ProtectedGrantError("protected_cart_ttl_out_of_policy")
-        if not isinstance(self._cart_initial_state, dict) or set(self._cart_initial_state) != {"catalog", "inventory"}:
+        if (not isinstance(self._cart_initial_state, dict)
+                or not {"catalog", "inventory"} <= set(self._cart_initial_state)
+                or set(self._cart_initial_state) - {"catalog", "inventory", "native_context"}):
             raise ProtectedGrantError("protected_cart_initial_state_invalid")
+        native = self._cart_initial_state.get("native_context")
+        if native is not None and (
+                not isinstance(native, dict)
+                or set(native) != {"region_id", "sales_channel_id", "email", "metadata"}
+                or native["region_id"] != "reg_mirage_usd"
+                or native["sales_channel_id"] != "sc_mirage"
+                or not isinstance(native["email"], str)
+                or not 3 <= len(native["email"]) <= 320
+                or native["metadata"] != {}):
+            raise ProtectedGrantError("protected_cart_native_context_invalid")
         _require_digest(creation_digest)
         if creator.access_mode != "cart" or creator.resource_id is not None:
             raise ProtectedGrantError("protected_cart_creator_capability_invalid")
@@ -237,6 +414,7 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
                     inventory=deepcopy(initial["inventory"]),
                     idempotency_key=idempotency_key, commit_attempt_id=commit_attempt_id,
                     creation_digest=creation_digest, now=now, ttl=ttl,
+                    native_context=deepcopy(native),
                     _trusted_connection=connection,
                 )
                 derived_scope = self._world_store._resource_binding(

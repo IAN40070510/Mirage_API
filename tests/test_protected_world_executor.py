@@ -203,6 +203,162 @@ def test_inventory_http_legacy_receipt_cannot_select_operation(isolated_test_dsn
         )
 
 
+def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolated_test_dsn):
+    """真 PG：只有驗證原始 Medusa headers/Body 並查過世界的 400/404 能 Promote。"""
+    import base64
+    import psycopg
+    from fastapi.testclient import TestClient
+
+    from deception.security.protected_rpc import create_fixed_executor_app
+
+    dsn, now = isolated_test_dsn, int(time.time())
+    creator = SessionBinding(environment_id="medusa-http", deployment_id="isolated",
+                             session_id=uuid4().hex, session_epoch=1, access_mode="cart")
+    store = SyntheticCarts(dsn)
+    catalog = {"known": {"sku": "sku-1", "unit_price": 100}}
+    inventory = {"sku-1": 7}
+    store.resolve(creator, {"catalog": catalog, "inventory": inventory,
+                            "reservations": {}}, now=now, ttl=180)
+    creator_receipt, creator_jti = uuid4(), uuid4().hex
+    with psycopg.connect(dsn) as connection:
+        connection.execute("INSERT INTO replay_entries VALUES ('gateway','mirage',%s,%s)",
+                           (creator_jti, now + 120))
+        connection.execute(
+            """INSERT INTO ingress_receipts (
+                   receipt_id,issuer,audience,jti,key_id,environment_id,deployment_id,
+                   session_id,session_epoch,request_fingerprint,assessment_digest,
+                   claims_digest,verification_policy_version,token_issued_at,
+                   token_not_before,token_expires_at,access_mode)
+               VALUES (%s,'gateway','mirage',%s,'kid',%s,%s,%s,1,%s,%s,%s,
+                       'trusted-session-v1.1',%s,%s,%s,'cart')""",
+            (creator_receipt, creator_jti, creator.environment_id, creator.deployment_id,
+             creator.session_id, digest("a"), digest("b"), digest("c"),
+             now - 5, now - 5, now + 90),
+        )
+    executor = PostgresProtectedWorldExecutor(
+        dsn, expected_login=_real_login(dsn), world_store=store,
+        cart_initial_state={"catalog": catalog, "inventory": inventory,
+                            "native_context": {"region_id": "reg_mirage_usd",
+                                               "sales_channel_id": "sc_mirage",
+                                               "email": "guest@example.invalid", "metadata": {}}},
+        medusa_publishable_key="pk_only_executor",
+    )
+    created = executor.create_cart(
+        receipt_id=creator_receipt, creator=creator, request_fingerprint=digest("a"),
+        idempotency_key=uuid4(), commit_attempt_id=uuid4(),
+        creation_digest=digest("d"), ttl=180,
+    )
+    binding = created.binding
+    snapshot = store.inspect_binding(binding, now=now)
+    path = "/store/carts/" + binding.resource_id + "/line-items"
+
+    def prepare_request(body: bytes):
+        """存入只可由獨立 Verifier 寫出的測試 Receipt/Operation 原始證據。"""
+        incoming = replace(original_request(path=path), body=body, headers=(
+            ("host", "mirage.test"), ("content-type", "application/json"),
+            ("x-publishable-api-key", "pk_only_executor"),
+        ))
+        proof = derive_verified_operation(incoming)
+        receipt, jti = uuid4(), uuid4().hex
+        with psycopg.connect(dsn) as connection:
+            connection.execute("INSERT INTO replay_entries VALUES ('gateway','mirage',%s,%s)",
+                               (jti, now + 120))
+            connection.execute(
+                """INSERT INTO ingress_receipts (
+                       receipt_id,issuer,audience,jti,key_id,environment_id,deployment_id,
+                       session_id,session_epoch,request_fingerprint,assessment_digest,
+                       claims_digest,verification_policy_version,token_issued_at,
+                       token_not_before,token_expires_at,access_mode,resource_id)
+                   VALUES (%s,'gateway','mirage',%s,'kid',%s,%s,%s,1,%s,%s,%s,
+                           'trusted-session-v1.1',%s,%s,%s,'cart',%s)""",
+                (receipt, jti, binding.environment_id, binding.deployment_id,
+                 binding.session_id, proof.request_fingerprint, digest("b"), digest("c"),
+                 now - 5, now - 5, now + 90, binding.resource_id),
+            )
+            connection.execute(
+                """INSERT INTO protected_http_operation_bindings (
+                       receipt_id,platform,operation_id,method,path_template,
+                       request_fingerprint,request_body_sha256,request_path,request_content_type)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                (receipt, proof.platform, proof.operation_id, proof.method, proof.path_template,
+                 proof.request_fingerprint, proof.request_body_sha256,
+                 proof.request_path, proof.request_content_type),
+            )
+        wire = {"receipt_id": str(receipt),
+                "raw_path_b64": base64.b64encode(incoming.raw_path).decode(),
+                "raw_body_b64": base64.b64encode(body).decode(),
+                "original_http": {"request_id": incoming.request_id,
+                                  "raw_url": incoming.raw_url,
+                                  "headers": list(incoming.headers)}}
+        return incoming, receipt, proof, wire
+
+    bad, bad_receipt, bad_proof, bad_wire = prepare_request(b'{"quantity":0,"variant_id":"known"}')
+    missing, missing_receipt, missing_proof, missing_wire = prepare_request(
+        b'{"quantity":1,"variant_id":"missing"}',
+    )
+    for receipt, proof, status, body, template in (
+            (bad_receipt, bad_proof, 400,
+             b'{"message":"The requested cart operation is not supported.","type":"invalid_data"}',
+             "native-cart-invalid"),
+            (missing_receipt, missing_proof, 404,
+             b'{"message":"The requested cart operation could not be completed.","type":"not_found"}',
+             "native-cart-rejected")):
+        with pytest.raises(ProtectedGrantError, match="candidate_source_unverifiable"):
+            _candidate(dsn, scope=snapshot.scope,
+                       source=SecurityErrorSource(template_id=template,
+                                                  contract_revision="medusa-cart-1"),
+                       receipt_id=receipt, fingerprint=proof.request_fingerprint,
+                       status=status, body=body)
+    rpc = create_fixed_executor_app(executor=executor)
+    with TestClient(rpc, base_url="https://executor.test") as client:
+        assert client.post("/internal/v1/execute", json={
+            **bad_wire, "original_http": {**bad_wire["original_http"],
+                                          "headers": [("host", "mirage.test"),
+                                                      ("content-type", "application/json"),
+                                                      ("x-publishable-api-key", "forged")]},
+        }).status_code == 503
+        assert client.post("/internal/v1/execute", json={
+            **bad_wire, "original_http": {**bad_wire["original_http"],
+                                          "raw_url": "https://forged.test" + path},
+        }).status_code == 503
+        assert client.post("/internal/v1/execute", json={
+            key: value for key, value in bad_wire.items() if key != "original_http"
+        }).status_code == 503
+        accepted_400 = client.post("/internal/v1/execute", json=bad_wire)
+        if accepted_400.status_code != 200:
+            executor.execute_verified_http(receipt_id=bad_receipt,
+                                           raw_path=bad.raw_path, raw_body=bad.body,
+                                           original_http=bad)
+        assert accepted_400.status_code == 200
+        assert accepted_400.json()["status_code"] == 400
+        accepted_404 = client.post("/internal/v1/execute", json=missing_wire)
+        if accepted_404.status_code != 200:
+            executor.execute_verified_http(receipt_id=missing_receipt,
+                                           raw_path=missing.raw_path, raw_body=missing.body,
+                                           original_http=missing)
+        assert accepted_404.status_code == 200
+        assert accepted_404.json()["status_code"] == 404
+        assert client.post("/internal/v1/execute", json=missing_wire).json() == accepted_404.json()
+    for receipt, proof, status, body, template in (
+            (bad_receipt, bad_proof, 400,
+             b'{"message":"The requested cart operation is not supported.","type":"invalid_data"}',
+             "native-cart-invalid"),
+            (missing_receipt, missing_proof, 404,
+             b'{"message":"The requested cart operation could not be completed.","type":"not_found"}',
+             "native-cart-rejected")):
+        assert _candidate(dsn, scope=snapshot.scope,
+                          source=SecurityErrorSource(template_id=template,
+                                                     contract_revision="medusa-cart-1"),
+                          receipt_id=receipt, fingerprint=proof.request_fingerprint,
+                          status=status, body=body) == 1
+    with psycopg.connect(dsn) as connection:
+        assert connection.execute("SELECT status_code,reason_code,read_admission_id IS NOT NULL "
+                                  "FROM protected_medusa_rejection_sources ORDER BY status_code").fetchall() == [
+            (400, "native_bad_item_body", True), (404, "native_variant_absent", True)]
+        assert connection.execute("SELECT count(*) FROM protected_world_read_sources ").fetchone()[0] == 2
+        assert connection.execute("SELECT count(*) FROM world_events").fetchone()[0] == 0
+
+
 def test_cart_http_verified_receipt_drives_real_fixed_world_handler(isolated_test_dsn):
     """真 PostgreSQL Cart 派生 Scope 與固定 add Handler 一致，重送／換品項／換資源不能再寫入。"""
     import psycopg

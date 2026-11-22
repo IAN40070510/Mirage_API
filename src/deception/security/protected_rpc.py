@@ -17,11 +17,21 @@ from pydantic import Field, UUID4
 import uvicorn
 
 from deception.common.models import SyntheticModel
+from deception.api.fingerprint import FINGERPRINT_HEADERS
+from deception.api.ingress import NormalizedRequest
 from mirage_validator.json_utils import reject_constant, unique_object
 
 
 class ProtectedRpcConfigurationError(ValueError):
     """mTLS 憑證、受信任 Client CA 或隔離設定不完整時拒絕啟動。"""
+
+
+class FixedOriginalHTTP(SyntheticModel):
+    """轉送只影響已驗證 Fingerprint 的原始 HTTP 欄位，不包含 Trusted JWS。"""
+
+    request_id: str = Field(min_length=1, max_length=128)
+    raw_url: str = Field(min_length=1, max_length=4096)
+    headers: tuple[tuple[str, str], ...] = Field(max_length=32)
 
 
 class FixedExecutorCall(SyntheticModel):
@@ -30,6 +40,7 @@ class FixedExecutorCall(SyntheticModel):
     receipt_id: UUID4
     raw_path_b64: str = Field(min_length=4, max_length=4096)
     raw_body_b64: str = Field(max_length=1398108)
+    original_http: FixedOriginalHTTP | None = None
 
 
 class FixedExecutorMTLSClient:
@@ -58,11 +69,19 @@ class FixedExecutorMTLSClient:
         self._tls = context
 
     async def execute_receipt(self, *, receipt_id: UUID, operation_id: str,
-                              raw_path: bytes, raw_body: bytes) -> dict[str, object]:
+                              raw_path: bytes, raw_body: bytes,
+                              original_request: NormalizedRequest | None = None) -> dict[str, object]:
         """只傳不可變 Receipt／原始 Bytes，單次 mTLS 呼叫且拒絕回應操作錯綁。"""
         payload = {"receipt_id": str(receipt_id),
                    "raw_path_b64": base64.b64encode(raw_path).decode("ascii"),
                    "raw_body_b64": base64.b64encode(raw_body).decode("ascii")}
+        if original_request is not None:
+            payload["original_http"] = {
+                "request_id": original_request.request_id,
+                "raw_url": original_request.raw_url,
+                "headers": [(name, value) for name, value in original_request.headers
+                            if name.lower() in FINGERPRINT_HEADERS],
+            }
         async with httpx.AsyncClient(verify=self._tls, trust_env=False, timeout=8.0) as client:
             response = await client.post(self._origin + "/internal/v1/execute", json=payload)
         if response.status_code != 200:
@@ -77,12 +96,18 @@ class FixedExecutorMTLSClient:
             "cart_created": {"kind", "operation", "resource_id", "commit_attempt_id", "status"},
             "cart_read_admitted": {"kind", "operation", "resource_id", "attempt_id",
                                    "world_generation_id", "state_version", "state_hash"},
+            "medusa_rejection": {"kind", "operation", "status_code", "template_id",
+                                 "contract_revision", "envelope_hash"},
         }
         if (not isinstance(result, dict) or result.get("operation") != operation_id
                 or result.get("kind") not in fields
                 or set(result) != fields[result["kind"]]
                 or (result["kind"] == "world_mutation" and result.get("status") not in {
                     "committed", "already_committed", "rejected"})
+                or (result["kind"] == "medusa_rejection" and
+                    (result.get("status_code") not in {400, 404}
+                     or result.get("template_id") not in {"native-cart-invalid", "native-cart-rejected"}
+                     or result.get("contract_revision") != "medusa-cart-1"))
                 or (result["kind"] == "cart_created" and result.get("status") != "committed")):
             raise ProtectedRpcConfigurationError("fixed_executor_result_binding_mismatch")
         return result
@@ -145,11 +170,24 @@ def create_fixed_executor_app(*, executor) -> FastAPI:
             call = FixedExecutorCall.model_validate_json(bytes(received))
             path = _canonical_base64(call.raw_path_b64, max_bytes=2048)
             body = _canonical_base64(call.raw_body_b64, max_bytes=MAX_BODY_BYTES)
+            original = None
+            if call.original_http is not None:
+                if any(name.lower() not in FINGERPRINT_HEADERS
+                       or not name.isascii() or "\r" in value or "\n" in value
+                       for name, value in call.original_http.headers):
+                    raise ValueError("fixed_executor_original_headers_denied")
+                original = NormalizedRequest(
+                    request_id=call.original_http.request_id,
+                    method="", raw_url=call.original_http.raw_url,
+                    path="", raw_path=path, query_string=b"", query=(),
+                    headers=call.original_http.headers, body=body,
+                )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="fixed_executor_rpc_invalid") from exc
         try:
             return executor.execute_verified_http(
                 receipt_id=UUID(str(call.receipt_id)), raw_path=path, raw_body=body,
+                original_http=original,
             )
         except Exception as exc:
             # 不泄露受保護 DB／業務／重試細節；不可把未知 COMMIT 當安全重試。
@@ -236,6 +274,7 @@ def create_direct_verifier_app(
                 outcome = await executor_client.execute_receipt(
                     receipt_id=receipt_id, operation_id=operation.operation_id,
                     raw_path=normalized.raw_path, raw_body=normalized.body,
+                    original_request=normalized,
                 )
             except Exception as exc:
                 raise HTTPException(status_code=503,
