@@ -75,6 +75,9 @@ Cart／Order／Medusa、完整合法拒絕回應與 Verifier 物理隔離均未�
 `create_verified_cart_http()` 從原始 POST /synthetic/carts Receipt 綁定
 穩定建立鍵與內容摘要，使用受保護 `create_cart()` 同交易產生衍生世界，
 且不接受 Runtime 任意初始庫存或價格。
+`read_verified_cart_http()` 將 Cart／Order／Operation 三種 GET 路徑固定綁回
+受保護 Receipt 的原始 Resource ID 與 Creator Lineage；這仍是內部 primitive，
+非 HTTP 接線或最終傳輸證據。
 另將 Medusa Operation 來源綁到既有 SHA-256 固定的 OpenAPI 檔案，
 **僅是 Request Identity，尚無 Native Executor／400／404 證據**。
 這個增量也沒有對外啟用 mTLS execute，保留 503 和正式 Send Release Fuse。

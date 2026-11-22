@@ -10,7 +10,8 @@ from uuid import UUID
 
 from deception.security.key_revocation import PostgresTrustedKeyRevocations
 from deception.security.operation_binding import (
-    VerifiedOperationBinding, decode_verified_cart_creation, decode_verified_cart_mutation,
+    VerifiedCartRead, VerifiedOperationBinding, decode_verified_cart_creation, decode_verified_cart_mutation,
+    decode_verified_cart_read,
     decode_verified_inventory_mutation,
 )
 
@@ -375,6 +376,34 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
             idempotency_key=mutation.idempotency_key,
             commit_attempt_id=mutation.commit_attempt_id,
         )
+
+    def read_verified_cart_http(
+        self, *, receipt_id: UUID, binding: SessionBinding,
+        raw_path: bytes, raw_body: bytes, expires_at: int,
+    ) -> tuple[WorldRead, VerifiedCartRead]:
+        """把固定 GET Cart／Order／Operation 查詢綁到可信 ReadAdmission。
+
+        查詢身份由原始 HTTP Proof 決定，世界範圍由受保護 Receipt／Creator
+        Lineage 決定；不信任 Runtime 自稱查詢種類或目標 Order／Cart ID。
+        目前僅提供獨立 Executor primitive，未解封正式 HTTP 傳輸。
+        """
+        from deception.domains.ecommerce.carts import SyntheticCarts
+
+        if not isinstance(self._world_store, SyntheticCarts):
+            raise ProtectedGrantError("verified_cart_handler_unavailable")
+        checked = SessionBinding.model_validate(binding.model_dump())
+        if checked.access_mode != "cart" or not checked.resource_id:
+            raise ProtectedGrantError("verified_cart_resource_capability_denied")
+        proof = self._http_operation_proof(receipt_id)
+        query = decode_verified_cart_read(
+            proof, resource_id=checked.resource_id,
+            raw_path=raw_path, raw_body=raw_body,
+        )
+        read = self.admit_read(
+            receipt_id=receipt_id, binding=checked,
+            request_fingerprint=proof.request_fingerprint, expires_at=expires_at,
+        )
+        return read, query
 
     def commit_event(self, *, receipt_id: UUID, binding: SessionBinding,
                      request_fingerprint: str, authorized_scope: WorldScope,

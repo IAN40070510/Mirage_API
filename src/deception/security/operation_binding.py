@@ -63,6 +63,58 @@ class VerifiedCartCreation:
     creation_digest: str
 
 
+@dataclass(frozen=True)
+class VerifiedCartRead:
+    """從原始 GET Receipt 綁定的合成 Cart／Order 查詢，含可選操作結果 ID。"""
+
+    operation: str
+    resource_id: str
+    attempt_id: UUID | None
+
+
+def decode_verified_cart_read(
+    proof: VerifiedOperationBinding, *, resource_id: str,
+    raw_path: bytes, raw_body: bytes,
+) -> VerifiedCartRead:
+    """只從 Verifier 已固定的原始 GET 路徑推導查詢及資源身份。
+
+    GET 不應造成事件，也不能憑 Runtime 選擇另一個 Cart、Order 或操作查詢。
+    舊 Operation Proof 不帶原始路徑時，與非空 body 都固定拒絕。
+    """
+    if (not isinstance(proof, VerifiedOperationBinding)
+            or proof.platform != "synthetic-carts" or proof.method != "GET"
+            or not isinstance(raw_path, bytes) or not isinstance(raw_body, bytes)
+            or not isinstance(proof.request_path, str)
+            or raw_path != proof.request_path.encode("utf-8")
+            or raw_body != b"" or proof.request_body_sha256 != hashlib.sha256(b"").hexdigest()
+            or not isinstance(resource_id, str)):
+        raise OperationBindingError("verified_cart_read_snapshot_mismatch")
+    operations = (
+        ("getGuestCart", "/synthetic/carts/{cart_id}",
+         rb"/synthetic/carts/(cart_[0-9a-f]{32})"),
+        ("getSyntheticOrder", "/synthetic/orders/{order_id}",
+         rb"/synthetic/orders/(order_[0-9a-f]{32})"),
+        ("getCartOperation", "/synthetic/carts/{cart_id}/operations/{attempt}",
+         rb"/synthetic/carts/(cart_[0-9a-f]{32})/operations/([0-9a-f-]{36})"),
+    )
+    for operation_id, template, pattern in operations:
+        if (proof.operation_id, proof.path_template) != (operation_id, template):
+            continue
+        matched = re.fullmatch(pattern, raw_path)
+        if matched is None or matched[1].decode("ascii") != resource_id:
+            break
+        attempt = None
+        if len(matched.groups()) == 2:
+            try:
+                attempt = UUID(matched[2].decode("ascii"))
+            except ValueError as exc:
+                raise OperationBindingError("verified_cart_read_attempt_invalid") from exc
+            if str(attempt).encode("ascii") != matched[2] or attempt.version != 4:
+                raise OperationBindingError("verified_cart_read_attempt_invalid")
+        return VerifiedCartRead(operation_id, resource_id, attempt)
+    raise OperationBindingError("verified_cart_read_operation_or_resource_denied")
+
+
 def decode_verified_cart_creation(
     proof: VerifiedOperationBinding, *, receipt_id: UUID,
     raw_path: bytes, raw_body: bytes,

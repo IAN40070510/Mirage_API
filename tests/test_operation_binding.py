@@ -9,6 +9,7 @@ import pytest
 from deception.api.ingress import NormalizedRequest
 from deception.security.operation_binding import (
     OperationBindingError, decode_verified_cart_creation, decode_verified_cart_mutation,
+    decode_verified_cart_read,
     decode_verified_inventory_mutation,
     derive_verified_operation,
 )
@@ -162,6 +163,51 @@ def test_cart_creator_does_not_accept_duplicate_json_or_extra_world_settings():
                 derive_verified_operation(request), receipt_id=uuid4(),
                 raw_path=request.raw_path, raw_body=body,
             )
+
+
+@pytest.mark.parametrize("path,operation", [
+    ("/synthetic/carts/cart_" + "a" * 32, "getGuestCart"),
+    ("/synthetic/orders/order_" + "b" * 32, "getSyntheticOrder"),
+    ("/synthetic/carts/cart_" + "a" * 32 + "/operations/" + str(uuid4()), "getCartOperation"),
+])
+def test_cart_reads_bind_exact_get_and_derived_resource(path, operation):
+    """GET 查詢必須固定 Cart／Order／操作 ID，範圍不能與 JWS Resource 不同。"""
+    request = replace(original_request(path=path, method="GET"), body=b"", headers=(("host", "mirage.test"),))
+    proof = derive_verified_operation(request)
+    resource = path.split("/")[3]
+    query = decode_verified_cart_read(proof, resource_id=resource,
+                                     raw_path=request.raw_path, raw_body=request.body)
+    assert query.operation == operation and query.resource_id == resource
+    assert (query.attempt_id is not None) == (operation == "getCartOperation")
+    with pytest.raises(OperationBindingError, match="resource_denied"):
+        decode_verified_cart_read(proof, resource_id="cart_" + "f" * 32,
+                                  raw_path=request.raw_path, raw_body=request.body)
+    with pytest.raises(OperationBindingError, match="snapshot_mismatch"):
+        decode_verified_cart_read(proof, resource_id=resource,
+                                  raw_path=request.raw_path, raw_body=b"{}")
+    with pytest.raises(OperationBindingError, match="snapshot_mismatch"):
+        decode_verified_cart_read(proof, resource_id=resource,
+                                  raw_path=b"/synthetic/other", raw_body=b"")
+    with pytest.raises(OperationBindingError, match="snapshot_mismatch"):
+        decode_verified_cart_read(replace(proof, request_path=None), resource_id=resource,
+                                  raw_path=request.raw_path, raw_body=b"")
+
+
+def test_cart_read_refuses_invalid_attempt_and_operation_rebinding():
+    """不可用非標準 UUID 或替換 Operation ID 改變 GET 的目標結果。"""
+    path = "/synthetic/carts/cart_" + "a" * 32 + "/operations/not-a-uuid"
+    request = replace(original_request(path=path, method="GET"), body=b"")
+    proof = derive_verified_operation(request)
+    with pytest.raises(OperationBindingError, match="operation_or_resource_denied"):
+        decode_verified_cart_read(proof, resource_id="cart_" + "a" * 32,
+                                  raw_path=request.raw_path, raw_body=b"")
+    good = replace(original_request(path="/synthetic/carts/cart_" + "a" * 32,
+                                    method="GET"), body=b"")
+    derived = derive_verified_operation(good)
+    with pytest.raises(OperationBindingError, match="operation_or_resource_denied"):
+        decode_verified_cart_read(replace(derived, operation_id="getSyntheticOrder"),
+                                  resource_id="cart_" + "a" * 32,
+                                  raw_path=good.raw_path, raw_body=b"")
 
 
 @pytest.mark.parametrize("path,method,operation", [

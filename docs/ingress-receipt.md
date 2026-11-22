@@ -72,7 +72,9 @@ Lineage；catalog／inventory 僅由 Executor 部署設定取得。
 
 Medusa 的七個本地核准路由現從 SHA-256 固定的官方 OpenAPI 來源載入
 Operation 身分，**這只有 Verifier 綁定證據、沒有開啟 Medusa 事件執行**。
-合成 GET 的固定 RPC、Medusa 原生表頭／身份與
+合成 GET 的 `read_verified_cart_http()` 亦已在 Executor 內綁定原始
+Cart／Order／Operation 路徑與可信 Creator Lineage，不能由 Runtime
+改選資源或讀取操作 ID；但尚未成為實際 HTTP 服務。Medusa 原生表頭／身份與
 400／404／409 拒絕來源仍未驗收。
 **上述 primitive 尚未成為 mTLS 的 HTTP 業務 RPC**；當前
 `create_sealed_app()` 的 execute endpoint 依舊回 503。
