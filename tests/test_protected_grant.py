@@ -135,6 +135,54 @@ def test_protected_grant_binds_receipt_promotion_and_admission_atomically(isolat
                                   (seeded[0].world_generation_id,)).fetchone()[0] == 1
 
 
+def test_send_authorization_pins_immutable_http_envelope(isolated_test_dsn):
+    """SEND_AUTHORIZED 與精確 Payload Pin 同交易落地，不能改寫或拿其他 Receipt 借用。"""
+    import psycopg
+
+    seeded = _seed(isolated_test_dsn)
+    _promote(isolated_test_dsn, seeded)
+    admission = _grant(isolated_test_dsn, seeded)
+    authorizer = PostgresProtectedAuthorizer(isolated_test_dsn, expected_login=_login(isolated_test_dsn))
+    assert authorizer.claim(admission.admission_id, owner="pinned-sender") is AdmissionOperationResult.SUCCESS
+    assert authorizer.authorize_send(admission.admission_id, owner="pinned-sender") is AdmissionOperationResult.SUCCESS
+    with psycopg.connect(isolated_test_dsn) as connection:
+        row = connection.execute(
+            """SELECT receipt_id,candidate_hash,envelope_bytes,send_owner,transmission_deadline
+               FROM protected_authorized_http_snapshots WHERE admission_id=%s""",
+            (admission.admission_id,),
+        ).fetchone()
+        assert row is not None
+        assert row[0] == seeded[3] and row[1] == seeded[5][0]
+        assert bytes(row[2]) == response_envelope(200, [("content-type", "application/json")], b'{"synthetic":true}')
+        assert (row[3], row[4]) == ("pinned-sender", admission.transmission_deadline)
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            connection.execute("UPDATE protected_authorized_http_snapshots SET send_owner='attacker' WHERE admission_id=%s",
+                               (admission.admission_id,))
+
+
+def test_snapshot_insert_failure_rolls_back_send_authorization(isolated_test_dsn):
+    """Pin 資料庫寫入失敗時 SEND_AUTHORIZED 不得留存，Claim 保持可核對狀態。"""
+    import psycopg
+
+    seeded = _seed(isolated_test_dsn)
+    _promote(isolated_test_dsn, seeded)
+    admission = _grant(isolated_test_dsn, seeded)
+    authorizer = PostgresProtectedAuthorizer(isolated_test_dsn, expected_login=_login(isolated_test_dsn))
+    assert authorizer.claim(admission.admission_id, owner="pinned-sender") is AdmissionOperationResult.SUCCESS
+    with psycopg.connect(isolated_test_dsn) as connection:
+        connection.execute(
+            """CREATE TRIGGER injected_http_snapshot_failure
+               BEFORE INSERT ON protected_authorized_http_snapshots FOR EACH ROW
+               EXECUTE FUNCTION reject_protected_mutation()""",
+        )
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        authorizer.authorize_send(admission.admission_id, owner="pinned-sender")
+    with psycopg.connect(isolated_test_dsn) as connection:
+        assert connection.execute("SELECT state FROM response_admissions WHERE admission_id=%s",
+                                  (admission.admission_id,)).fetchone()[0] == "CLAIMED"
+        assert connection.execute("SELECT count(*) FROM protected_authorized_http_snapshots").fetchone()[0] == 0
+
+
 def test_protected_grant_cannot_reuse_receipt_or_leave_partial_state(isolated_test_dsn):
     """同一 Receipt 並行或再授權第二次應觸發唯一約束且整筆交易回滾。"""
     import psycopg

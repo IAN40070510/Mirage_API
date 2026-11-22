@@ -82,6 +82,7 @@ def inspect_runtime_world_acl(dsn: str, *, schema: str = "public") -> WorldAclAs
                     ("protected_world_commit_sources", ("INSERT", "UPDATE", "DELETE", "TRUNCATE")),
                     ("protected_cart_creations", ("INSERT", "UPDATE", "DELETE", "TRUNCATE")),
                     ("protected_world_rejection_sources", ("INSERT", "UPDATE", "DELETE", "TRUNCATE")),
+                    ("protected_authorized_http_snapshots", ("INSERT", "UPDATE", "DELETE", "TRUNCATE")),
                 ):
                     qualified = f"{schema}.{table}"
                     cursor.execute("SELECT pg_catalog.to_regclass(%s)", (qualified,))

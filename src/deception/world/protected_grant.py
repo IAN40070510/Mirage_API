@@ -549,6 +549,30 @@ class PostgresProtectedAuthorizer(_ProtectedConnection):
                            send_authorization_revision=%s WHERE admission_id=%s""",
                         (AdmissionState.SEND_AUTHORIZED.value, revision, admission_id),
                     )
+                    cursor.execute(
+                        """INSERT INTO protected_authorized_http_snapshots (
+                               admission_id,operation_id,receipt_id,environment_id,
+                               deployment_id,session_id,world_generation_id,candidate_ref,
+                               candidate_version,request_fingerprint,candidate_hash,
+                               envelope_bytes,send_owner,transmission_deadline)
+                           SELECT b.admission_id,b.operation_id,b.receipt_id,
+                                  b.environment_id,b.deployment_id,b.session_id,
+                                  b.world_generation_id,b.candidate_ref,b.candidate_version,
+                                  r.request_fingerprint,p.candidate_hash,p.envelope_bytes,%s,%s
+                           FROM protected_grant_bindings b
+                           JOIN ingress_receipts r ON r.receipt_id=b.receipt_id
+                           JOIN protected_candidate_promotions p
+                             ON (p.environment_id,p.deployment_id,p.session_id,
+                                 p.world_generation_id,p.candidate_ref,p.candidate_version)
+                              =(b.environment_id,b.deployment_id,b.session_id,
+                                 b.world_generation_id,b.candidate_ref,b.candidate_version)
+                           WHERE b.admission_id=%s AND p.ingress_receipt_id=b.receipt_id
+                             AND p.request_fingerprint=r.request_fingerprint
+                             AND p.candidate_hash=%s""",
+                        (owner, row[2], admission_id, claims.candidate_hash),
+                    )
+                    if cursor.rowcount != 1:
+                        raise ProtectedGrantError("authorized_http_snapshot_unverifiable")
                 else:
                     cursor.execute(
                         """UPDATE response_admissions SET state=%s,claim_owner=%s,

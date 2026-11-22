@@ -58,6 +58,13 @@ Runtime 單獨提交 `SecurityErrorSource` 仍然不能 Promotion。初期僅覆
 合成 Inventory／Cart 的固定 `{"code":...}` 409，Medusa 400／404、
 未持久化的輸入驗證錯誤尚需各自權威證據，不能把此批視為完整 400／409 PASS。
 
+G4 第一個隔離實作：`022_authorized_http_snapshots.sql` 以 immutable 表保留完整
+Envelope Bytes、Candidate／Receipt／Operation／Scope、Send Owner 和 Deadline。
+`PostgresProtectedAuthorizer.authorize_send()` 在相同 DB Transaction 將
+`SEND_AUTHORIZED` 與受保護 Snapshot Pin 一起提交；若 Pin 寫入失敗，狀態
+轉移必須回滾。這是授權快照持久化合約，**不是**真正的 Send Lease、首 byte
+控制或 Restore Fence。正式 ASGI 路徑尚未消費此 Pin，不能宣稱 G4 PASS。
+
 `fix/mir-sec-world-001-resume-20261122` 新增 `020_protected_cart_lineage.sql` 與
 `PostgresProtectedWorldExecutor.create_cart()`，把 creator Receipt 與新建 cart
 Session／World／resource 的 lineage 原子寫入；新增一次性 Receipt／Cart 唯一約束，
