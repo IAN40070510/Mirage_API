@@ -94,8 +94,8 @@ def _isolated_three_process_service_logins(dsn: str, request):
         ).format(executor_role))
         for name, _ in users.values():
             row = admin.execute(
-                "SELECT rolpassword LIKE 'SCRAM-SHA-256$%' FROM pg_authid WHERE rolname=%s",
-                (name,),
+                "SELECT rolpassword LIKE %s FROM pg_authid WHERE rolname=%s",
+                ("SCRAM-SHA-256$%", name),
             ).fetchone()
             assert row == (True,), "isolated service login must use SCRAM-SHA-256"
 
