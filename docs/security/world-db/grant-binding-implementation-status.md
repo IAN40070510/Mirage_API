@@ -43,7 +43,8 @@
 | 不可信 `committed_operation` 來源阻擋、ReadAdmission Runtime 權限拒絕 | PASS（限 SHA `0b1650583f794d1c47c0646bcb0ef7c2197ae966`） | GitHub 隔離 PostgreSQL 17.6 [run 44956251385](https://github.com/IAN40070510/Mirage_API/actions/runs/44956251385)：`9 passed in 3.46s`；仍未證明正式 World Executor／ReadAdmission provenance 或部署隔離。 |
 | 可信 World Executor／兩種受保護來源及 Rollback | PASS（限 SHA `9c0cf210f82c5958256da5c85869b60d43c3505e`） | GitHub 隔離 PostgreSQL 17.6 [run 44979074395](https://github.com/IAN40070510/Mirage_API/actions/runs/44979074395)：`14 passed in 6.62s`；容器 [run 44979074359](https://github.com/IAN40070510/Mirage_API/actions/runs/44979074359) PASS。新加「不同 Receipt 同 Fingerprint」與「沒有 Proof 的 ReadAdmission」案例待下次 CI；正式業務入口與 Oracle 部署仍未驗收。 |
 | 相同 Fingerprint、不同 Receipt 與無 Provenance 的 ReadAdmission | PASS（限 SHA `92be17aa0b756aba048904a65b47c99394612a11`） | GitHub 隔離 PostgreSQL 17.6 [run 44979254933](https://github.com/IAN40070510/Mirage_API/actions/runs/44979254933)：`16 passed in 7.01s`；容器 [run 44979255001](https://github.com/IAN40070510/Mirage_API/actions/runs/44979255001) PASS。僅為新增原子性與來源完整性子合約。 |
-| Snapshot、Send Lease、Restoration Fence | NOT_IMPLEMENTED | G4／G5 未接線 |
+| G4 Snapshot Pin／一次性 Lease／ASGI 守衛 | PARTIAL / NOT WIRED | 內部隔離 Primitive 已實作；獨立 Sender RPC／真實 G5 Fence／正式端到端仍未驗收 |
+| G5 Restoration／Purge Fence | NOT_IMPLEMENTED | 跨資料庫隔離權威／還原競態未接線 |
 | 全套 Python／HTTP 效能回歸 | NOT_RUN | 不可將 Static PASS 當成 P95 測試 |
 
 ## 接續順序
@@ -87,8 +88,13 @@ G4 第一個隔離實作：`022_authorized_http_snapshots.sql` 以 immutable 表
 Envelope Bytes、Candidate／Receipt／Operation／Scope、Send Owner 和 Deadline。
 `PostgresProtectedAuthorizer.authorize_send()` 在相同 DB Transaction 將
 `SEND_AUTHORIZED` 與受保護 Snapshot Pin 一起提交；若 Pin 寫入失敗，狀態
-轉移必須回滾。這是授權快照持久化合約，**不是**真正的 Send Lease、首 byte
-控制或 Restore Fence。正式 ASGI 路徑尚未消費此 Pin，不能宣稱 G4 PASS。
+轉移必須回滾。後續新增 `025_protected_send_leases.sql`、
+`PostgresProtectedSender` 及 `ProtectedLeaseTransmission`，以獨立 Sender DB Login
+在 ASGI 首訊息前核對原 Pin、持久化唯一 Lease 與 SEND_STARTED，
+成功／失敗回寫唯一終態，並保持 Freeze v1 不重判政策。其原子性、同時起送與
+Renderer 首 byte 順序在隔離測試內驗證；仍需真 PostgreSQL CI 及
+跨 DB G5 Restore/Purge Fence、實際 mTLS Sender 路徑與 G6 故障注入證明。
+所以 **G4 只算部分實作，不是正式 PASS**。
 
 `fix/mir-sec-world-001-resume-20261122` 新增 `020_protected_cart_lineage.sql` 與
 `PostgresProtectedWorldExecutor.create_cart()`，把 creator Receipt 與新建 cart
