@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import pytest
 
-from deception.world import (CommitSource, PostgresCandidatePromoter, PostgresCandidateStore,
+from deception.world import (CommitSource, SnapshotSource, PostgresCandidatePromoter, PostgresCandidateStore,
                              PostgresEventWorldStore, PostgresProtectedWorldExecutor,
                              PostgresProjectionRegistry, ProtectedGrantError)
 from deception.world.session import SessionBinding
@@ -128,6 +128,27 @@ def test_protected_world_refuses_forged_mode_and_request_fingerprint(isolated_te
         assert connection.execute("SELECT count(*) FROM protected_world_read_sources").fetchone()[0] == 0
         assert connection.execute("SELECT version FROM world_snapshots WHERE world_generation_id=%s",
                                   (snapshot.scope.world_generation_id,)).fetchone()[0] == 1
+
+
+def test_runtime_written_read_admission_without_proof_cannot_promote(isolated_test_dsn):
+    """舊 ReadAdmission 即使完整 Scope 與 Hash 都正確，缺可信 Executor 證據仍拒絕。"""
+    import psycopg
+
+    _, _, _, snapshot, receipt, fingerprint, now = _trusted_world(isolated_test_dsn)
+    read_id = uuid4().hex
+    with psycopg.connect(isolated_test_dsn) as connection:
+        connection.execute(
+            """INSERT INTO read_admissions VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+            (read_id, snapshot.scope.environment_id, snapshot.scope.deployment_id,
+             snapshot.scope.session_id, snapshot.scope.world_generation_id,
+             fingerprint, snapshot.version, snapshot.state_hash, now + 30),
+        )
+    forged = SnapshotSource(read_admission_id=read_id,
+                            world_generation_id=snapshot.scope.world_generation_id,
+                            state_version=snapshot.version, state_hash=snapshot.state_hash)
+    with pytest.raises(ProtectedGrantError, match="candidate_source_unverifiable"):
+        _candidate(isolated_test_dsn, scope=snapshot.scope, source=forged,
+                   receipt_id=receipt, fingerprint=fingerprint)
 
 
 def test_protected_world_commit_proof_failure_rolls_back_business_mutation(isolated_test_dsn):

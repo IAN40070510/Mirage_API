@@ -175,6 +175,37 @@ def test_protected_grant_rejects_fingerprint_and_scope_substitution(isolated_tes
         assert connection.execute("SELECT count(*) FROM protected_grant_bindings").fetchone()[0] == 0
 
 
+def test_grant_cannot_borrow_same_fingerprint_from_another_receipt(isolated_test_dsn):
+    """兩份 JWS 即使 Session 與指紋相同，也不能以另一份 Receipt 偷渡 Candidate。"""
+    import psycopg
+
+    seeded = _seed(isolated_test_dsn)
+    _promote(isolated_test_dsn, seeded)
+    original = seeded[3]
+    unrelated = uuid4()
+    jti = uuid4().hex
+    with psycopg.connect(isolated_test_dsn) as connection:
+        connection.execute("INSERT INTO replay_entries VALUES ('gateway','mirage',%s,%s)",
+                           (jti, seeded[6] + 120))
+        connection.execute(
+            """INSERT INTO ingress_receipts (
+                   receipt_id,issuer,audience,jti,key_id,environment_id,deployment_id,
+                   session_id,session_epoch,request_fingerprint,assessment_digest,
+                   claims_digest,verification_policy_version,token_issued_at,
+                   token_not_before,token_expires_at,access_mode,resource_id)
+               SELECT %s,issuer,audience,%s,key_id,environment_id,deployment_id,
+                      session_id,session_epoch,request_fingerprint,assessment_digest,
+                      claims_digest,verification_policy_version,token_issued_at,
+                      token_not_before,token_expires_at,access_mode,resource_id
+               FROM ingress_receipts WHERE receipt_id=%s""",
+            (unrelated, jti, original),
+        )
+    with pytest.raises(ProtectedGrantError, match="unbound_or_corrupt_candidate"):
+        _grant(isolated_test_dsn, seeded, receipt_id=unrelated)
+    with psycopg.connect(isolated_test_dsn) as connection:
+        assert connection.execute("SELECT count(*) FROM protected_grant_bindings").fetchone()[0] == 0
+
+
 def test_runtime_world_commit_row_is_not_trusted_source(isolated_test_dsn):
     """舊 World Runtime 可寫的 Commit 結果不得在受保護 Executor 未完成前提升為來源權威。"""
     seeded = _seed(isolated_test_dsn)
