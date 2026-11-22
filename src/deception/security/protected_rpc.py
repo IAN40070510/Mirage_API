@@ -2,16 +2,99 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
+import json
 import os
 from pathlib import Path
 import ssl
+from uuid import UUID
 
 from fastapi import FastAPI, HTTPException, Request
+from pydantic import Field, UUID4
 import uvicorn
+
+from deception.common.models import SyntheticModel
+from mirage_validator.json_utils import reject_constant, unique_object
 
 
 class ProtectedRpcConfigurationError(ValueError):
     """mTLS 憑證、受信任 Client CA 或隔離設定不完整時拒絕啟動。"""
+
+
+class FixedExecutorCall(SyntheticModel):
+    """只接收 Receipt 身份與原始 HTTP bytes，不接受操作／Scope／權限欄位。"""
+
+    receipt_id: UUID4
+    raw_path_b64: str = Field(min_length=4, max_length=4096)
+    raw_body_b64: str = Field(max_length=1398108)
+
+
+def _canonical_base64(raw: str, *, max_bytes: int) -> bytes:
+    """嚴格拒絕替代編碼與超大資料，避免 RPC 與 Verifier 解析分歧。"""
+    if not isinstance(raw, str) or not raw.isascii():
+        raise ValueError("invalid_base64_rpc_field")
+    try:
+        decoded = base64.b64decode(raw, validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise ValueError("invalid_base64_rpc_field") from exc
+    if len(decoded) > max_bytes or base64.b64encode(decoded).decode("ascii") != raw:
+        raise ValueError("invalid_base64_rpc_field")
+    return decoded
+
+
+def create_fixed_executor_app(*, executor) -> FastAPI:
+    """隔離 Executor mTLS 專用 HTTP 入口，所有 Handler／Scope 由 DB Receipt 決定。
+
+    不接受 Runtime 自選 operation、binding、expected version 或初始世界。
+    這個 App 僅准在專用 mTLS Listener 與實體 Executor SCRAM Role 執行；
+    正式 Send Release Fuse 仍維持封閉，Medusa 未具 400/404 來源時禁止執行。
+    """
+    from deception.world.protected_world import PostgresProtectedWorldExecutor
+
+    if not isinstance(executor, PostgresProtectedWorldExecutor):
+        raise ProtectedRpcConfigurationError("fixed_executor_requires_protected_world")
+    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+
+    @app.get("/internal/ready")
+    async def ready() -> dict[str, str]:
+        """表明隔離固定 Handler RPC 已掛載，正式傳輸依舊關閉。"""
+        return {"control_plane": "executor-lab-only", "trusted_send": "disabled"}
+
+    @app.post("/internal/v1/execute")
+    async def execute(request: Request) -> dict[str, object]:
+        """從唯一 Receipt 與原始 bytes 在獨立 Executor 取回受保護業務結果。
+
+        RPC 內容重複 JSON 欄位、替代 base64、超大封包或平台／操作不一致，
+        在操作前拒絕；任何不明 COMMIT 只回固定 503，不重新起送。
+        回傳只供獨立服務對帳，不得直接當成已授權 Client HTTP Response。
+        """
+        from deception.api.ingress import MAX_BODY_BYTES
+
+        if request.scope.get("scheme") != "https":
+            raise HTTPException(status_code=503, detail="fixed_executor_tls_required")
+        received = bytearray()
+        async for chunk in request.stream():
+            if len(received) + len(chunk) > MAX_BODY_BYTES * 2:
+                raise HTTPException(status_code=413, detail="fixed_executor_rpc_too_large")
+            received.extend(chunk)
+        try:
+            parsed = json.loads(received, object_pairs_hook=unique_object,
+                                parse_constant=reject_constant)
+            call = FixedExecutorCall.model_validate(parsed)
+            path = _canonical_base64(call.raw_path_b64, max_bytes=2048)
+            body = _canonical_base64(call.raw_body_b64, max_bytes=MAX_BODY_BYTES)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="fixed_executor_rpc_invalid") from exc
+        try:
+            return executor.execute_verified_http(
+                receipt_id=UUID(str(call.receipt_id)), raw_path=path, raw_body=body,
+            )
+        except Exception as exc:
+            # 不泄露受保護 DB／業務／重試細節；不可把未知 COMMIT 當安全重試。
+            raise HTTPException(status_code=503, detail="fixed_executor_unverifiable") from exc
+
+    return app
 
 
 def create_direct_verifier_app(
@@ -167,6 +250,33 @@ def serve_direct_verifier_mtls(
     )
     if config.ssl_cert_reqs is not ssl.CERT_REQUIRED:
         raise ProtectedRpcConfigurationError("direct_verifier_mtls_not_required")
+    uvicorn.Server(config).run()
+
+
+def serve_fixed_executor_mtls(
+    *, app: FastAPI, host: str, port: int, server_cert: Path,
+    server_key: Path, verifier_client_ca: Path,
+) -> None:
+    """使用只信任獨立 Verifier 的 Client CA 啟動 Executor，禁止明文回退。
+
+    此入口目前只供隔離 Lab：執行業務不代表核發候選發送權，Medusa
+    400／404 及完整 Gateway→Verifier→Executor 實體拓樸仍須逐項驗收。
+    """
+    if not isinstance(app, FastAPI):
+        raise ProtectedRpcConfigurationError("fixed_executor_app_required")
+    require_mtls_files(server_cert=server_cert, server_key=server_key,
+                       client_ca=verifier_client_ca)
+    if not isinstance(host, str) or not host or type(port) is not int or not 1 <= port <= 65535:
+        raise ProtectedRpcConfigurationError("fixed_executor_bind_invalid")
+    config = uvicorn.Config(
+        app, host=host, port=port,
+        ssl_certfile=str(server_cert), ssl_keyfile=str(server_key),
+        ssl_ca_certs=str(verifier_client_ca), ssl_cert_reqs=ssl.CERT_REQUIRED,
+        ssl_version=ssl.PROTOCOL_TLS_SERVER, http="h11", log_level="warning",
+        proxy_headers=False, access_log=False,
+    )
+    if config.ssl_cert_reqs is not ssl.CERT_REQUIRED:
+        raise ProtectedRpcConfigurationError("fixed_executor_mtls_not_required")
     uvicorn.Server(config).run()
 
 

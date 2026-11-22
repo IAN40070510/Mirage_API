@@ -11,8 +11,9 @@ import httpx
 import pytest
 
 from deception.security.protected_rpc import (
-    ProtectedRpcConfigurationError, create_direct_verifier_app, create_sealed_app,
-    require_mtls_files, serve_direct_verifier_mtls, serve_sealed_mtls,
+    ProtectedRpcConfigurationError, create_direct_verifier_app, create_fixed_executor_app,
+    create_sealed_app, require_mtls_files, serve_direct_verifier_mtls,
+    serve_fixed_executor_mtls, serve_sealed_mtls,
 )
 
 
@@ -146,6 +147,62 @@ def test_direct_verifier_uses_distinct_mtls_listener_and_keeps_executor_sealed(t
             blocked = trusted.post(f"https://127.0.0.1:{port}/internal/v1/execute",
                                    json={"operation": "cart.complete"})
             assert blocked.status_code == 503
+        with httpx.Client(verify=ssl.create_default_context(cafile=str(ca)),
+                          trust_env=False, timeout=2.0) as anonymous:
+            with pytest.raises(httpx.TransportError):
+                anonymous.get(f"https://127.0.0.1:{port}/internal/ready")
+        foreign_root = tmp_path / "foreign"
+        foreign_root.mkdir()
+        _, _, _, foreign_cert, foreign_key = _issue_mtls_certificates(foreign_root)
+        foreign_context = ssl.create_default_context(cafile=str(ca))
+        foreign_context.load_cert_chain(str(foreign_cert), str(foreign_key))
+        with httpx.Client(verify=foreign_context, trust_env=False, timeout=2.0) as foreign:
+            with pytest.raises(httpx.TransportError):
+                foreign.get(f"https://127.0.0.1:{port}/internal/ready")
+    finally:
+        worker.terminate()
+        worker.join(timeout=5)
+        if worker.is_alive():
+            worker.kill()
+            worker.join(timeout=5)
+
+
+def test_fixed_executor_real_mtls_rejects_anonymous_and_caller_chosen_handler(tmp_path):
+    """真實 mTLS Executor 只接受原始 Receipt 形狀；自填 action 無法碰 World。"""
+    from deception.domains.ecommerce.inventory import SyntheticInventory
+    from deception.world.protected_world import PostgresProtectedWorldExecutor
+
+    ca, server_cert, server_key, client_cert, client_key = _issue_mtls_certificates(tmp_path)
+    dsn = "postgresql://unused.invalid/fixed-executor"
+    app = create_fixed_executor_app(executor=PostgresProtectedWorldExecutor(
+        dsn, expected_login="not-a-real-login", world_store=SyntheticInventory(dsn),
+    ))
+    port = _unused_local_port()
+    worker = multiprocessing.Process(target=serve_fixed_executor_mtls, kwargs={
+        "app": app, "host": "127.0.0.1", "port": port,
+        "server_cert": server_cert, "server_key": server_key,
+        "verifier_client_ca": ca,
+    })
+    worker.start()
+    try:
+        context = ssl.create_default_context(cafile=str(ca))
+        context.load_cert_chain(str(client_cert), str(client_key))
+        with httpx.Client(verify=context, trust_env=False, timeout=1.0) as trusted:
+            for _ in range(50):
+                try:
+                    response = trusted.get(f"https://127.0.0.1:{port}/internal/ready")
+                    break
+                except httpx.ConnectError:
+                    if not worker.is_alive():
+                        pytest.fail("fixed Executor mTLS listener terminated")
+                    time.sleep(0.1)
+            else:
+                pytest.fail("fixed Executor mTLS listener did not start")
+            assert response.json() == {"control_plane": "executor-lab-only",
+                                       "trusted_send": "disabled"}
+            refused = trusted.post(f"https://127.0.0.1:{port}/internal/v1/execute",
+                                   json={"operation": "cart.complete", "binding": {}})
+            assert refused.status_code == 400
         with httpx.Client(verify=ssl.create_default_context(cafile=str(ca)),
                           trust_env=False, timeout=2.0) as anonymous:
             with pytest.raises(httpx.TransportError):

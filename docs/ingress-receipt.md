@@ -75,6 +75,11 @@ Operation 身分，**這只有 Verifier 綁定證據、沒有開啟 Medusa 事�
 `protected_rpc.create_direct_verifier_app()` 現提供隔離的 ASGI 原始 HTTP
 Verifier 接入點，搭配 mTLS 專用 Gateway 憑證及單一 IngressTx 生成此證據；
 但尚未完成正式 Gateway 拓樸／Executor 呼叫，也不能透過這個入口獲得 Send。
+`protected_rpc.create_fixed_executor_app()` 現提供獨立 mTLS 的固定內部業務
+Execute 入口，只接受 Receipt ID／原始 Path／Body，由 Executor 受保護 DB
+自行查回 Session Binding／期限／Operation，對已核准合成 Inventory、
+Cart／Order 實際執行既有 Handler；未接受自選 action，也不執行 Medusa。
+兩個 mTLS 服務目前仍需實際跨容器接線與實體 Role／Secret 驗收。
 合成 GET 的 `read_verified_cart_http()` 亦已在 Executor 內綁定原始
 Cart／Order／Operation 路徑與可信 Creator Lineage，不能由 Runtime
 改選資源或讀取操作 ID；但尚未成為實際 HTTP 服務。Medusa 原生表頭／身份與

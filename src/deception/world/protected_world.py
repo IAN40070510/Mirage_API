@@ -50,6 +50,92 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
             raise ProtectedGrantError("protected_rejection_templates_invalid")
         self._rejection_templates = MappingProxyType(dict(templates))
 
+    def execute_verified_http(
+        self, *, receipt_id: UUID, raw_path: bytes, raw_body: bytes,
+    ) -> dict[str, object]:
+        """只接受 Receipt ID 與原始 Path／Body，由受保護 DB 推導完整業務身份。
+
+        不接受 Caller 自填 Handler、Binding、Scope、期限或世界初始資料。
+        在任何 ReadAdmission／World 副作用前驗證固定路由及內容，僅支援已
+        保護的 Inventory／合成 Cart 路徑；Medusa Native 尚無可信 400/404
+        來源，因此一律拒絕。回傳僅供獨立 mTLS 內部服務對帳，不是發送授權。
+        """
+        from deception.domains.ecommerce.carts import SyntheticCarts
+        from deception.domains.ecommerce.inventory import SyntheticInventory
+        from deception.security.operation_binding import OperationBindingError
+
+        proof = self._http_operation_proof(receipt_id)
+        with self._connection() as connection:
+            row = connection.execute(
+                """SELECT environment_id,deployment_id,session_id,session_epoch,
+                          access_mode,resource_id,token_expires_at,
+                          floor(extract(epoch FROM clock_timestamp()))::bigint
+                   FROM ingress_receipts WHERE receipt_id=%s""",
+                (receipt_id,),
+            ).fetchone()
+        if row is None or row[7] >= row[6]:
+            raise ProtectedGrantError("verified_http_receipt_expired_or_missing")
+        binding = SessionBinding(
+            environment_id=row[0], deployment_id=row[1], session_id=row[2],
+            session_epoch=row[3], access_mode=row[4], resource_id=row[5],
+        )
+        if (proof.platform == "synthetic-carts" and proof.operation_id == "createGuestCart"
+                and isinstance(self._world_store, SyntheticCarts)):
+            decode_verified_cart_creation(
+                proof, receipt_id=receipt_id, raw_path=raw_path, raw_body=raw_body,
+            )
+            created = self.create_verified_cart_http(
+                receipt_id=receipt_id, creator=binding, raw_path=raw_path, raw_body=raw_body,
+            )
+            return {"kind": "cart_created", "operation": proof.operation_id,
+                    "resource_id": created.binding.resource_id,
+                    "commit_attempt_id": str(created.outcome.commit_attempt_id),
+                    "status": created.outcome.status}
+        deadline = min(row[6], row[7] + 20)
+        if (proof.platform == "synthetic-inventory"
+                and isinstance(self._world_store, SyntheticInventory)
+                and not isinstance(self._world_store, SyntheticCarts)):
+            decode_verified_inventory_mutation(proof, raw_path=raw_path, raw_body=raw_body)
+            read = self.admit_read(receipt_id=receipt_id, binding=binding,
+                                   request_fingerprint=proof.request_fingerprint,
+                                   expires_at=deadline)
+            result = self.commit_verified_inventory_http(
+                receipt_id=receipt_id, binding=binding,
+                authorized_scope=read.snapshot.scope, raw_path=raw_path, raw_body=raw_body,
+            )
+        elif proof.platform == "synthetic-carts" and isinstance(self._world_store, SyntheticCarts):
+            if proof.method == "GET":
+                read, query = self.read_verified_cart_http(
+                    receipt_id=receipt_id, binding=binding,
+                    raw_path=raw_path, raw_body=raw_body, expires_at=deadline,
+                )
+                return {"kind": "cart_read_admitted", "operation": query.operation,
+                        "resource_id": query.resource_id,
+                        "attempt_id": str(query.attempt_id) if query.attempt_id else None,
+                        "world_generation_id": read.snapshot.scope.world_generation_id,
+                        "state_version": read.snapshot.version,
+                        "state_hash": read.snapshot.state_hash}
+            if not binding.resource_id:
+                raise ProtectedGrantError("verified_cart_resource_capability_denied")
+            decode_verified_cart_mutation(
+                proof, receipt_id=receipt_id, resource_id=binding.resource_id,
+                raw_path=raw_path, raw_body=raw_body,
+            )
+            read = self.admit_read(receipt_id=receipt_id, binding=binding,
+                                   request_fingerprint=proof.request_fingerprint,
+                                   expires_at=deadline)
+            result = self.commit_verified_cart_http(
+                receipt_id=receipt_id, binding=binding,
+                authorized_scope=read.snapshot.scope, raw_path=raw_path, raw_body=raw_body,
+            )
+        else:
+            raise OperationBindingError("verified_http_executor_operation_unavailable")
+        return {"kind": "world_mutation", "operation": proof.operation_id,
+                "commit_attempt_id": str(result.commit_attempt_id),
+                "status": result.status, "state_version": result.committed_state_version,
+                "state_hash": result.committed_state_hash,
+                "result_digest": result.result_digest}
+
     def create_cart(self, *, receipt_id: UUID, creator: SessionBinding,
                     request_fingerprint: str, idempotency_key: UUID,
                     commit_attempt_id: UUID, creation_digest: str,

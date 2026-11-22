@@ -26,6 +26,24 @@ Header 身分旗標，也不接受代理 `X-Forwarded-Proto` 取代 TLS；Uvicor
 Client CA／DB SCRAM Role／網路來源。此函式目前沒有正式部署環境入口，也
 沒有直接呼叫 Executor 的 mTLS Service；不能視為 G3b 整體接線完成。
 
+### G3b 固定 Executor HTTP（隔離增量）
+
+`create_fixed_executor_app()`／`serve_fixed_executor_mtls()` 可使用與 Gateway
+不同的 **Verifier→Executor 專用 Client CA** 啟動隔離業務 RPC。
+`POST /internal/v1/execute` 的唯一輸入是 `receipt_id` 及原始
+`raw_path_b64`、`raw_body_b64`；不接受 Handler、Session Binding、Scope、
+價格或預期版本等 RPC 欄位。服務先用專屬 Executor 實體 DB Login 查回
+`ingress_receipts`／不可變 Operation Proof，再確定性選擇合成 Inventory
+或 Cart／Order 的既定 Handler。錯 Body、路由／資源錯配時，禁止先建立
+ReadAdmission；原始操作驗證通過後，Read 與受保護 World Commit 才可落地。
+
+同一 Receipt 的精確重試只使用既有 Commit Key；無可信 Medusa 400／404
+證據時，Medusa 一律拒絕。返回值屬於**受保護內部執行結果**，尚非
+正式回給 Client 的業務回應，也不提供 Candidate Validation／Grant／Send。
+既有 `create_sealed_app()` 與 `from_environment()` 依舊封閉；當前尚缺
+真正 Gateway→Verifier→Executor 跨程序串接、正式 SCRAM／CA 配置驗收、
+合成 Session Bootstrap 及 Medusa 拒絕來源，不能切換到正式流量。
+
 目前服務特意維持 `sealed`：沒有 Executor、Validator 或 Authorizer DB DSN；
 `POST /internal/v1/execute` 永遠返回 503，不得執行業務。`GET /internal/ready`
 只回報 `control_plane=sealed` 與 `trusted_send=disabled`，不是正式健康或放行證據。
@@ -64,6 +82,9 @@ Lab，禁止將 `/internal/ready` 的成功當成開放 Trusted Send 的依據�
   不得建立 Replay／Receipt／Operation。缺 TLS HTTPS Scope 固定 503；
   `x-trusted-session` 重複欄位亦拒絕。這些是**內部驗證錯誤**，不是
   Medusa 合法 400／404 的受保護業務來源證明。
+- Fixed Executor 的 RPC JSON 有重複欄位、額外 Handler、非正規 Base64
+  或超過上限：HTTP 400／413；TLS 不存在、Proof 缺失或來源不可核對：503。
+  實際 COMMIT ACK 不明不得由上游自行重新起送。
 
 ## 驗證與未完成項目
 

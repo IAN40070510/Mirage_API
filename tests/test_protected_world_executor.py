@@ -149,11 +149,31 @@ def test_inventory_http_proof_selects_handler_and_rejects_rpc_substitution(isola
     with psycopg.connect(dsn) as connection:
         assert connection.execute("SELECT version FROM world_snapshots WHERE world_generation_id=%s",
                                   (snapshot.scope.world_generation_id,)).fetchone()[0] == 1
-    outcome = executor.commit_verified_inventory_http(**args)
-    assert outcome.status == "committed" and outcome.committed_state_version == 2
+    # HTTP Caller 只提供原始 bytes/Receipt，不允許提供 Handler、Binding 或 Scope。
+    import base64
+    from fastapi.testclient import TestClient
+    from deception.security.protected_rpc import create_fixed_executor_app
+
+    rpc = create_fixed_executor_app(executor=executor)
+    wire = {"receipt_id": str(receipt_id),
+            "raw_path_b64": base64.b64encode(request.raw_path).decode("ascii"),
+            "raw_body_b64": base64.b64encode(request.body).decode("ascii")}
+    with TestClient(rpc, base_url="https://executor.test") as client:
+        assert client.post("/internal/v1/execute", json={**wire, "operation": "cancel"}).status_code == 400
+        assert client.post("/internal/v1/execute", json={
+            **wire, "raw_body_b64": base64.b64encode(b'{"different":true}').decode("ascii"),
+        }).status_code == 503
+        with TestClient(rpc, base_url="http://executor.test") as plaintext:
+            assert plaintext.post("/internal/v1/execute", json=wire).status_code == 503
+        accepted = client.post("/internal/v1/execute", json=wire)
+        assert accepted.status_code == 200
+        outcome = accepted.json()
+        assert outcome["kind"] == "world_mutation" and outcome["operation"] == "reserveSyntheticInventory"
+        assert outcome["status"] == "committed" and outcome["state_version"] == 2
+        assert client.post("/internal/v1/execute", json=wire).json()["status"] == "already_committed"
     with psycopg.connect(dsn) as connection:
         assert connection.execute("SELECT operation FROM world_operations WHERE commit_attempt_id=%s",
-                                  (outcome.commit_attempt_id,)).fetchone()[0] == "reserve"
+                                  (outcome["commit_attempt_id"],)).fetchone()[0] == "reserve"
         assert connection.execute("SELECT count(*) FROM protected_world_commit_sources WHERE receipt_id=%s",
                                   (receipt_id,)).fetchone()[0] == 1
         assert connection.execute("SELECT state->'inventory'->>'sku-1' FROM world_snapshots WHERE world_generation_id=%s",
