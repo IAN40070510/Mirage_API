@@ -96,12 +96,13 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
                 and isinstance(self._world_store, SyntheticInventory)
                 and not isinstance(self._world_store, SyntheticCarts)):
             decode_verified_inventory_mutation(proof, raw_path=raw_path, raw_body=raw_body)
-            read = self.admit_read(receipt_id=receipt_id, binding=binding,
-                                   request_fingerprint=proof.request_fingerprint,
-                                   expires_at=deadline)
+            scope = self._verified_mutation_read_scope(
+                receipt_id=receipt_id, binding=binding,
+                fingerprint=proof.request_fingerprint, expires_at=deadline,
+            )
             result = self.commit_verified_inventory_http(
                 receipt_id=receipt_id, binding=binding,
-                authorized_scope=read.snapshot.scope, raw_path=raw_path, raw_body=raw_body,
+                authorized_scope=scope, raw_path=raw_path, raw_body=raw_body,
             )
         elif proof.platform == "synthetic-carts" and isinstance(self._world_store, SyntheticCarts):
             if proof.method == "GET":
@@ -121,12 +122,13 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
                 proof, receipt_id=receipt_id, resource_id=binding.resource_id,
                 raw_path=raw_path, raw_body=raw_body,
             )
-            read = self.admit_read(receipt_id=receipt_id, binding=binding,
-                                   request_fingerprint=proof.request_fingerprint,
-                                   expires_at=deadline)
+            scope = self._verified_mutation_read_scope(
+                receipt_id=receipt_id, binding=binding,
+                fingerprint=proof.request_fingerprint, expires_at=deadline,
+            )
             result = self.commit_verified_cart_http(
                 receipt_id=receipt_id, binding=binding,
-                authorized_scope=read.snapshot.scope, raw_path=raw_path, raw_body=raw_body,
+                authorized_scope=scope, raw_path=raw_path, raw_body=raw_body,
             )
         else:
             raise OperationBindingError("verified_http_executor_operation_unavailable")
@@ -135,6 +137,49 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
                 "status": result.status, "state_version": result.committed_state_version,
                 "state_hash": result.committed_state_hash,
                 "result_digest": result.result_digest}
+
+    def _verified_mutation_read_scope(
+        self, *, receipt_id: UUID, binding: SessionBinding,
+        fingerprint: str, expires_at: int,
+    ) -> WorldScope:
+        """受保護 Receipt 重試只重用同一 Read Source，不再建立第二筆唯一來源。
+
+        先在新交易鎖定並驗證 Receipt／World／Key，確認舊來源完整 Scope、
+        Fingerprint、ReadAdmission 有效期與資料庫來源一致；沒有舊來源才
+        建立首次 ReadAdmission。不能從 Runtime 提供的舊讀取 ID 補簽。
+        """
+        with self._connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SET LOCAL lock_timeout='3s'")
+                scope = self._verify_receipt(
+                    cursor, receipt_id=receipt_id, binding=binding, fingerprint=fingerprint,
+                )
+                cursor.execute(
+                    """SELECT p.environment_id,p.deployment_id,p.session_id,
+                              p.world_generation_id,p.request_fingerprint,
+                              r.expires_at,r.request_binding_digest
+                       FROM protected_world_read_sources p
+                       JOIN read_admissions r ON r.read_admission_id=p.read_admission_id
+                        AND (r.environment_id,r.deployment_id,r.session_id,r.world_generation_id)
+                          =(p.environment_id,p.deployment_id,p.session_id,p.world_generation_id)
+                        AND r.state_version=p.state_version AND r.state_hash=p.state_hash
+                        AND r.request_binding_digest=p.request_fingerprint
+                       WHERE p.receipt_id=%s""",
+                    (receipt_id,),
+                )
+                previous = cursor.fetchone()
+                if previous is not None:
+                    cursor.execute("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
+                    db_now = cursor.fetchone()[0]
+                    if (previous[:5] != (*_scope_values(scope), fingerprint)
+                            or previous[6] != fingerprint or previous[5] <= db_now):
+                        raise ProtectedGrantError("verified_http_prior_read_source_invalid")
+                    return scope
+        first = self.admit_read(
+            receipt_id=receipt_id, binding=binding,
+            request_fingerprint=fingerprint, expires_at=expires_at,
+        )
+        return first.snapshot.scope
 
     def create_cart(self, *, receipt_id: UUID, creator: SessionBinding,
                     request_fingerprint: str, idempotency_key: UUID,

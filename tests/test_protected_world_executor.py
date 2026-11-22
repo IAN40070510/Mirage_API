@@ -180,6 +180,8 @@ def test_inventory_http_proof_selects_handler_and_rejects_rpc_substitution(isola
                                   (outcome["commit_attempt_id"],)).fetchone()[0] == "reserve"
         assert connection.execute("SELECT count(*) FROM protected_world_commit_sources WHERE receipt_id=%s",
                                   (receipt_id,)).fetchone()[0] == 1
+        assert connection.execute("SELECT count(*) FROM protected_world_read_sources WHERE receipt_id=%s",
+                                  (receipt_id,)).fetchone()[0] == 1
         assert connection.execute("SELECT state->'inventory'->>'sku-1' FROM world_snapshots WHERE world_generation_id=%s",
                                   (snapshot.scope.world_generation_id,)).fetchone()[0] == "2"
 

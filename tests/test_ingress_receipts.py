@@ -247,6 +247,7 @@ def test_direct_verifier_dispatches_inventory_over_real_executor_mtls_once(isola
                 (snapshot.scope.world_generation_id,),
             ).fetchone()[0] == "2"
             assert connection.execute("SELECT count(*) FROM protected_world_commit_sources").fetchone()[0] == 1
+            assert connection.execute("SELECT count(*) FROM protected_world_read_sources").fetchone()[0] == 1
             assert connection.execute("SELECT count(*) FROM ingress_receipts").fetchone()[0] == 1
     finally:
         worker.terminate()

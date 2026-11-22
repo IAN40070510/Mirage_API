@@ -43,6 +43,9 @@ ReadAdmission；原始操作驗證通過後，Read 與受保護 World Commit 才
 同一 Receipt 的精確重試只使用既有 Commit Key；無可信 Medusa 400／404
 證據時，Medusa 一律拒絕。返回值屬於**受保護內部執行結果**，尚非
 正式回給 Client 的業務回應，也不提供 Candidate Validation／Grant／Send。
+已存在可信 Read Source 的重試只查回既有唯一來源的完整 Scope／Fingerprint／
+State Version／Hash／期限，不能再 INSERT 第二個 ReadAdmission 來源；來源錯配
+或到期拒絕。首次提交才建立新的受保護讀取來源。
 既有 `create_sealed_app()` 與 `from_environment()` 依舊封閉；隔離測試現
 已可經真 HTTPS/mTLS 完成 Verifier→Executor 兩程序固定 Inventory 提交，
 但尚缺實際部署的 Gateway 網路路由、正式 SCRAM／CA 配置驗收、
