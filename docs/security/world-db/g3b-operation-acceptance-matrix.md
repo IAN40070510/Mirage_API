@@ -14,6 +14,24 @@ Promotion、Authorized Snapshot、Send Lease 已真正完成。以下沒有一�
 `success`。新增真三程序 Gateway→Verifier→Executor 及不同 CA 互相拒絕測試，
 不等於獨立 DB Login 或正式部署 Secret／路由權威通過。
 
+**獨立登入增量實測**：固定程式 SHA `efd996d7cfea489f39d402f4392b29a89130644a`，
+[PostgreSQL 17.6 CI 45057222355](https://github.com/IAN40070510/Mirage_API/actions/runs/45057222355)
+`65 passed`、mTLS `4 passed`；
+[容器 CI 45057222331](https://github.com/IAN40070510/Mirage_API/actions/runs/45057222331)
+`success`。同一拋棄式 PG 的三程序測試另外建立三個互不繼承的 SCRAM-SHA-256
+Verifier／Executor／Runtime Login：Verifier 能建來源而不得查 Commit Source，
+Executor 能完成固定 Inventory Commit 而不能建立 Receipt，Runtime 不得建
+Operation Proof 或 `SET ROLE` 成為 Executor。這是**實體登入及 ACL 的隔離測試**，
+不是正式容器的 Secret 不可見、NetworkPolicy、Gateway 部署或全操作相容驗收。
+
+| G3b 子門檻 | 獨立實測結果 | 正式簽收 |
+| --- | --- | --- |
+| 真 HTTPS Gateway→Verifier→Executor、互異 Client CA、拒絕重播／竄改 | 隔離 CI PASS | 僅實驗室傳輸子項 PASS |
+| 三個實體 PostgreSQL SCRAM Login、無跨角色 DML／SET ROLE | 隔離 CI PASS | 僅實驗室 ACL 子項 PASS |
+| 正式獨立服務部署、Secret Mount／網路來源、無共享憑證可見性 | 未實測 | OPEN |
+| 20 條正式原生 2xx／4xx Payload 與獨立來源／Validator | 20 條均未具全套證據 | OPEN |
+| G3b 整體解封並移交 G4 Sender | 前述兩項未完成 | **NO-GO** |
+
 | 編號 | 實際方法／路由 | 來源 Proof | 固定 Executor | 2xx／4xx 完整相容簽收 |
 | --- | --- | --- | --- | --- |
 | I-01 | POST `/synthetic/inventory/reservations` | 隔離 PASS | 受保護 reserve；單一 Receipt Commit | OPEN：尚無可信原生回應 Payload／Validator |

@@ -122,8 +122,16 @@ publishable key／Body 經 Fingerprint 在 Verifier→Executor 雙程序 mTLS �
 `test_three_process_gateway_verifier_executor_distinct_mtls_roots` 新增真 HTTPX
 Gateway→Uvicorn Verifier→另一 Uvicorn Executor 三程序與相互獨立 CA：
 含真 JWS、拒絕無憑證／錯誤 Client CA、未簽或簽後改 Body、Replay 單次副作用。
-此項仍使用隔離 CI 的同一 DB Login，且無完整候選回應與正式 Gateway 路由，
-僅為跨程序傳輸來源正反面子證據，不是 G3b 放行簽核。
+後續隔離 CI 把這三個程序改用不同 SCRAM-SHA-256 實體 Login，驗證
+Verifier／Executor／Runtime 最低權限與 `SET ROLE` 跨角色拒絕。測試仍由同一
+pytest 父程序啟動服務，不等於正式容器彼此不可見的 Secret／網路隔離；而且
+尚無完整候選回應與正式 Gateway 路由，僅為跨程序傳輸與實體 DB 登入的
+正反面子證據，不是 G3b 放行簽核。
+固定 SHA `efd996d7cfea489f39d402f4392b29a89130644a` 的真 PostgreSQL
+[CI 45057222355](https://github.com/IAN40070510/Mirage_API/actions/runs/45057222355)
+為 `65 passed`、mTLS `4 passed`；
+[容器 45057222331](https://github.com/IAN40070510/Mirage_API/actions/runs/45057222331)
+成功，但不是正式服務拓樸驗收。
 隔離資料庫的 404 另以可信 Cart catalog 缺失和 Candidate Promotion 驗證，
 尚未涵蓋全部原生 Medusa 路由。
 
