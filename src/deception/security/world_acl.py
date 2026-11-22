@@ -57,6 +57,7 @@ def inspect_runtime_world_acl(dsn: str, *, schema: str = "public") -> WorldAclAs
                                   WHERE role.rolname = ANY(%s)
                                     AND pg_catalog.pg_has_role(session_user, role.oid, 'MEMBER')""",
                                (["mirage_ingress_verifier", "mirage_authorizer", "mirage_replay_gc",
+                                 "mirage_candidate_validator", "mirage_world_executor",
                                  "mirage_schema_owner"],))
                 if cursor.fetchall():
                     unsafe.append("privileged_role_membership")
@@ -67,12 +68,18 @@ def inspect_runtime_world_acl(dsn: str, *, schema: str = "public") -> WorldAclAs
                     ("session_heads", ("INSERT", "UPDATE", "DELETE", "TRUNCATE")),
                     ("session_world_bindings", ("INSERT", "UPDATE", "DELETE", "TRUNCATE")),
                     ("read_admissions", ("INSERT", "UPDATE", "DELETE", "TRUNCATE")),
+                    ("world_operations", ("INSERT", "UPDATE", "DELETE", "TRUNCATE")),
+                    ("world_events", ("INSERT", "UPDATE", "DELETE", "TRUNCATE")),
+                    ("world_snapshots", ("INSERT", "UPDATE", "DELETE", "TRUNCATE")),
+                    ("world_commit_receipts", ("INSERT", "UPDATE", "DELETE", "TRUNCATE")),
                     ("replay_entries", ("INSERT", "UPDATE", "DELETE", "TRUNCATE")),
                     ("trusted_key_revocations", ("INSERT", "UPDATE", "DELETE", "TRUNCATE")),
                     ("projection_registry", ("INSERT", "UPDATE", "DELETE", "TRUNCATE")),
                     ("candidate_records", ("UPDATE", "DELETE", "TRUNCATE")),
                     ("protected_candidate_promotions", ("INSERT", "UPDATE", "DELETE", "TRUNCATE")),
                     ("protected_grant_bindings", ("INSERT", "UPDATE", "DELETE", "TRUNCATE")),
+                    ("protected_world_read_sources", ("INSERT", "UPDATE", "DELETE", "TRUNCATE")),
+                    ("protected_world_commit_sources", ("INSERT", "UPDATE", "DELETE", "TRUNCATE")),
                 ):
                     qualified = f"{schema}.{table}"
                     cursor.execute("SELECT pg_catalog.to_regclass(%s)", (qualified,))
@@ -84,6 +91,15 @@ def inspect_runtime_world_acl(dsn: str, *, schema: str = "public") -> WorldAclAs
                                        (qualified, operation))
                         if cursor.fetchone()[0] is not False:
                             unsafe.append(f"direct_{operation.lower()}:{table}")
+                helper = f"{schema}.protected_lock_reference(text,jsonb)"
+                cursor.execute("SELECT pg_catalog.to_regprocedure(%s)", (helper,))
+                if cursor.fetchone()[0] is None:
+                    unsafe.append("missing_protected_lock_helper")
+                else:
+                    cursor.execute("SELECT pg_catalog.has_function_privilege(session_user,%s,'EXECUTE')",
+                                   (helper,))
+                    if cursor.fetchone()[0] is not False:
+                        unsafe.append("runtime_can_execute_protected_lock_helper")
                 return WorldAclAssessment(login=login, effective_role=effective_role,
                                           unsafe_capabilities=tuple(unsafe))
     except WorldAclPreflightError:

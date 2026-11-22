@@ -42,6 +42,7 @@ from .store import (
     WorldStoreStatus,
 )
 from .event_store import EventWorldStore, PostgresEventWorldStore
+from .protected_world import PostgresProtectedWorldExecutor
 
 __all__ = [
     "AdmissionControl",
@@ -64,6 +65,7 @@ __all__ = [
     "PostgresCandidateStore",
     "PostgresCandidatePromoter",
     "PostgresProtectedAuthorizer",
+    "PostgresProtectedWorldExecutor",
     "ProtectedGrantError",
     "PostgresReplayStore",
     "PostgresWorldStore",

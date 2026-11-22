@@ -45,12 +45,13 @@ class PostgresIngressReceiptWriter:
                    issuer, audience, jti, key_id, environment_id, deployment_id,
                    session_id, session_epoch, request_fingerprint, assessment_digest,
                    claims_digest, verification_policy_version, token_issued_at,
-                   token_not_before, token_expires_at
-               ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                   token_not_before, token_expires_at, access_mode, resource_id
+               ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                RETURNING receipt_id""",
             (claims.iss, claims.aud, claims.jti, kid, self._environment_id,
              self._deployment_id, claims.session_id, claims.session_epoch,
              claims.request_fingerprint, claims.assessment_digest, claims_digest,
-             "trusted-session-v1.1", claims.iat, claims.nbf, claims.exp),
+             "trusted-session-v1.1", claims.iat, claims.nbf, claims.exp,
+             claims.access_mode, claims.resource_id),
         )
         return cursor.fetchone()[0]

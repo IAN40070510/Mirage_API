@@ -9,18 +9,24 @@
 | 實作檔案 | 安全作用與限制 |
 | --- | --- |
 | `migrations/018_protected_grant_bindings.sql` | 新增完整 Scope＋不可變版本的 `protected_candidate_promotions`、一對一 Receipt/Admission 的 `protected_grant_bindings` 與不可變觸發器。新增固定 Schema `search_path` 的受限 `SECURITY DEFINER` Row Lock Helper；未授予 Runtime 執行權。Migration 不建立 LOGIN 或開啟發送。 |
+| `migrations/019_protected_world_sources.sql` | 將 Verifier Receipt 的 `access_mode`／`resource_id` 保存為已驗證 Claims；新增獨立的受保護 ReadAdmission／World Commit 來源證據。既有缺少能力欄位的 Receipt 不作可信 World Executor 憑據，舊來源列不得因 schema 更新而補簽。 |
 | `src/deception/world/protected_grant.py` | 分離 Candidate Validator 與 Authorizer 的預期 PostgreSQL Login／DSN；Promotion 複製並重新驗證 v1 Envelope 三種 SHA-256；Grant 在單一交易鎖定 Session／Receipt／Candidate／Generation／Key／Profile，檢查 Registry／DB 期限並寫入 Binding＋Admission；Claim／Authorize 只接受已有 Binding，使用 DB 時間；Operation ID＋input digest 只讀查回。未核准 token expiry grace 前，保守要求 `transmission_deadline <= token_expires_at`。 |
+| `src/deception/world/protected_world.py` | 新增僅供隔離特權執行程序使用的 `PostgresProtectedWorldExecutor`，檢查登入者、Receipt 的已簽 Session／Mode／Resource／Fingerprint、現時 Epoch／Generation／Key Revocation；ReadAdmission、業務 World Mutation 與各自受保護來源證據於同一實體連線及交易提交。不採信 Runtime 自稱能力或舊業務結果。正式服務通訊／容器 Secret 尚未接線。 |
+| `src/deception/world/session.py`、`src/deception/world/event_store.py` | 原生 ReadAdmission、固定 Handler World Commit 可使用外層 Executor 的受控交易連線，不另開交易或自行 commit；既有 API 未指定交易連線時保留原方法行為，但舊 Runtime DML 不具可信發送資格。 |
+| `src/deception/security/ingress_receipt.py` | 可信 Verifier 於原本 Replay／Receipt 同交易寫入簽名 Claims 中的 `access_mode`／`resource_id`；DB 不從 Runtime 參數補填該能力。 |
 | `src/deception/world/postgres_candidate.py` | Candidate GC 不使用呼叫者提供的 `protected_refs` 當唯一判據；已 Promotion 的來源候選不得被刪除。此為暫時偏向安全的保留策略，日後需分離可清理 Bytes 與永久 Metadata。 |
-| `src/deception/security/world_acl.py` | 增加 Runtime 對兩張新表及受保護 Read Admission 來源的有效 DML 拒絕查核；正式 Runtime 的原生 ReadAdmission 寫入需改走可信 Executor，不能共用舊 DB Role。 |
+| `src/deception/security/world_acl.py` | 擴大 Runtime 對 World State／Operation／ReadAdmission／Protected Sources 的有效 DML 拒絕查核，並驗證無 Executor membership 或 Row Lock 特權執行權。正式 Runtime 的原生 Write／ReadAdmission 必須改走可信 Executor，不能共用舊 DB Role。 |
 | `tests/test_protected_grant.py` | 擬定真實 PostgreSQL 正向 Grant、Receipt 重綁／交易回滾、偽造 Fingerprint、未 Promotion、錯誤 Login、Candidate GC 與不可變資料負面測試；使用一次性真 SCRAM Login 及欄位級最低權限驗證。 |
+| `tests/test_protected_world_executor.py` | 新增 Read＋Commit 正向、錯誤 Mode／Fingerprint、Commit 來源寫入故障的原子 rollback、舊業務列不得自動受信任、真 SCRAM Executor／Runtime 權限分離等測試；**本新增批次尚未經 PG CI 執行**。 |
 | `.github/workflows/world-security-contract.yml` | 獨立、無正式憑證的 PostgreSQL 17.6 快速驗收；只針對 Protected Grant / SCRAM 角色，保留 JUnit，不取代全套 CI。 |
 
 ## 本輪發現並保持阻擋的關鍵事項
 
 1. **ACL 與資料庫 Row Lock**：PostgreSQL 17 `SELECT ... FOR SHARE` 也需要受查表至少一欄 `UPDATE` 權限。不可直接向 Authorizer／Validator 授予 Key／Receipt／Session 等整表 `UPDATE`。目前新增只接受預先定義 `kind`／完整 Scope 的 `SECURITY DEFINER protected_lock_reference`，函式固定 Migration 對應的可信 Schema `search_path`，並撤銷 `PUBLIC EXECUTE`；一次性真 SCRAM 最小權限 Role 測試在隔離 CI 已通過，但正式部署的函式 owner NOLOGIN／無 Runtime 繼承／可信 Schema CREATE 撤銷仍未驗收。
 2. **Validator 的政策權威**：Hash 一致只證明 bytes 完整，不能單獨證明 Contract／真實 HTTP 來源。獨立 Validator 尚未接進正式服務，沒有可量測的業務投影審核證據；目前 Promotion 只在專用受信任呼叫者假設下成立。不能讓 Runtime 以同一 DB 身分呼叫 Promotion。
-   - `committed_operation` 的既有 `world_operations` 暫非獨立不可偽造來源；**受保護 World Executor 未完成前，Promotion 固定拒絕此來源**，不能把 Runtime SQL 寫入的結果列升級為可信業務提交證明。
-3. **Transition/Send 接線**：新 Authorizer 尚未取代 `trusted_http.create_app()` 舊 `grant` 路徑；`StartSend`／Snapshot／Send Lease、跨 DB Fence／Restore 還沒連接。在此之前 `from_environment()` 必須繼續硬拒絕。
+   - `committed_operation` 的舊 `world_operations` 暫非獨立不可偽造來源；新路徑只接受同一可信 Executor 交易建立且綁定同 Receipt 的 `protected_world_commit_sources`，舊列永久不因查詢成功而自動提升為權威。
+   - ReadAdmission 同理只採信 `protected_world_read_sources`；Runtime 能指定 `request_fingerprint` 不等於真實入口來源證明（Fingerprint 語意 A）。需另由可信入口保證原始請求，這不屬於單一 DB R1 防護。
+3. **Transition/Send 接線**：新 World Executor／Authorizer 尚未取代 `trusted_http.create_app()` 的舊共用 DSN、`grant`／直接業務呼叫路徑；獨立服務認證、驗證器請求快照、`StartSend`／Snapshot／Send Lease、跨 DB Fence／Restore 也還沒接線。在此之前 `from_environment()` 必須繼續硬拒絕。
 4. **真資料庫驗證權限**：本機沒有 PostgreSQL／pytest 服務；嘗試唯讀盤點既有 Oracle 隔離 Lab 時，Gateway 使用者對 `/var/run/docker.sock` 得到 `permission denied`（Job `job_01M8022EJE00NNKXPMDAK1YAT3`）。不得在未授權狀態下提權操作 Lab。**隔離 GitHub PostgreSQL 17.6 G3 子測試已 PASS，Oracle 既有 Lab／真實部署 G3–G5 整體驗收尚未執行**。
 
 ## 驗證證據分類
@@ -33,6 +39,7 @@
 | PostgreSQL 17 管理登入下的 Grant / 回滾子驗收 | PASS（初版 SHA `cb1369e0da408bf5c3114657099432201fad4b7d`） | GitHub Python tests [run 44955152598](https://github.com/IAN40070510/Mirage_API/actions/runs/44955152598)：`1278 passed / 21 skipped`；容器 [run 44955152642](https://github.com/IAN40070510/Mirage_API/actions/runs/44955152642) PASS。這只覆蓋該 SHA 的原子性子測試，不能沿用為後續 Row Lock／SCRAM PASS。 |
 | Row Lock 函式／實體 SCRAM Role／Grant 狀態轉移子測試 | PASS（限 SHA `a54065f2c1cf4a6b13dc34b3c7d7a2bf08e42f34`） | GitHub 隔離 PostgreSQL 17.6 [run 44955902350](https://github.com/IAN40070510/Mirage_API/actions/runs/44955902350)：`8 passed`。不代表本輪最新修改、全套並行安全或正式部署通過。 |
 | 不可信 `committed_operation` 來源阻擋、ReadAdmission Runtime 權限拒絕 | PASS（限 SHA `0b1650583f794d1c47c0646bcb0ef7c2197ae966`） | GitHub 隔離 PostgreSQL 17.6 [run 44956251385](https://github.com/IAN40070510/Mirage_API/actions/runs/44956251385)：`9 passed in 3.46s`；仍未證明正式 World Executor／ReadAdmission provenance 或部署隔離。 |
+| 可信 World Executor／兩種受保護來源及 Rollback | NOT_RUN | `migrations/019`、`tests/test_protected_world_executor.py` 為本次尚未執行的新增批次；不能沿用前一 SHA 的 `9 passed`。 |
 | Snapshot、Send Lease、Restoration Fence | NOT_IMPLEMENTED | G4／G5 未接線 |
 | 全套 Python／HTTP 效能回歸 | NOT_RUN | 不可將 Static PASS 當成 P95 測試 |
 

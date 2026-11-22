@@ -140,7 +140,8 @@ class PostgresCandidatePromoter(_ProtectedConnection):
     """由隔離 Candidate Validator 將低信任暫存封套驗證並複製成唯讀版本。"""
 
     def promote(
-        self, *, scope: WorldScope, candidate_ref: str, request_fingerprint: str,
+        self, *, receipt_id: UUID, scope: WorldScope, candidate_ref: str,
+        request_fingerprint: str,
         envelope_hash: str, immutable_body_hash: str, semantic_headers_hash: str,
         evidence: ProjectionEvidence, source: ResponseSource,
     ) -> int:
@@ -154,6 +155,8 @@ class PostgresCandidatePromoter(_ProtectedConnection):
         source_value = source.model_dump(mode="json")
         for digest in (request_fingerprint, envelope_hash, immutable_body_hash, semantic_headers_hash):
             _require_digest(digest)
+        if not isinstance(receipt_id, UUID) or receipt_id.version != 4:
+            raise ProtectedGrantError("invalid_candidate_receipt_id")
         if not candidate_ref or len(candidate_ref) > 256:
             raise ProtectedGrantError("invalid_candidate_reference")
         with self._connection() as connection:
@@ -176,7 +179,7 @@ class PostgresCandidatePromoter(_ProtectedConnection):
                     raise ProtectedGrantError("candidate_hash_components_mismatch")
                 if _authorized_registry_revision(cursor, checked) is None:
                     raise ProtectedGrantError("candidate_policy_not_authorized")
-                if not self._source_matches(cursor, scope, request_fingerprint, source):
+                if not self._source_matches(cursor, receipt_id, scope, request_fingerprint, source):
                     raise ProtectedGrantError("candidate_source_unverifiable")
                 cursor.execute("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
                 if candidate[2] <= cursor.fetchone()[0]:
@@ -186,37 +189,60 @@ class PostgresCandidatePromoter(_ProtectedConnection):
                            environment_id, deployment_id, session_id, world_generation_id,
                            candidate_ref, candidate_version, request_fingerprint, candidate_hash,
                            immutable_body_hash, semantic_headers_hash, projection_contract_hash,
-                           source_spec_sha256, profile_sha256, source, expires_at, envelope_bytes
-                       ) VALUES (%s,%s,%s,%s,%s,1,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s)
+                           source_spec_sha256, profile_sha256, source, expires_at, envelope_bytes,
+                           ingress_receipt_id
+                       ) VALUES (%s,%s,%s,%s,%s,1,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s)
                        RETURNING candidate_version""",
                     (*_scope_values(scope), candidate_ref, request_fingerprint, envelope_hash,
                      immutable_body_hash, semantic_headers_hash, checked.projection_contract_hash,
                      checked.source_spec_sha256, checked.compatibility_profile.profile_sha256,
-                     json.dumps(source_value, sort_keys=True), candidate[2], candidate[1]),
+                     json.dumps(source_value, sort_keys=True), candidate[2], candidate[1], receipt_id),
                 )
                 return cursor.fetchone()[0]
 
     @staticmethod
-    def _source_matches(cursor, scope: WorldScope, fingerprint: str, source: ResponseSource) -> bool:
-        """核對受保護的 Read／World Commit 來源，不接受單獨的 Runtime 宣稱。"""
+    def _source_matches(cursor, receipt_id: UUID, scope: WorldScope,
+                        fingerprint: str, source: ResponseSource) -> bool:
+        """只接受同 Receipt 與完整 Scope 的受保護 Read／Commit 交易來源。"""
         if source.kind == "snapshot":
             if not _protected_lock(cursor, "read_admission", {"read_admission_id": source.read_admission_id}):
                 return False
             cursor.execute(
-                """SELECT 1 FROM read_admissions WHERE read_admission_id=%s
-                   AND environment_id=%s AND deployment_id=%s AND session_id=%s
-                   AND world_generation_id=%s AND request_binding_digest=%s
-                   AND state_version=%s AND state_hash=%s
-                   AND expires_at>floor(extract(epoch FROM clock_timestamp()))::bigint
+                """SELECT 1 FROM protected_world_read_sources p
+                   JOIN read_admissions r USING (read_admission_id)
+                   WHERE p.read_admission_id=%s AND p.receipt_id=%s
+                   AND p.environment_id=%s AND p.deployment_id=%s AND p.session_id=%s
+                   AND p.world_generation_id=%s AND p.request_fingerprint=%s
+                   AND p.state_version=%s AND p.state_hash=%s
+                   AND (r.environment_id,r.deployment_id,r.session_id,r.world_generation_id)
+                       =(p.environment_id,p.deployment_id,p.session_id,p.world_generation_id)
+                   AND r.request_binding_digest=p.request_fingerprint
+                   AND r.state_version=p.state_version AND r.state_hash=p.state_hash
+                   AND r.expires_at>floor(extract(epoch FROM clock_timestamp()))::bigint
                    """,
-                (source.read_admission_id, *_scope_values(scope), fingerprint,
+                (source.read_admission_id, receipt_id, *_scope_values(scope), fingerprint,
                  source.state_version, source.state_hash),
             )
             return cursor.fetchone() is not None
         if source.kind == "committed_operation":
-            # world_operations 仍由原本 World Runtime 交易介面寫入；單讀資料列
-            # 不能獨立證明 T1 下的來源權威，受保護 World Executor 完成前禁用。
-            return False
+            # 只接受同交易的受保護 Executor 證據；單靠 Runtime 可寫的舊列不足。
+            cursor.execute(
+                """SELECT 1 FROM protected_world_commit_sources p
+                   JOIN world_operations o ON o.commit_attempt_id=p.commit_attempt_id
+                   WHERE p.receipt_id=%s AND p.environment_id=%s AND p.deployment_id=%s
+                     AND p.session_id=%s AND p.world_generation_id=%s
+                     AND p.request_fingerprint=%s AND p.result_digest=%s
+                     AND p.state_version=%s AND p.state_hash=%s
+                     AND o.status='committed' AND o.result_digest=p.result_digest
+                     AND o.state_version=p.state_version AND o.state_hash=p.state_hash
+                     AND (o.environment_id,o.deployment_id,o.session_id,o.world_generation_id)
+                         =(p.environment_id,p.deployment_id,p.session_id,p.world_generation_id)
+                """,
+                (receipt_id, *_scope_values(scope), fingerprint,
+                 source.operation_result_digest, source.committed_state_version,
+                 source.committed_state_hash),
+            )
+            return cursor.fetchone() is not None
         # 無受保護來源的安全錯誤模板不得借 Candidate Promotion 混入授權。
         return False
 
@@ -296,7 +322,7 @@ class PostgresProtectedAuthorizer(_ProtectedConnection):
                     """SELECT request_fingerprint, candidate_hash, immutable_body_hash,
                               semantic_headers_hash, projection_contract_hash,
                               source_spec_sha256, profile_sha256, source, expires_at,
-                              envelope_bytes
+                              envelope_bytes, ingress_receipt_id
                        FROM protected_candidate_promotions
                        WHERE environment_id=%s AND deployment_id=%s AND session_id=%s
                          AND world_generation_id=%s AND candidate_ref=%s AND candidate_version=%s
@@ -305,6 +331,7 @@ class PostgresProtectedAuthorizer(_ProtectedConnection):
                 )
                 promoted = cursor.fetchone()
                 if (promoted is None or promoted[0] != receipt[6]
+                        or promoted[10] != receipt_id
                         or promoted[4:7] != (checked.projection_contract_hash,
                                               checked.source_spec_sha256,
                                               checked.compatibility_profile.profile_sha256)

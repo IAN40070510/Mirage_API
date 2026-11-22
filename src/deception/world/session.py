@@ -1,6 +1,7 @@
 """可信 SessionBinding 的原子世界映射、唯讀准入與單調 Watermark。"""
 
 import json
+from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import dataclass
 from uuid import uuid4
@@ -155,18 +156,21 @@ class PostgresSessionWorlds(PostgresWorldStore):
         return snapshot
 
     def admit_read(self, binding: SessionBinding, *, request_binding_digest: str,
-                   now: int, expires_at: int) -> WorldRead:
+                   now: int, expires_at: int, _trusted_connection=None) -> WorldRead:
         """在一致性交易確認當前 epoch、世代、快照與 Watermark，登記唯讀准入。
 
         request_binding_digest 由可信入口計算。一般 Client header 不提供版本下限。
         Cutover 或緊急撤銷後的一般讀取拒絕，並行回應抵達順序由傳輸層決定。
+        私有 _trusted_connection 僅供受保護 Executor 共用外層 Ingress/World
+        transaction；本方法不得自行提交該連線，失敗由 Executor 外層 rollback。
         """
         import re
 
         if not re.fullmatch(r"[0-9a-f]{64}", request_binding_digest) or expires_at <= now:
             raise ValueError("invalid read admission binding or deadline")
         params = self._binding_params(binding)
-        with self._connection() as connection:
+        with (nullcontext(_trusted_connection) if _trusted_connection is not None
+              else self._connection()) as connection:
             head = connection.execute(
                 "SELECT session_epoch FROM session_heads WHERE environment_id=%s AND deployment_id=%s "
                 "AND session_id=%s FOR SHARE", params[:3]).fetchone()

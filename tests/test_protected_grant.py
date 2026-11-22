@@ -67,20 +67,31 @@ def _seed(dsn, *, fingerprint=None, candidate_scope=None):
                    receipt_id,issuer,audience,jti,key_id,environment_id,deployment_id,
                    session_id,session_epoch,request_fingerprint,assessment_digest,
                    claims_digest,verification_policy_version,token_issued_at,
-                   token_not_before,token_expires_at)
-               VALUES (%s,'gateway','mirage',%s,'kid',%s,%s,%s,1,%s,%s,%s,'trusted-session-v1.1',%s,%s,%s)""",
+                   token_not_before,token_expires_at,access_mode)
+               VALUES (%s,'gateway','mirage',%s,'kid',%s,%s,%s,1,%s,%s,%s,'trusted-session-v1.1',%s,%s,%s,'read_only')""",
             (receipt_id, jti, selected.environment_id, selected.deployment_id,
              selected.session_id, fingerprint, digest("b"), digest("c"),
              now - 5, now - 5, now + 60),
+        )
+        connection.execute(
+            """INSERT INTO protected_world_read_sources (
+                   read_admission_id,receipt_id,environment_id,deployment_id,session_id,
+                   world_generation_id,request_fingerprint,state_version,state_hash)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,1,%s)""",
+            (source.read_admission_id, receipt_id, *(
+                selected.environment_id, selected.deployment_id,
+                selected.session_id, selected.world_generation_id), fingerprint,
+             source.state_hash),
         )
     return selected, source, evidence, receipt_id, ref, hashes, now
 
 
 def _promote(dsn, seeded):
     """由隔離測試管理身分執行可信 Candidate Promotion，回傳 version。"""
-    selected, source, evidence, _, ref, hashes, _ = seeded
+    selected, source, evidence, receipt_id, ref, hashes, _ = seeded
     return PostgresCandidatePromoter(dsn, expected_login=_login(dsn)).promote(
-        scope=selected, candidate_ref=ref, request_fingerprint=digest("a"),
+        receipt_id=receipt_id, scope=selected, candidate_ref=ref,
+        request_fingerprint=digest("a"),
         envelope_hash=hashes[0], immutable_body_hash=hashes[1],
         semantic_headers_hash=hashes[2], evidence=evidence, source=source,
     )
@@ -150,7 +161,8 @@ def test_protected_grant_rejects_fingerprint_and_scope_substitution(isolated_tes
     selected, source, evidence, receipt, ref, hashes, _ = seeded
     promoter = PostgresCandidatePromoter(isolated_test_dsn, expected_login=_login(isolated_test_dsn))
     with pytest.raises(ProtectedGrantError, match="candidate_source_unverifiable"):
-        promoter.promote(scope=selected, candidate_ref=ref, request_fingerprint=digest("b"),
+        promoter.promote(receipt_id=receipt, scope=selected, candidate_ref=ref,
+                         request_fingerprint=digest("b"),
                          envelope_hash=hashes[0], immutable_body_hash=hashes[1],
                          semantic_headers_hash=hashes[2], evidence=evidence, source=source)
     _promote(isolated_test_dsn, seeded)
@@ -166,13 +178,14 @@ def test_protected_grant_rejects_fingerprint_and_scope_substitution(isolated_tes
 def test_runtime_world_commit_row_is_not_trusted_source(isolated_test_dsn):
     """舊 World Runtime 可寫的 Commit 結果不得在受保護 Executor 未完成前提升為來源權威。"""
     seeded = _seed(isolated_test_dsn)
-    selected, _, evidence, _, ref, hashes, _ = seeded
+    selected, _, evidence, receipt_id, ref, hashes, _ = seeded
     source = CommitSource(world_generation_id=selected.world_generation_id,
                           operation_result_digest=digest("e"), committed_state_version=1,
                           committed_state_hash=digest("f"))
     with pytest.raises(ProtectedGrantError, match="candidate_source_unverifiable"):
         PostgresCandidatePromoter(isolated_test_dsn, expected_login=_login(isolated_test_dsn)).promote(
-            scope=selected, candidate_ref=ref, request_fingerprint=digest("a"),
+            receipt_id=receipt_id, scope=selected, candidate_ref=ref,
+            request_fingerprint=digest("a"),
             envelope_hash=hashes[0], immutable_body_hash=hashes[1],
             semantic_headers_hash=hashes[2], evidence=evidence, source=source,
         )
@@ -270,7 +283,8 @@ def test_protected_grant_real_role_acl_and_authorizer(isolated_test_dsn):
             validator = sql.Identifier(users["validator"][0])
             authorizer = sql.Identifier(users["authorizer"][0])
             runtime = sql.Identifier(users["runtime"][0])
-            admin.execute(sql.SQL("GRANT SELECT ON candidate_records,read_admissions,"
+            admin.execute(sql.SQL("GRANT SELECT ON candidate_records,read_admissions,world_operations,"
+                                  "protected_world_read_sources,protected_world_commit_sources,"
                                   "projection_registry,projection_profile_revocations TO {}").format(validator))
             admin.execute(sql.SQL("GRANT INSERT,SELECT ON protected_candidate_promotions TO {}").format(validator))
             admin.execute(sql.SQL("GRANT EXECUTE ON FUNCTION protected_lock_reference(text,jsonb) TO {}").format(
@@ -292,7 +306,8 @@ def test_protected_grant_real_role_acl_and_authorizer(isolated_test_dsn):
             promoter = PostgresCandidatePromoter(
                 logins["validator"], expected_login=users["validator"][0])
             assert promoter.promote(
-                scope=seeded[0], candidate_ref=seeded[4], request_fingerprint=digest("a"),
+                receipt_id=seeded[3], scope=seeded[0], candidate_ref=seeded[4],
+                request_fingerprint=digest("a"),
                 envelope_hash=seeded[5][0], immutable_body_hash=seeded[5][1],
                 semantic_headers_hash=seeded[5][2], evidence=seeded[2], source=seeded[1],
             ) == 1
@@ -312,6 +327,8 @@ def test_protected_grant_real_role_acl_and_authorizer(isolated_test_dsn):
                     "INSERT INTO protected_grant_bindings(operation_id) VALUES(gen_random_uuid())",
                     "UPDATE session_heads SET session_epoch=0 WHERE false",
                     "INSERT INTO read_admissions(read_admission_id) VALUES('forged')",
+                    "INSERT INTO protected_world_read_sources(read_admission_id) VALUES('forged')",
+                    "INSERT INTO protected_world_commit_sources(operation) VALUES('forged')",
                     "SELECT protected_lock_reference('session_head','{}'::jsonb)",
                     )), (logins["validator"], (
                     "UPDATE response_admissions SET state='SEND_AUTHORIZED' WHERE false",
