@@ -28,8 +28,8 @@
 | Gate | Required proof | Current status |
 | --- | --- | --- |
 | G3a | isolated PostgreSQL read/commit provenance and role tests | Partial PASS; see `grant-binding-implementation-status.md` for exact SHA |
-| G3b | derived cart lineage and legitimate 400/409 source proofs, all HTTP endpoint parity | NOT IMPLEMENTED |
-| G4 | immutable bytes and lease used by first ASGI byte | NOT IMPLEMENTED |
+| G3b | derived cart lineage and legitimate 400/409 source proofs, all HTTP endpoint parity | PARTIAL: isolated Verifier→Executor mTLS and scoped Medusa 400/404; see implementation record; all-route parity OPEN |
+| G4 | immutable bytes and lease used by first ASGI byte | PARTIAL: isolated primitive only; real Sender mTLS OPEN |
 | G5 | independent fence authority and fault injection | NOT IMPLEMENTED |
 | Production | complete G0–G6, security owner approval | NO-GO |
 

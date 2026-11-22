@@ -4,6 +4,12 @@
 
 **目前狀態：Proposed／Security Weakness OPEN／MSDSS P2 NO-GO。獨立分支已開始原生協定修補；完整權限修復、驗收與正式發送啟用均未完成。**
 
+**2026-11-22 隔離實作更新**：G3b 已有真 PostgreSQL／mTLS 雙程序 Verifier→Executor
+與限定 Medusa 400／404 來源測試（[固定 SHA／CI 清單](grant-binding-implementation-status.md)），
+但部署角色、Gateway 直連、全業務相容與正式 G3b 簽核仍 OPEN。
+以下基準架構與未執行驗收敘述若寫作 `NOT_IMPLEMENTED`／`NOT_RUN`，
+指原始正式部署基線，不能覆蓋上述隔離增量的精確測試結果。
+
 **v0.2 Contract Freeze candidate（2026-11-21）**：`MSDSS Protocol baseline = ACCEPTED (MSDSS)`；`Mirage Owner adoption = ACCEPTED (D-68, 2026-11-21)`；`Mirage native conformance = NOT_RUN`。固定上游 `start_send()` 有**局部已觀察差異**，獨立分支修補不等於整套協定通過。目標 StartSend 只核對 Snapshot／owner／deadline／single-use／真實不可逆的 execution-ineligibility fence，不作第二次 Policy 或 Emergency 授權。Operation Identity、外部 effect key、未知 `SEND_STARTED`、Restore Quarantine、Old Role Mixed Binary Fence 已有 Proposed MUST 與 **37 個必檢 ID（其中 `WORLD-RECOVERY-03` 是群組索引、A～F 各為單獨案例）**。**新 DB 權限控制 NOT_IMPLEMENTED、全部新安全驗收 NOT_RUN**。
 
 **來源追溯**：Mirage upstream `main` `88dc2008fd35a2d3873949a769653dc9f18e8980`；MSDSS `main` `5a1ee26dcf79f04cf29345a0403e3f3f8082358b` 的 Protocol Freeze v1；Mirage 文件歷史分支名 `docs/mir-sec-world-001-adr-v0.1`／**前置** Commit `003c918f142296588d2fe14b70fafe3cc5cf8458`。**前置 SHA 不是最新文件提交**，v0.1 分支名也不是 v0.2 版本權威；當前 SHA 需以 GitHub／`git rev-parse HEAD` 實查，文件版號、兩個 Source SHA、Git Commit、NOT_IMPLEMENTED、NOT_RUN 分開記錄。**Mirage main 尚未收錄此 ADR**。

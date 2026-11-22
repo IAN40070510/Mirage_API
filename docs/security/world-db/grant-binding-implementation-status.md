@@ -4,6 +4,37 @@
 
 **2026-11-22 狀態**：`IMPLEMENTATION IN PROGRESS / NOT ACCEPTED`。這份文件保留本輪實作選擇及阻礙，**不是 G3 PASS**。`MIR-SEC-WORLD-001=OPEN`、`MSDSS P2=NO-GO`、正式 Trusted Send／Production DECEIVE **OFF**；原有 `from_environment()` 的 Release Fuse 不移除。
 
+## 2026-11-22 G3b HTTP 邊界最新補充（下方舊紀錄按當時 SHA 保留）
+
+隔離分支已補上 `create_direct_verifier_app()` 原始 ASGI HTTP 接收、真正 JWS
+驗章後單交易 Replay／Receipt／固定 Operation Proof；Verifier 可使用獨立
+`FixedExecutorMTLSClient` 以受信任 TLS Server CA、專用 Client Certificate
+呼叫另一程序的 `create_fixed_executor_app()`。RPC 僅收 Receipt ID、原始
+Path／Body，Medusa 額外要求 Fingerprint 綁定的 `request_id`、`raw_url`、
+核准原始 Headers。Executor 從受保護資料庫取回固定 Handler／Scope，絕不
+接受 Runtime 自選 Operation；重放只重用同 Receipt 已存在的 Read Source，
+未知 COMMIT 不盲目重試。
+
+`migrations/027_protected_medusa_rejections.sql`、`PostgresProtectedWorldExecutor`
+與 `PostgresCandidatePromoter._source_matches()` 把以下原生拒絕接入獨立來源：
+限定 `POST /store/carts/{id}/line-items`，核對原始金鑰或 Body 模型的 400，
+以及已受保護 Cart catalog 沒有 variant 的 404。均需同 Receipt ReadAdmission、
+原始 Operation Proof、Scope／Fingerprint、固定原生 JSON Envelope Hash，
+再寫入不可更新／不可刪除的來源表；Runtime 自填安全錯誤模板不具權威。
+其它 Medusa 操作／成功回應仍 503，**不等於完整 Medusa API 相容通過**。
+
+| 固定來源與 CI | 實測結果 | 不可推論的事項 |
+| --- | --- | --- |
+| Commit `138beba79e59f9955f8c1e50a9454c60732a16fb`，隔離 [PostgreSQL CI 45055022497](https://github.com/IAN40070510/Mirage_API/actions/runs/45055022497) | `63 passed`、mTLS `4 passed`，含 Medusa 400／404 DB 來源、偽造回應無法 Promotion；容器 [45055022535](https://github.com/IAN40070510/Mirage_API/actions/runs/45055022535) PASS | 不是全 Medusa 路由、部署級角色或 G4/G5 完成證明 |
+| Commit `14e3fd2cfba0935b27e44abadefa4746776e77cd`，隔離 [PostgreSQL CI 45055331170](https://github.com/IAN40070510/Mirage_API/actions/runs/45055331170) | `64 passed`、mTLS `4 passed`，追加真正 Verifier→Executor mTLS 雙程序 Medusa 400 與簽後 Key 篡改拒絕；容器 [45055331220](https://github.com/IAN40070510/Mirage_API/actions/runs/45055331220) PASS | Verifier 測試側使用 ASGI TestClient、兩個服務沿用隔離 DB 同一 Login；未證明真 Gateway→Verifier→Executor 三程序部署 |
+| 本輪新增雙程序案例前的本機全套（無 PostgreSQL） | `1112 passed / 243 skipped / 2 warnings`，文件與 Patch 檢查 PASS；雙程序新增測試另由上列真 PG CI 執行 | SKIP 不算 PG PASS，缺 G3b 全操作結果與 G6 P95／故障注入 |
+
+G3b 仍 `OPEN`：正式 HTTP Runtime／Ingress Gateway 實體路由、獨立
+Verifier/Executor SCRAM 身分與 TLS 根信任隔離、完整 Inventory／Cart／Order／
+Medusa 成功與錯誤回應相容、Validator／Sender 鏈與未知 COMMIT 對帳均待驗收。
+G4 Sender mTLS、G5 獨立 Restore Fence、G6 故障注入與正式簽核均未完成。
+`MIR-SEC-WORLD-001=OPEN`、`MSDSS P2=NO-GO`，Trusted Send **OFF**。
+
 ## 本輪已寫入獨立分支的變更（部分獨立 PostgreSQL 驗證已通過）
 
 | 實作檔案 | 安全作用與限制 |
