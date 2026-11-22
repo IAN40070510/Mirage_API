@@ -51,7 +51,6 @@ def _isolated_three_process_service_logins(dsn: str, request):
         pytest.skip("requires explicitly disposable PostgreSQL cluster for real login roles")
     import psycopg
     from psycopg import sql
-    from psycopg.conninfo import conninfo_to_dict
     from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
     schema = conninfo_to_dict(dsn)["options"].split("search_path=", 1)[1].split(" ", 1)[0]
@@ -445,6 +444,16 @@ def test_direct_verifier_medusa_400_over_real_executor_mtls(isolated_test_dsn, t
                     clock.sleep(0.1)
             else:
                 pytest.fail("Medusa native validator did not become ready")
+        with httpx.Client(verify=ssl.create_default_context(cafile=str(validator_ca)),
+                          trust_env=False, timeout=2.0) as anonymous_validator:
+            with pytest.raises(httpx.TransportError):
+                anonymous_validator.get(f"https://127.0.0.1:{validator_port}/internal/ready")
+        wrong_validator_client = ssl.create_default_context(cafile=str(validator_ca))
+        wrong_validator_client.load_cert_chain(str(client_cert), str(client_key))
+        with httpx.Client(verify=wrong_validator_client, trust_env=False,
+                          timeout=2.0) as other_role:
+            with pytest.raises(httpx.TransportError):
+                other_role.get(f"https://127.0.0.1:{validator_port}/internal/ready")
         signer = Ed25519PrivateKey.generate()
         client = FixedExecutorMTLSClient(
             origin=f"https://127.0.0.1:{port}", client_cert=client_cert,
@@ -516,6 +525,7 @@ def test_three_process_gateway_verifier_executor_distinct_mtls_roots(isolated_te
     import httpx
     import psycopg
     from psycopg import sql
+    from psycopg.conninfo import conninfo_to_dict
 
     from deception.domains.ecommerce.inventory import SyntheticInventory
     from deception.security.protected_rpc import (

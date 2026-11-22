@@ -194,7 +194,9 @@ def create_verifier_service(config: Mapping[str, str]) -> FastAPI:
     from .trusted_session import TrustedSessionVerifier
     from deception.world.postgres_replay import PostgresReplayStore
 
-    if config.get("MIRAGE_G3B_EXECUTOR_DSN_FILE") or config.get("MIRAGE_POSTGRES_DSN"):
+    if (config.get("MIRAGE_G3B_EXECUTOR_DSN_FILE")
+            or config.get("MIRAGE_G3B_VALIDATOR_DSN_FILE")
+            or config.get("MIRAGE_POSTGRES_DSN")):
         raise ProtectedRpcConfigurationError("g3b_service_cross_role_secret_denied")
     dsn = _secret_file(config, "MIRAGE_G3B_VERIFIER_DSN_FILE", max_bytes=4096)
     login = _required_config(config, "MIRAGE_G3B_VERIFIER_LOGIN")
@@ -238,7 +240,9 @@ def create_executor_service(config: Mapping[str, str]) -> FastAPI:
     from deception.domains.ecommerce.inventory import SyntheticInventory
     from deception.world.protected_world import PostgresProtectedWorldExecutor
 
-    if config.get("MIRAGE_G3B_VERIFIER_DSN_FILE") or config.get("MIRAGE_POSTGRES_DSN"):
+    if (config.get("MIRAGE_G3B_VERIFIER_DSN_FILE")
+            or config.get("MIRAGE_G3B_VALIDATOR_DSN_FILE")
+            or config.get("MIRAGE_POSTGRES_DSN")):
         raise ProtectedRpcConfigurationError("g3b_service_cross_role_secret_denied")
     dsn = _secret_file(config, "MIRAGE_G3B_EXECUTOR_DSN_FILE", max_bytes=4096)
     login = _required_config(config, "MIRAGE_G3B_EXECUTOR_LOGIN")

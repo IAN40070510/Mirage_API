@@ -13,6 +13,7 @@ from deception.security.protected_rpc import (
 )
 from deception.security.protected_services import (
     _json_secret, _verifier_key_registry, create_executor_service,
+    create_native_validator_service,
     create_verifier_service, from_environment,
 )
 from deception.world.protected_grant import ProtectedGrantError
@@ -56,9 +57,19 @@ def test_g3b_secret_parser_rejects_duplicates_and_unapproved_public_keys(tmp_pat
 
 def test_g3b_cross_role_secret_is_denied_before_db_connection():
     """Verifier 與 Executor 不能把 Runtime 共用 DSN 或對方的角色秘密當作備援。"""
-    for maker in (create_verifier_service, create_executor_service):
-        with pytest.raises(ProtectedRpcConfigurationError, match="cross_role_secret_denied"):
-            maker({"MIRAGE_POSTGRES_DSN": "postgresql://leaked.invalid/db"})
+    for maker in (create_verifier_service, create_executor_service,
+                  create_native_validator_service):
+        for key in ("MIRAGE_POSTGRES_DSN", "MIRAGE_G3B_VERIFIER_DSN_FILE",
+                    "MIRAGE_G3B_EXECUTOR_DSN_FILE", "MIRAGE_G3B_VALIDATOR_DSN_FILE"):
+            owned = {
+                create_verifier_service: "MIRAGE_G3B_VERIFIER_DSN_FILE",
+                create_executor_service: "MIRAGE_G3B_EXECUTOR_DSN_FILE",
+                create_native_validator_service: "MIRAGE_G3B_VALIDATOR_DSN_FILE",
+            }[maker]
+            if key == owned:
+                continue
+            with pytest.raises(ProtectedRpcConfigurationError, match="cross_role_secret_denied"):
+                maker({key: "postgresql://leaked.invalid/db"})
 
 
 def test_g3b_isolated_compose_does_not_publish_executor_or_share_dsn():
