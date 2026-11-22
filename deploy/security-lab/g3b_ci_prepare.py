@@ -214,7 +214,7 @@ def _identity_material(root: Path, dsns: dict[str, str]) -> None:
     validator_root = root / "validator-ca"
     gateway_ca, gateway_key = _ca(gateway_root, "Gateway")
     executor_ca, executor_key = _ca(executor_root, "Executor")
-    validator_ca, validator_key = _ca(validator_root, "Validator")
+    validator_ca, validator_ca_key = _ca(validator_root, "Validator")
     verifier_cert, verifier_key = _leaf(gateway_root, gateway_ca, gateway_key, "verifier", server=True)
     gateway_cert, gateway_client_key = _leaf(gateway_root, gateway_ca, gateway_key,
                                               "gateway-probe", server=False)
@@ -224,10 +224,10 @@ def _identity_material(root: Path, dsns: dict[str, str]) -> None:
                                  "cart-executor", server=True)
     verifier_client_cert, verifier_client_key = _leaf(executor_root, executor_ca, executor_key,
                                                        "verifier-executor", server=False)
-    validator_cert, validator_key = _leaf(validator_root, validator_ca, validator_key,
-                                           "native-validator", server=True)
+    validator_cert, validator_server_key = _leaf(
+        validator_root, validator_ca, validator_ca_key, "native-validator", server=True)
     validator_client_cert, validator_client_key = _leaf(validator_root, validator_ca,
-                                                        validator_key, "verifier-validator", server=False)
+                                                        validator_ca_key, "verifier-validator", server=False)
     material = {
         "g3b_verifier_dsn": dsns["verifier"],
         "g3b_inventory_executor_dsn": dsns["inventory"],
@@ -248,7 +248,7 @@ def _identity_material(root: Path, dsns: dict[str, str]) -> None:
         "g3b_verifier_validator_key": validator_client_key,
         "g3b_native_validator_server_ca": validator_ca,
         "g3b_native_validator_server_cert": validator_cert,
-        "g3b_native_validator_server_key": validator_key,
+        "g3b_native_validator_server_key": validator_server_key,
         "g3b_native_validator_client_ca": validator_ca,
     }
     for name, content in material.items():

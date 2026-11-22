@@ -6,6 +6,7 @@ import argparse
 import base64
 import json
 from pathlib import Path
+import re
 import socket
 import ssl
 import subprocess
@@ -18,6 +19,36 @@ import psycopg
 import yaml
 
 from deception.api.fingerprint import fingerprint_httpx_request
+from deception.security.operation_binding import _pinned_medusa_operations
+from deception.domains.ecommerce.cart_http import cart_specification
+from deception.domains.ecommerce.inventory_http import inventory_specification
+
+
+def _twenty_native_routes() -> tuple[tuple[str, str, str], ...]:
+    """由三份正式固定 Operation Registry 產生 20 條可實際送到 Verifier 的安全探針。"""
+    cases = []
+    for platform, specification in (
+            ("synthetic-inventory", inventory_specification()),
+            ("synthetic-carts", cart_specification())):
+        for path, methods in specification["paths"].items():
+            for method, data in methods.items():
+                cases.append((platform, method.upper(), "/synthetic" + path))
+    for path, method, _ in _pinned_medusa_operations():
+        cases.append(("medusa-native-cart", method.upper(), path))
+    if len(cases) != 20 or len(set(cases)) != 20:
+        raise RuntimeError("g3b_ci_twenty_route_contract_drift")
+    return tuple(cases)
+
+
+def _probe_path(template: str) -> str:
+    """將固定規格的變數只映射成合法不敏感 CI ID，不採用 Runtime 提供的路由。"""
+    placeholders = {
+        "reservation_id": "a" * 32, "attempt": str(uuid4()),
+        "sku": "sku-1", "cart_id": "cart_" + "a" * 32,
+        "item_id": "item_" + "b" * 32, "order_id": "order_" + "c" * 32,
+        "id": "cart_" + "a" * 32, "line_id": "b" * 32,
+    }
+    return re.sub(r"\{([a-z_]+)\}", lambda match: placeholders[match.group(1)], template)
 
 
 def _encode(value: dict) -> str:
@@ -71,6 +102,18 @@ def _gateway() -> None:
         if gateway.post(origin + "/internal/v1/execute", json={
                 "operation": "forged", "binding": {}}).status_code != 503:
             raise RuntimeError("g3b_ci_verifier_runtime_rpc_open")
+        for platform, method, template in _twenty_native_routes():
+            headers = {"x-request-id": "g3b-unsigned-" + uuid4().hex[:16]}
+            if platform == "medusa-native-cart":
+                headers["x-publishable-api-key"] = "pk_g3b_ci_only"
+            if method != "GET":
+                headers["content-type"] = "application/json"
+            unsigned = gateway.build_request(
+                method, origin + _probe_path(template), content=b"{}" if method != "GET" else b"",
+                headers=headers,
+            )
+            if gateway.send(unsigned).status_code != 403:
+                raise RuntimeError("g3b_ci_unsigned_operation_not_denied:" + method + " " + template)
         body = json.dumps({"sku": "sku-1", "quantity": 2, "expected_version": 1,
                            "idempotency_key": "g3b-container-once",
                            "commit_attempt_id": str(uuid4())}).encode("utf-8")
@@ -141,8 +184,8 @@ def _gateway() -> None:
         except socket.gaierror:
             continue
         raise RuntimeError("g3b_ci_gateway_network_leak:" + hostname)
-    print("G3B_GATEWAY_PASS inventory_commit=1 medusa_400=1 medusa_404=1 replay=denied "
-          "anonymous=denied execution_network=unreachable trusted_send=off")
+    print("G3B_GATEWAY_PASS unsigned_routes=20/20 inventory_commit=1 medusa_400=1 "
+          "medusa_404=1 replay=denied anonymous=denied execution_network=unreachable trusted_send=off")
 
 
 def _docker_json(*args: str):

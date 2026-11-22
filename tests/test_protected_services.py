@@ -198,3 +198,46 @@ def test_g3b_ci_signed_claims_are_pinned_and_short_lived():
     )
     assert payload["exp"] - payload["iat"] == 50
     assert len(base64.urlsafe_b64decode(signature + "=" * (-len(signature) % 4))) == 64
+
+
+def test_g3b_ci_twenty_signed_routes_have_distinct_live_probes():
+    """從原生三規格推導 20 個 HTTPS 探針，不把無 JWS 403 冒充原生業務錯誤。"""
+    import importlib.util
+
+    root = Path(__file__).resolve().parents[1]
+    path = root / "deploy/security-lab/g3b_ci_probe.py"
+    spec = importlib.util.spec_from_file_location("g3b_ci_probe_routes", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    cases = module._twenty_native_routes()
+    assert len(cases) == 20
+    assert all("{" not in module._probe_path(template) for _, _, template in cases)
+    assert {platform for platform, _, _ in cases} == {
+        "synthetic-inventory", "synthetic-carts", "medusa-native-cart",
+    }
+
+
+def test_g3b_ci_validator_ca_key_stays_distinct_from_server_key(tmp_path):
+    """真 OpenSSL 簽發第二張 Validator Client 憑證仍必須使用 CA key，不可誤用 Server key。"""
+    import importlib.util
+    import subprocess
+
+    root = Path(__file__).resolve().parents[1]
+    path = root / "deploy/security-lab/g3b_ci_prepare.py"
+    spec = importlib.util.spec_from_file_location("g3b_ci_prepare", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    (tmp_path / "secrets").mkdir()
+    (tmp_path / "probe").mkdir()
+    module._identity_material(tmp_path, {role: "postgresql://role.invalid/db" for role in (
+        "verifier", "inventory", "cart", "validator", "runtime")})
+    ca = tmp_path / "validator-ca/ca.pem"
+    for name in ("native-validator", "verifier-validator"):
+        cert = tmp_path / "validator-ca" / (name + ".pem")
+        result = subprocess.run(["openssl", "verify", "-CAfile", str(ca), str(cert)],
+                                capture_output=True, check=True, text=True)
+        assert result.stdout.strip().endswith(": OK")
+    assert (tmp_path / "secrets/g3b_native_validator_server_key").read_bytes() != (
+        tmp_path / "validator-ca/ca.key").read_bytes()

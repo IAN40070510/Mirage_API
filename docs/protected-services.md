@@ -149,6 +149,9 @@ Secret 列表；不替使用者準備正式環境密碼，不呼叫 staging／pr
 
 - 真實 CA／Client Certificate 握手後連到 Verifier，匿名拒絕；直接指定 Handler
   RPC 固定 503；Gateway 不能解析 Executor／Validator／DB 的私網 DNS。
+- 依三份固定 Registry 枚舉全部 20 路由的實際 HTTPS 無 JWS 請求，要求
+  20/20 均固定拒絕 403；這只證明可信入口不能略過 Session 驗證，**不能**
+  算作原生業務 200／400／404／409 相容證據。
 - 固定 Inventory Request 先驗缺 JWS／篡改／重放都被拒，再送原始 HTTP、
   產生 Proof、固定 Inventory Executor Commit 且只提交一次。
 - 對受保護衍生 Cart 發出 Medusa M-03 兩個固定 400／404 原因，必須由
