@@ -9,6 +9,9 @@ from types import MappingProxyType
 from uuid import UUID
 
 from deception.security.key_revocation import PostgresTrustedKeyRevocations
+from deception.security.operation_binding import (
+    VerifiedOperationBinding, decode_verified_inventory_mutation,
+)
 
 from .commit import CommitResult, validate_commit_metadata
 from .event_store import PostgresEventWorldStore, prepare_event_command
@@ -246,6 +249,46 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
                      request_fingerprint, read.source.state_version, read.source.state_hash),
                 )
                 return read
+
+    def commit_verified_inventory_http(
+        self, *, receipt_id: UUID, binding: SessionBinding,
+        authorized_scope: WorldScope, raw_path: bytes, raw_body: bytes,
+    ) -> CommitResult:
+        """僅按受保護 Receipt 的原始 HTTP Operation 決定庫存 Handler 與參數。
+
+        呼叫端不能指定 `operation`、`expected_version`、`idempotency_key` 或
+        `commit_attempt_id`，它們全由原始 body 模型還原。舊 Proof 沒有原始
+        path／Content-Type 時固定拒絕。Proof 不可變；實際提交仍由
+        `commit_event` 在新交易重查 Receipt／Read Source／Generation／Key。
+        獨立 mTLS 業務路由尚未啟用，不能把此 primitive 當作 HTTP 接線完成。
+        """
+        from deception.domains.ecommerce.inventory import SyntheticInventory
+
+        if not isinstance(receipt_id, UUID) or receipt_id.version != 4:
+            raise ProtectedGrantError("invalid_world_receipt_id")
+        if not isinstance(self._world_store, SyntheticInventory) or self._world_store.write_modes != frozenset({"inventory"}):
+            raise ProtectedGrantError("verified_inventory_handler_unavailable")
+        with self._connection() as connection:
+            row = connection.execute(
+                """SELECT platform,operation_id,method,path_template,request_fingerprint,
+                          request_body_sha256,request_path,request_content_type
+                   FROM protected_http_operation_bindings WHERE receipt_id=%s""",
+                (receipt_id,),
+            ).fetchone()
+        if row is None or row[6] is None:
+            raise ProtectedGrantError("verified_inventory_operation_proof_missing")
+        proof = VerifiedOperationBinding(*row)
+        mutation = decode_verified_inventory_mutation(
+            proof, raw_path=raw_path, raw_body=raw_body,
+        )
+        return self.commit_event(
+            receipt_id=receipt_id, binding=binding,
+            request_fingerprint=proof.request_fingerprint,
+            authorized_scope=authorized_scope, operation=mutation.operation,
+            command=mutation.command, expected_version=mutation.expected_version,
+            idempotency_key=mutation.idempotency_key,
+            commit_attempt_id=mutation.commit_attempt_id,
+        )
 
     def commit_event(self, *, receipt_id: UUID, binding: SessionBinding,
                      request_fingerprint: str, authorized_scope: WorldScope,

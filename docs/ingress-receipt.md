@@ -46,13 +46,26 @@ method／path_template、完整 Request Fingerprint 與 Body SHA-256；資料不
 不得以新服務 RPC 自動執行。此增量保留原本 `verified_request=None` 相容測試，
 但這種舊入口不具可信 Operation 權威。
 
-目前只支援 Synthetic Inventory/Cart，Medusa native mapping、URL/authority
-部署政策、固定 handler 與 RPC 消費端的交叉驗證仍未完成。**獨立 mTLS sealed
-服務不因本表存在就開放業務或 Trusted Send。**
+`024_verified_http_original_path.sql` 以新欄位保存原始精確路徑和原始
+Content-Type，**既有列不回填**，缺少新欄位即拒絕可執行操作。
+`PostgresProtectedWorldExecutor.commit_verified_inventory_http()` 是固定 Inventory
+業務 **Executor primitive**：由獨立 Executor Login 依 Receipt 查受保護的
+method／path／Operation／Body SHA-256，核對 RPC 提供的精確 raw path/body，
+固定 JSON schema 解析後，才由同一 Executor 的 `commit_event()` 檢查
+Receipt Scope、Key、Read Source、World Generation 並執行 `reserve` 或
+`cancel`。呼叫者沒有 Handler、Expected Version、Idempotency Key 或 Commit
+Attempt ID 的選擇權。重複 JSON key、擅改 body、URL 識別碼與 Legacy Receipt
+均 Fail-Closed；真正查回受保護 Proof 的 DB Login／ACL 是必要部署前提。
+
+**此 primitive 尚未成為 mTLS 的 HTTP 業務 RPC，固定 Cart／Order／Medusa Handler
+尚待接線**；當前 `create_sealed_app()` 的 execute endpoint 依舊回 503。
+格式不合法但需要 409／400／404 的請求尚無可 Promote 的獨立拒絕證據，
+不得把「拒絕執行」視為完整相容性 PASS。Verifier 的 URL/authority 入口政策
+及實體服務邊界仍待驗收。**獨立 mTLS sealed 服務不因本表存在就開放 Trusted Send。**
 
 驗證：`python -m pytest -q tests/test_operation_binding.py`；真實 PostgreSQL
 則以 `MIRAGE_POSTGRES_TEST_DSN` 執行
-`python -m pytest -q tests/test_ingress_receipts.py`。
+`python -m pytest -q tests/test_ingress_receipts.py tests/test_protected_world_executor.py`。
 
 - `tests/test_ingress_receipts.py`：完整 pytest／真實 PostgreSQL 隔離 Schema 測試（需 `MIRAGE_POSTGRES_TEST_DSN`）；未在本地執行，等待 CI。
 - `deploy/security-lab/receipt_atomic_probe.py`：不依賴 pytest 的獨立 Oracle PostgreSQL 17.6 探針；只有 `MIRAGE_LAB_EXPLICIT=mir-sec-world001-lab` 且固定專用 DB 身分、一次性新 Schema 才可執行。

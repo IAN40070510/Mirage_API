@@ -57,6 +57,14 @@
 不接受 Runtime 自填「verified」或另選 Handler。Medusa／固定 RPC 消費端
 尚未驗收，不能將表結構存在視為 G3b 整體 PASS。
 
+**下一增量：固定 Inventory Executor primitive**：`024_verified_http_original_path.sql`
+保留 Verifier 精確原始路徑／Content-Type，不對舊 Proof 補綁操作；
+`commit_verified_inventory_http()` 只從已鎖定 Receipt 對應的不可變
+Operation Proof 決定 Inventory reserve/cancel 的命令、資料與提交鍵，RPC
+呼叫端不能自填 Handler。新負面測試涵蓋替換 body、path、JSON key、舊 Receipt
+和真 PostgreSQL World 無副作用回滾。此方法**尚未接入 mTLS 服務端**，且
+Cart／Order／Medusa、完整合法拒絕回應與 Verifier 物理隔離均未驗收。
+
 Owner 已核准獨立 mTLS Trusted Service；`src/deception/security/protected_rpc.py`
 建立只允許 Client Certificate、預設 loopback 的封閉傳輸服務。
 未具證書拒絕 TLS 握手，具證書仍只能獲得 `sealed` 健康狀態，不能觸發業務；

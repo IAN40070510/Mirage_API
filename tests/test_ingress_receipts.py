@@ -83,10 +83,12 @@ def test_verified_http_operation_is_atomic_with_ingress_receipt(isolated_test_ds
     )
     with psycopg.connect(isolated_test_dsn) as connection:
         row = connection.execute(
-            """SELECT operation_id,method,path_template,request_fingerprint
+            """SELECT operation_id,method,path_template,request_fingerprint,
+                      request_path,request_content_type
                FROM protected_http_operation_bindings WHERE receipt_id=%s""", (receipt,),
         ).fetchone()
-        assert row == ("reserveSyntheticInventory", "POST", "/synthetic/inventory/reservations", fingerprint)
+        assert row == ("reserveSyntheticInventory", "POST", "/synthetic/inventory/reservations",
+                       fingerprint, request.path, "application/json")
     wrong_jti = uuid4().hex
     with pytest.raises(IngressReceiptError, match="fingerprint_mismatch"):
         verify_with_receipt(

@@ -3,7 +3,9 @@
 import time
 import os
 import secrets
+import json
 from copy import deepcopy
+from dataclasses import replace
 from uuid import uuid4
 
 import pytest
@@ -14,6 +16,10 @@ from deception.world import (CommitSource, SnapshotSource, PostgresCandidateProm
 from deception.world.session import SessionBinding
 from deception.world.transmission import response_envelope, response_hashes
 from deception.domains.ecommerce.carts import SyntheticCarts
+from deception.domains.ecommerce.inventory import SyntheticInventory
+from deception.api.fingerprint import fingerprint_request
+from deception.security.operation_binding import OperationBindingError, derive_verified_operation
+from test_operation_binding import original_request
 from test_postgres_conformance import (digest, isolated_test_dsn, projection_evidence)
 
 
@@ -90,6 +96,85 @@ def _candidate(dsn, *, scope, source, receipt_id, fingerprint,
         immutable_body_hash=hashes[1], semantic_headers_hash=hashes[2],
         evidence=evidence, source=source,
     )
+
+
+def test_inventory_http_proof_selects_handler_and_rejects_rpc_substitution(isolated_test_dsn):
+    """真 PostgreSQL 只准 Receipt 原始 Body 的預留事件，RPC 參數替換不能寫入 World。"""
+    import psycopg
+
+    dsn, now = isolated_test_dsn, int(time.time())
+    binding = SessionBinding(environment_id="inventory-http", deployment_id="isolated",
+                             session_id=uuid4().hex, session_epoch=1, access_mode="inventory")
+    store = SyntheticInventory(dsn)
+    snapshot = store.resolve(binding, {"inventory": {"sku-1": 4}, "reservations": {}},
+                             now=now, ttl=120)
+    body = json.dumps(dict(sku="sku-1", quantity=2, expected_version=1,
+                           idempotency_key="original-only", commit_attempt_id=str(uuid4()))).encode()
+    request = replace(original_request(), body=body)
+    proof = derive_verified_operation(request)
+    receipt_id, jti = uuid4(), uuid4().hex
+    with psycopg.connect(dsn) as connection:
+        connection.execute("INSERT INTO replay_entries VALUES ('gateway','mirage',%s,%s)",
+                           (jti, now + 120))
+        connection.execute(
+            """INSERT INTO ingress_receipts (
+                   receipt_id,issuer,audience,jti,key_id,environment_id,deployment_id,
+                   session_id,session_epoch,request_fingerprint,assessment_digest,
+                   claims_digest,verification_policy_version,token_issued_at,
+                   token_not_before,token_expires_at,access_mode)
+               VALUES (%s,'gateway','mirage',%s,%s,%s,%s,%s,1,%s,%s,%s,
+                       'trusted-session-v1.1',%s,%s,%s,'inventory')""",
+            (receipt_id, jti, "kid", binding.environment_id, binding.deployment_id,
+             binding.session_id, fingerprint_request(request), digest("b"), digest("c"),
+             now - 5, now - 5, now + 90),
+        )
+        connection.execute(
+            """INSERT INTO protected_http_operation_bindings (
+                   receipt_id,platform,operation_id,method,path_template,
+                   request_fingerprint,request_body_sha256,request_path,request_content_type)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+            (receipt_id, proof.platform, proof.operation_id, proof.method, proof.path_template,
+             proof.request_fingerprint, proof.request_body_sha256,
+             proof.request_path, proof.request_content_type),
+        )
+    executor = PostgresProtectedWorldExecutor(dsn, expected_login=_real_login(dsn), world_store=store)
+    executor.admit_read(receipt_id=receipt_id, binding=binding,
+                        request_fingerprint=proof.request_fingerprint, expires_at=now + 30)
+    args = dict(receipt_id=receipt_id, binding=binding, authorized_scope=snapshot.scope,
+                raw_path=request.raw_path, raw_body=request.body)
+    with pytest.raises(OperationBindingError, match="snapshot_mismatch"):
+        executor.commit_verified_inventory_http(**{**args, "raw_body": body.replace(b"sku-1", b"sku-2")})
+    with pytest.raises(OperationBindingError, match="snapshot_mismatch"):
+        executor.commit_verified_inventory_http(**{**args, "raw_path": b"/synthetic/other"})
+    with psycopg.connect(dsn) as connection:
+        assert connection.execute("SELECT version FROM world_snapshots WHERE world_generation_id=%s",
+                                  (snapshot.scope.world_generation_id,)).fetchone()[0] == 1
+    outcome = executor.commit_verified_inventory_http(**args)
+    assert outcome.status == "committed" and outcome.committed_state_version == 2
+    with psycopg.connect(dsn) as connection:
+        assert connection.execute("SELECT operation FROM world_operations WHERE commit_attempt_id=%s",
+                                  (outcome.commit_attempt_id,)).fetchone()[0] == "reserve"
+        assert connection.execute("SELECT count(*) FROM protected_world_commit_sources WHERE receipt_id=%s",
+                                  (receipt_id,)).fetchone()[0] == 1
+        assert connection.execute("SELECT state->'inventory'->>'sku-1' FROM world_snapshots WHERE world_generation_id=%s",
+                                  (snapshot.scope.world_generation_id,)).fetchone()[0] == "2"
+
+
+def test_inventory_http_legacy_receipt_cannot_select_operation(isolated_test_dsn):
+    """舊 Receipt 即使持有有效 Inventory Scope，缺原始 Operation Proof 就不能執行。"""
+    _, now = isolated_test_dsn, int(time.time())
+    binding = SessionBinding(environment_id="inventory-legacy", deployment_id="isolated",
+                             session_id=uuid4().hex, session_epoch=1, access_mode="inventory")
+    store = SyntheticInventory(isolated_test_dsn)
+    snapshot = store.resolve(binding, {"inventory": {"sku-1": 4}, "reservations": {}},
+                             now=now, ttl=120)
+    executor = PostgresProtectedWorldExecutor(isolated_test_dsn,
+                                               expected_login=_real_login(isolated_test_dsn), world_store=store)
+    with pytest.raises(ProtectedGrantError, match="operation_proof_missing"):
+        executor.commit_verified_inventory_http(
+            receipt_id=uuid4(), binding=binding, authorized_scope=snapshot.scope,
+            raw_path=b"/synthetic/inventory/reservations", raw_body=b"{}",
+        )
 
 
 def test_protected_cart_creator_receipt_mints_one_derived_scope(isolated_test_dsn):

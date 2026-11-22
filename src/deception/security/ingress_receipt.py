@@ -73,10 +73,11 @@ class PostgresIngressReceiptWriter:
             cursor.execute(
                 """INSERT INTO protected_http_operation_bindings (
                        receipt_id,platform,operation_id,method,path_template,
-                       request_fingerprint,request_body_sha256)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s)""",
+                       request_fingerprint,request_body_sha256,request_path,request_content_type)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                 (receipt_id, operation.platform, operation.operation_id,
                  operation.method, operation.path_template,
-                 operation.request_fingerprint, operation.request_body_sha256),
+                 operation.request_fingerprint, operation.request_body_sha256,
+                 operation.request_path, operation.request_content_type),
             )
         return receipt_id
