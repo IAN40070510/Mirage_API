@@ -249,12 +249,10 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
         """在專用 Executor 交易核准 Receipt Scope 和可驗證原生錯誤封套。"""
         status = 404 if reason == "native_variant_absent" else 400
         template = "native-cart-rejected" if status == 404 else "native-cart-invalid"
-        payload = ({"type": "not_found", "message": "The requested cart operation could not be completed."}
-                   if status == 404 else
-                   {"type": "invalid_data", "message": "The requested cart operation is not supported."})
-        body = json.dumps(payload, ensure_ascii=False, sort_keys=True,
-                          separators=(",", ":")).encode("utf-8")
-        envelope_hash = response_hashes(status, (("content-type", "application/json"),), body)[0]
+        from .protected_native_http import fixed_medusa_rejection_bytes
+
+        headers, body = fixed_medusa_rejection_bytes(status, template)
+        envelope_hash = response_hashes(status, headers, body)[0]
         with self._connection() as connection:
             with connection.cursor() as cursor:
                 cursor.execute("SET LOCAL lock_timeout='3s'")

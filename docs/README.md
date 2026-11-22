@@ -19,6 +19,8 @@
 | 工具／介面 | 程式位置 | 說明文件 |
 | --- | --- | --- |
 | 獨立受保護 mTLS RPC（sealed） | `src/deception/security/protected_rpc.py`、`tests/test_protected_rpc_mtls.py` | [雙向憑證、服務隔離、固定拒絕與未完成的業務接線](protected-rpc.md) |
+| G3b 獨立服務角色與固定路由 | `src/deception/security/protected_services.py`、`deploy/security-lab/g3b-compose.yaml`、`tests/test_protected_services.py` | [Verifier／Inventory／Cart 專用 Secret、真 Login／ACL Preflight 與仍未完成的可信原生 HTTP 接線](protected-services.md) |
+| Medusa 可信 400／404 原生候選投影（G3b 增量） | `src/deception/world/protected_native_http.py`、`migrations/027_protected_medusa_rejections.sql` | [從獨立拒絕來源重建精確 JSON／Envelope Hash，尚非 Sender](protected-services.md#原生-http-回應投影子切面) |
 | 受保護一次性 Send Lease／ASGI（G4 增量） | `src/deception/world/protected_send.py`、`migrations/025_protected_send_leases.sql`、`tests/test_protected_send.py` | [精確 Authorized Snapshot Pin、單次 Lease、ASGI 首訊息與仍未接線的 Restore Fence](protected-send.md) |
 | 獨立 HTTPX 請求摘要 | `src/deception/api/fingerprint.py` | [不依賴外部 Gateway 的客戶端摘要](trusted-session.md#獨立客戶端的請求摘要) |
 | 請求與驗證結果 Audit | `src/deception/world/request_audit.py`、`migrations/016_request_observations.sql` | [假名化觀察、原子 Grant 關聯與故障處理](request-audit.md) |

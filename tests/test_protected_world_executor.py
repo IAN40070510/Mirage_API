@@ -203,13 +203,17 @@ def test_inventory_http_legacy_receipt_cannot_select_operation(isolated_test_dsn
         )
 
 
-def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolated_test_dsn):
+def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolated_test_dsn, request, tmp_path):
     """真 PG：只有驗證原始 Medusa headers/Body 並查過世界的 400/404 能 Promote。"""
     import base64
     import psycopg
+    from psycopg import sql
+    from psycopg.conninfo import conninfo_to_dict, make_conninfo
     from fastapi.testclient import TestClient
 
     from deception.security.protected_rpc import create_fixed_executor_app
+    from deception.security.protected_services import create_native_validator_service
+    from deception.world.protected_native_http import PostgresProtectedNativeProjector
 
     dsn, now = isolated_test_dsn, int(time.time())
     creator = SessionBinding(environment_id="medusa-http", deployment_id="isolated",
@@ -339,6 +343,49 @@ def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolat
         assert accepted_404.status_code == 200
         assert accepted_404.json()["status_code"] == 404
         assert client.post("/internal/v1/execute", json=missing_wire).json() == accepted_404.json()
+    projector_dsn, projector_login = dsn, _real_login(dsn)
+    if os.environ.get("MIRAGE_WORLD_ROLE_TEST_ISOLATED") == "true":
+        # 僅限可拋棄的 CI PostgreSQL；正式 DB 禁止測試自行創建 Role。
+        schema = conninfo_to_dict(dsn)["options"].split("search_path=", 1)[1].split(" ", 1)[0]
+        projector_login = "mirage_g3b_validator_" + uuid4().hex[:12]
+        password = secrets.token_urlsafe(32)
+        with psycopg.connect(dsn, autocommit=True) as admin:
+            admin.execute(sql.SQL(
+                "CREATE ROLE {} LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE "
+                "NOREPLICATION NOBYPASSRLS PASSWORD {}"
+            ).format(sql.Identifier(projector_login), sql.Literal(password)))
+            admin.execute(sql.SQL("GRANT USAGE ON SCHEMA {} TO {}").format(
+                sql.Identifier(schema), sql.Identifier(projector_login)))
+            admin.execute(sql.SQL(
+                "GRANT SELECT ON protected_medusa_rejection_sources,ingress_receipts,"
+                "protected_http_operation_bindings,protected_world_read_sources,"
+                "read_admissions,session_heads,session_world_bindings,"
+                "generation_controls,trusted_key_revocations TO {}"
+            ).format(sql.Identifier(projector_login)))
+
+        def cleanup_validator_role():
+            """僅移除這筆測試產生的讀取專用角色，不影響既存部署身份。"""
+            with psycopg.connect(dsn, autocommit=True) as admin:
+                admin.execute(sql.SQL("DROP OWNED BY {}").format(sql.Identifier(projector_login)))
+                admin.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(projector_login)))
+
+        request.addfinalizer(cleanup_validator_role)
+        projector_dsn = make_conninfo(dsn, user=projector_login, password=password)
+        with psycopg.connect(projector_dsn) as isolated_validator:
+            assert isolated_validator.execute("SELECT session_user,current_user").fetchone() == (
+                projector_login, projector_login,
+            )
+            assert isolated_validator.execute(
+                "SELECT has_table_privilege('protected_medusa_rejection_sources','INSERT')"
+            ).fetchone() == (False,)
+        validator_dsn_file = tmp_path / "native-validator.dsn"
+        validator_dsn_file.write_text(projector_dsn, encoding="utf-8")
+        assert create_native_validator_service({
+            "MIRAGE_G3B_VALIDATOR_DSN_FILE": str(validator_dsn_file),
+            "MIRAGE_G3B_VALIDATOR_LOGIN": projector_login,
+            "MIRAGE_G3B_WORLD_SCHEMA": schema,
+        }).state is not None
+    projector = PostgresProtectedNativeProjector(projector_dsn, expected_login=projector_login)
     for receipt, proof, status, body, template in (
             (bad_receipt, bad_proof, 400,
              b'{"message":"The requested cart operation is not supported.","type":"invalid_data"}',
@@ -346,11 +393,20 @@ def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolat
             (missing_receipt, missing_proof, 404,
              b'{"message":"The requested cart operation could not be completed.","type":"not_found"}',
              "native-cart-rejected")):
+        projection = projector.project_medusa_rejection(receipt)
+        assert (projection.status_code, projection.body_bytes, projection.scope,
+                projection.request_fingerprint, projection.operation_id) == (
+            status, body, snapshot.scope, proof.request_fingerprint, "PostCartsIdLineItems",
+        )
+        assert projection.source == SecurityErrorSource(
+            template_id=template, contract_revision="medusa-cart-1",
+        )
         assert _candidate(dsn, scope=snapshot.scope,
-                          source=SecurityErrorSource(template_id=template,
-                                                     contract_revision="medusa-cart-1"),
-                          receipt_id=receipt, fingerprint=proof.request_fingerprint,
-                          status=status, body=body) == 1
+                          source=projection.source, receipt_id=projection.receipt_id,
+                          fingerprint=projection.request_fingerprint,
+                          status=projection.status_code, body=projection.body_bytes) == 1
+    with pytest.raises(ProtectedGrantError, match="native_source_missing"):
+        projector.project_medusa_rejection(uuid4())
     with psycopg.connect(dsn) as connection:
         assert connection.execute("SELECT status_code,reason_code,read_admission_id IS NOT NULL "
                                   "FROM protected_medusa_rejection_sources ORDER BY status_code").fetchall() == [

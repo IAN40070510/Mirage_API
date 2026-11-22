@@ -51,6 +51,7 @@ def _isolated_three_process_service_logins(dsn: str, request):
         pytest.skip("requires explicitly disposable PostgreSQL cluster for real login roles")
     import psycopg
     from psycopg import sql
+    from psycopg.conninfo import conninfo_to_dict
     from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
     schema = conninfo_to_dict(dsn)["options"].split("search_path=", 1)[1].split(" ", 1)[0]
@@ -335,7 +336,7 @@ def test_direct_verifier_dispatches_inventory_over_real_executor_mtls_once(isola
 
 
 def test_direct_verifier_medusa_400_over_real_executor_mtls(isolated_test_dsn, tmp_path):
-    """真雙程序：Medusa 原始金鑰與錯誤 Body 經 Fingerprint 鎖定後才建立可信 400。"""
+    """真三程序：Medusa 400 必須先有 Executor 來源再走另一 CA 的 Validator mTLS。"""
     import multiprocessing
     import ssl
     import time as clock
@@ -346,9 +347,12 @@ def test_direct_verifier_medusa_400_over_real_executor_mtls(isolated_test_dsn, t
 
     from deception.domains.ecommerce.carts import SyntheticCarts
     from deception.security.protected_rpc import (
-        FixedExecutorMTLSClient, create_fixed_executor_app, serve_fixed_executor_mtls,
+        FixedExecutorMTLSClient, FixedNativeValidatorMTLSClient,
+        create_fixed_executor_app, create_native_validator_app,
+        serve_fixed_executor_mtls, serve_native_validator_mtls,
     )
     from deception.world.protected_world import PostgresProtectedWorldExecutor
+    from deception.world.protected_native_http import PostgresProtectedNativeProjector
     from deception.world.session import SessionBinding
     from test_protected_rpc_mtls import _issue_mtls_certificates, _unused_local_port
 
@@ -391,12 +395,27 @@ def test_direct_verifier_medusa_400_over_real_executor_mtls(isolated_test_dsn, t
         creation_digest="d" * 64, ttl=120,
     )
     ca, server_cert, server_key, client_cert, client_key = _issue_mtls_certificates(tmp_path)
-    port = _unused_local_port()
+    validator_root = tmp_path / "validator-ca"
+    validator_root.mkdir()
+    validator_ca, validator_cert, validator_key, validator_client_cert, validator_client_key = (
+        _issue_mtls_certificates(validator_root))
+    assert validator_ca.read_bytes() != ca.read_bytes()
+    port, validator_port = _unused_local_port(), _unused_local_port()
+    while port == validator_port:
+        validator_port = _unused_local_port()
     worker = multiprocessing.Process(target=serve_fixed_executor_mtls, kwargs={
         "app": create_fixed_executor_app(executor=executor), "host": "127.0.0.1", "port": port,
         "server_cert": server_cert, "server_key": server_key, "verifier_client_ca": ca,
     })
+    validator_worker = multiprocessing.Process(target=serve_native_validator_mtls, kwargs={
+        "app": create_native_validator_app(projector=PostgresProtectedNativeProjector(
+            dsn, expected_login=login)),
+        "host": "127.0.0.1", "port": validator_port,
+        "server_cert": validator_cert, "server_key": validator_key,
+        "verifier_client_ca": validator_ca,
+    })
     worker.start()
+    validator_worker.start()
     try:
         context = ssl.create_default_context(cafile=str(ca))
         context.load_cert_chain(str(client_cert), str(client_key))
@@ -411,15 +430,36 @@ def test_direct_verifier_medusa_400_over_real_executor_mtls(isolated_test_dsn, t
                     clock.sleep(0.1)
             else:
                 pytest.fail("Medusa executor did not become ready")
+        validator_context = ssl.create_default_context(cafile=str(validator_ca))
+        validator_context.load_cert_chain(str(validator_client_cert), str(validator_client_key))
+        with httpx.Client(verify=validator_context, trust_env=False, timeout=1.0) as validator_mtls:
+            for _ in range(50):
+                try:
+                    assert validator_mtls.get(
+                        f"https://127.0.0.1:{validator_port}/internal/ready"
+                    ).status_code == 200
+                    break
+                except httpx.ConnectError:
+                    if not validator_worker.is_alive():
+                        pytest.fail("Medusa native validator terminated before readiness")
+                    clock.sleep(0.1)
+            else:
+                pytest.fail("Medusa native validator did not become ready")
         signer = Ed25519PrivateKey.generate()
         client = FixedExecutorMTLSClient(
             origin=f"https://127.0.0.1:{port}", client_cert=client_cert,
             client_key=client_key, server_ca=ca,
         )
+        native_client = FixedNativeValidatorMTLSClient(
+            origin=f"https://127.0.0.1:{validator_port}",
+            client_cert=validator_client_cert, client_key=validator_client_key,
+            server_ca=validator_ca,
+        )
         app = create_direct_verifier_app(
             verifier=verifier(dsn, {"old": signer}), postgres_dsn=dsn,
             environment_id="env", deployment_id="deploy",
             expected_issuer="gateway", expected_audience="mirage", executor_client=client,
+            native_validator_client=native_client,
         )
         path = "/store/carts/" + created.binding.resource_id + "/line-items"
         with TestClient(app, base_url="https://mirage.test") as gateway:
@@ -445,6 +485,9 @@ def test_direct_verifier_medusa_400_over_real_executor_mtls(isolated_test_dsn, t
             assert accepted.json()["executor_result"]["kind"] == "medusa_rejection"
             assert accepted.json()["executor_result"]["status_code"] == 400
             assert accepted.json()["executor_result"]["template_id"] == "native-cart-invalid"
+            assert accepted.json()["native_projection"]["status_code"] == 400
+            assert (accepted.json()["native_projection"]["envelope_hash"]
+                    == accepted.json()["executor_result"]["envelope_hash"])
             assert gateway.send(request).status_code == 403
         with psycopg.connect(dsn) as connection:
             assert connection.execute("SELECT status_code,reason_code FROM protected_medusa_rejection_sources"
@@ -455,11 +498,12 @@ def test_direct_verifier_medusa_400_over_real_executor_mtls(isolated_test_dsn, t
                                       ).fetchone()[0] == 1
             assert connection.execute("SELECT count(*) FROM world_events").fetchone()[0] == 0
     finally:
-        worker.terminate()
-        worker.join(timeout=5)
-        if worker.is_alive():
-            worker.kill()
-            worker.join(timeout=5)
+        for process in (worker, validator_worker):
+            process.terminate()
+            process.join(timeout=5)
+            if process.is_alive():
+                process.kill()
+                process.join(timeout=5)
 
 
 def test_three_process_gateway_verifier_executor_distinct_mtls_roots(isolated_test_dsn, tmp_path, request):
@@ -478,6 +522,8 @@ def test_three_process_gateway_verifier_executor_distinct_mtls_roots(isolated_te
         FixedExecutorMTLSClient, create_fixed_executor_app, serve_direct_verifier_mtls,
         serve_fixed_executor_mtls,
     )
+    from deception.security.protected_services import create_executor_service, create_verifier_service
+    from deception.security.protected_rpc import ProtectedRpcConfigurationError
     from deception.world.protected_world import PostgresProtectedWorldExecutor
     from deception.world.session import SessionBinding
     from test_protected_rpc_mtls import _issue_mtls_certificates, _unused_local_port
@@ -504,15 +550,54 @@ def test_three_process_gateway_verifier_executor_distinct_mtls_roots(isolated_te
     gateway_ca_root, executor_ca_root = tmp_path / "gateway-root", tmp_path / "executor-root"
     gateway_ca_root.mkdir()
     executor_ca_root.mkdir()
+    validator_ca_root = tmp_path / "validator-root"
+    validator_ca_root.mkdir()
     gateway_ca, verifier_cert, verifier_key, gateway_cert, gateway_key = _issue_mtls_certificates(
         gateway_ca_root)
     executor_ca, executor_cert, executor_key, verifier_client_cert, verifier_client_key = (
         _issue_mtls_certificates(executor_ca_root))
+    validator_ca, _, _, validator_client_cert, validator_client_key = (
+        _issue_mtls_certificates(validator_ca_root))
     assert gateway_ca.read_bytes() != executor_ca.read_bytes()
     verifier_port, executor_port = _unused_local_port(), _unused_local_port()
     while verifier_port == executor_port:
         executor_port = _unused_local_port()
     signer = Ed25519PrivateKey.generate()
+    verifier_dsn_file, executor_dsn_file = tmp_path / "verifier.dsn", tmp_path / "executor.dsn"
+    verifier_dsn_file.write_text(verifier_dsn, encoding="utf-8")
+    executor_dsn_file.write_text(executor_dsn, encoding="utf-8")
+    keys_file = tmp_path / "verifier-keys.json"
+    keys_file.write_text(json.dumps({"old": base64.b64encode(
+        signer.public_key().public_bytes_raw()).decode("ascii")}), encoding="utf-8")
+    verifier_config = {
+        "MIRAGE_G3B_VERIFIER_DSN_FILE": str(verifier_dsn_file),
+        "MIRAGE_G3B_VERIFIER_LOGIN": logins["verifier"][1],
+        "MIRAGE_G3B_ENVIRONMENT_ID": "env", "MIRAGE_G3B_DEPLOYMENT_ID": "deploy",
+        "MIRAGE_G3B_WORLD_SCHEMA": conninfo_to_dict(dsn)["options"].split("search_path=", 1)[1].split(" ", 1)[0],
+        "MIRAGE_G3B_EXPECTED_ISSUER": "gateway", "MIRAGE_G3B_EXPECTED_AUDIENCE": "mirage",
+        "MIRAGE_G3B_VERIFIER_KEYS_FILE": str(keys_file),
+        "MIRAGE_G3B_INVENTORY_EXECUTOR_ORIGIN": f"https://127.0.0.1:{executor_port}",
+        "MIRAGE_G3B_CART_EXECUTOR_ORIGIN": f"https://127.0.0.1:{executor_port}",
+        "MIRAGE_G3B_VERIFIER_CLIENT_CERT_FILE": str(verifier_client_cert),
+        "MIRAGE_G3B_VERIFIER_CLIENT_KEY_FILE": str(verifier_client_key),
+        "MIRAGE_G3B_EXECUTOR_SERVER_CA_FILE": str(executor_ca),
+        "MIRAGE_G3B_NATIVE_VALIDATOR_ORIGIN": "https://127.0.0.1:18445",
+        "MIRAGE_G3B_VERIFIER_VALIDATOR_CERT_FILE": str(validator_client_cert),
+        "MIRAGE_G3B_VERIFIER_VALIDATOR_KEY_FILE": str(validator_client_key),
+        "MIRAGE_G3B_NATIVE_VALIDATOR_SERVER_CA_FILE": str(validator_ca),
+    }
+    executor_config = {
+        "MIRAGE_G3B_EXECUTOR_DSN_FILE": str(executor_dsn_file),
+        "MIRAGE_G3B_EXECUTOR_LOGIN": executor_login,
+        "MIRAGE_G3B_EXECUTOR_PLATFORM": "synthetic-inventory",
+        "MIRAGE_G3B_WORLD_SCHEMA": verifier_config["MIRAGE_G3B_WORLD_SCHEMA"],
+    }
+    assert create_verifier_service(verifier_config).state is not None
+    assert create_executor_service(executor_config).state is not None
+    with pytest.raises(ProtectedRpcConfigurationError, match="physical_login_denied"):
+        create_executor_service({**executor_config, "MIRAGE_G3B_EXECUTOR_LOGIN": logins["runtime"][1]})
+    with pytest.raises(ProtectedRpcConfigurationError, match="required_acl_missing"):
+        create_executor_service({**executor_config, "MIRAGE_G3B_EXECUTOR_PLATFORM": "synthetic-carts"})
     executor_client = FixedExecutorMTLSClient(
         origin=f"https://127.0.0.1:{executor_port}", client_cert=verifier_client_cert,
         client_key=verifier_client_key, server_ca=executor_ca,
@@ -521,7 +606,7 @@ def test_three_process_gateway_verifier_executor_distinct_mtls_roots(isolated_te
         verifier=verifier(verifier_dsn, {"old": signer}), postgres_dsn=verifier_dsn,
         environment_id="env", deployment_id="deploy",
         expected_issuer="gateway", expected_audience="mirage",
-        executor_client=executor_client,
+        executor_clients={"synthetic-inventory": executor_client},
     )
     executor_worker = multiprocessing.Process(target=serve_fixed_executor_mtls, kwargs={
         "app": create_fixed_executor_app(executor=trusted_executor),
@@ -564,6 +649,8 @@ def test_three_process_gateway_verifier_executor_distinct_mtls_roots(isolated_te
                     clock.sleep(0.1)
             else:
                 pytest.fail("three-process verifier did not become ready")
+            assert gateway.post(f"https://127.0.0.1:{verifier_port}/synthetic/carts",
+                                json={}, headers={"x-request-id": "unwired-cart"}).status_code == 503
             body = json.dumps({"sku": "sku-1", "quantity": 2, "expected_version": 1,
                                "idempotency_key": "three-process-once",
                                "commit_attempt_id": str(uuid4())}).encode()

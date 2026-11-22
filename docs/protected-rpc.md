@@ -27,7 +27,10 @@ Client CA／DB SCRAM Role／網路來源。`FixedExecutorMTLSClient` 可由獨�
 Verifier 持專用 mTLS 憑證使用：驗證成功後只傳 Receipt ID／原始 Path／Body
 至已驗證主機名稱的 HTTPS Executor，完全不傳 Runtime 自選 Handler／Scope，
 並禁止 HTTPX 自動使用環境 Proxy。ACK 不明只回固定 503，**不重試副作用**。
-此函式目前沒有正式部署環境入口，不能視為 G3b 整體接線完成。
+此模組的 `from_environment()` 仍只啟動 sealed listener；新增的
+[`protected_services` 角色專用 CLI](protected-services.md) 才會依固定平台路由
+與獨立 SCRAM／Secret 掛載 Verifier／Executor，但尚未完成正式部署與
+可信客戶端 HTTP 回應驗收，不能視為 G3b 整體接線完成。
 
 ### G3b 固定 Executor HTTP（隔離增量）
 

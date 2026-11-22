@@ -29,6 +29,8 @@ Operation Proof 或 `SET ROLE` 成為 Executor。這是**實體登入及 ACL 的
 | 真 HTTPS Gateway→Verifier→Executor、互異 Client CA、拒絕重播／竄改 | 隔離 CI PASS | 僅實驗室傳輸子項 PASS |
 | 三個實體 PostgreSQL SCRAM Login、無跨角色 DML／SET ROLE | 隔離 CI PASS | 僅實驗室 ACL 子項 PASS |
 | 20 路由 Method／Path Template／Operation ID 與三份固定規格集合同步 | 逐路由 Parameterized Proof 單元測試 PASS | 僅靜態 Operation Mapping 子項 PASS；未證明每條真 JWS／mTLS／HTTP 結果 |
+| 可配置的隔離 Verifier／雙 Executor／Native Validator、專用 DSN Secret、Role／Schema／ACL 啟動檢查 | 已實作四角色啟動工廠與無公開埠的 Compose 範本；待部署級真容器驗證 | OPEN：程式入口不等於部署隔離簽核 |
+| Medusa M-03 特定 400／404 的原生 JSON 從獨立 Rejection Source 重建 | 已接入唯讀 Validator 投影原語、獨立 mTLS RPC；待真 PG／CA 回歸 | OPEN：Validator 對帳摘要不是客戶端 HTTP 發送授權 |
 | 正式獨立服務部署、Secret Mount／網路來源、無共享憑證可見性 | 未實測 | OPEN |
 | 20 條正式原生 2xx／4xx Payload 與獨立來源／Validator | 20 條均未具全套證據 | OPEN |
 | G3b 整體解封並移交 G4 Sender | 前述兩項未完成 | **NO-GO** |
@@ -50,7 +52,7 @@ Operation Proof 或 `SET ROLE` 成為 Executor。這是**實體登入及 ACL 的
 | C-09 | GET `/synthetic/carts/{cart_id}/operations/{attempt}` | 隔離 PASS | 受保護讀取 Admission | OPEN：200／409 原生封套 |
 | M-01 | POST `/store/carts` | 隔離 PASS | 尚未執行 Native 建立 | OPEN：200／400／404／409 |
 | M-02 | GET `/store/carts/{id}` | 隔離 PASS | 尚未執行 Native 讀取 | OPEN：200／400／404／409 |
-| M-03 | POST `/store/carts/{id}/line-items` | 隔離 PASS | 特定 400／404 受保護拒絕來源 | OPEN：200／409、其餘 400／404 情形 |
+| M-03 | POST `/store/carts/{id}/line-items` | 隔離 PASS | 特定 400／404 受保護拒絕來源／獨立 Validator mTLS 封套比對 | OPEN：正式 Client HTTP 400／404、200／409、其餘拒絕情形 |
 | M-04 | POST `/store/carts/{id}/line-items/{line_id}` | 隔離 PASS | 尚未執行 Native update | OPEN：200／400／404／409 |
 | M-05 | DELETE `/store/carts/{id}/line-items/{line_id}` | 隔離 PASS | 尚未執行 Native delete | OPEN：200／400／404／409 |
 | M-06 | POST `/store/carts/{id}/complete` | 隔離 PASS | 尚未執行 Native complete | OPEN：200／400／404／409 |

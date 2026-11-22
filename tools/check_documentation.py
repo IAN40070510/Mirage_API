@@ -10,6 +10,9 @@ ROOT = Path(__file__).resolve().parents[1]
 FUNCTION_ROOTS = ("src/deception", "mirage_validator", "tests", "tools", "integrations", "deploy/security-lab")
 GUIDES = {
     "protected_rpc_mtls": ("src/deception/security/protected_rpc.py", "docs/protected-rpc.md"),
+    "protected_g3b_service_bootstrap": ("src/deception/security/protected_services.py", "docs/protected-services.md"),
+    "protected_g3b_service_topology": ("deploy/security-lab/g3b-compose.yaml", "docs/protected-services.md"),
+    "protected_native_http_projection": ("src/deception/world/protected_native_http.py", "docs/protected-services.md"),
     "protected_send_lease": ("src/deception/world/protected_send.py", "docs/protected-send.md"),
     "httpx_fingerprint": ("src/deception/api/fingerprint.py", "docs/trusted-session.md"),
     "request_audit": ("src/deception/world/request_audit.py", "docs/request-audit.md"),

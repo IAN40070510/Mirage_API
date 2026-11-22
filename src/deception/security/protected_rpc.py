@@ -8,6 +8,8 @@ import json
 import os
 from pathlib import Path
 import ssl
+from types import MappingProxyType
+from typing import Mapping
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -41,6 +43,12 @@ class FixedExecutorCall(SyntheticModel):
     raw_path_b64: str = Field(min_length=4, max_length=4096)
     raw_body_b64: str = Field(max_length=1398108)
     original_http: FixedOriginalHTTP | None = None
+
+
+class FixedNativeProjectionCall(SyntheticModel):
+    """獨立 Validator 僅允許查不可變 Receipt，不接受 Runtime 候選 Status 或 Body。"""
+
+    receipt_id: UUID4
 
 
 class FixedExecutorMTLSClient:
@@ -111,6 +119,76 @@ class FixedExecutorMTLSClient:
                 or (result["kind"] == "cart_created" and result.get("status") != "committed")):
             raise ProtectedRpcConfigurationError("fixed_executor_result_binding_mismatch")
         return result
+
+
+class FixedNativeValidatorMTLSClient:
+    """Verifier 以第三條專用 mTLS 邊驗證受保護 Medusa 原生候選封套。"""
+
+    def __init__(self, *, origin: str, client_cert: Path, client_key: Path,
+                 server_ca: Path) -> None:
+        """固定 HTTPS Validator 身份與憑證，禁止 URL 帶路徑／Userinfo／明文。"""
+        parsed = urlsplit(origin) if isinstance(origin, str) else None
+        if (parsed is None or parsed.scheme != "https" or not parsed.hostname
+                or parsed.port is None or parsed.path not in {"", "/"}
+                or parsed.query or parsed.fragment or parsed.username or parsed.password):
+            raise ProtectedRpcConfigurationError("native_validator_origin_invalid")
+        require_mtls_files(server_cert=client_cert, server_key=client_key, client_ca=server_ca)
+        context = ssl.create_default_context(cafile=str(server_ca))
+        context.load_cert_chain(str(client_cert), str(client_key))
+        if not context.check_hostname or context.verify_mode != ssl.CERT_REQUIRED:
+            raise ProtectedRpcConfigurationError("native_validator_server_verification_required")
+        self._origin = origin.rstrip("/")
+        self._tls = context
+
+    async def project_receipt(self, *, receipt_id: UUID, operation_id: str,
+                              request_fingerprint: str, expected_status: int,
+                              expected_envelope_hash: str) -> dict[str, object]:
+        """只用受保護 Executor 結果綁定獨立投影，拒絕任何封套替換或非正規 Base64。"""
+        from deception.world.transmission import response_hashes
+
+        async with httpx.AsyncClient(verify=self._tls, trust_env=False, timeout=8.0) as client:
+            response = await client.post(
+                self._origin + "/internal/v1/project-medusa-rejection",
+                json={"receipt_id": str(receipt_id)},
+            )
+        if response.status_code != 200:
+            raise ProtectedRpcConfigurationError("native_validator_projection_unverifiable")
+        try:
+            result = json.loads(response.content, object_pairs_hook=unique_object,
+                                parse_constant=reject_constant)
+            if not isinstance(result, dict) or set(result) != {
+                    "receipt_id", "operation_id", "scope", "request_fingerprint",
+                    "status_code", "headers", "body_b64", "envelope_hash", "source",
+                    "trusted_send"}:
+                raise ValueError("native_validator_response_shape_invalid")
+            body = _canonical_base64(result["body_b64"], max_bytes=4096)
+            headers = result["headers"]
+            if (headers != [["content-type", "application/json"]]
+                    or result["receipt_id"] != str(receipt_id)
+                    or result["operation_id"] != operation_id
+                    or result["request_fingerprint"] != request_fingerprint
+                    or type(result["status_code"]) is not int
+                    or result["status_code"] != expected_status
+                    or expected_status not in {400, 404}
+                    or result["envelope_hash"] != expected_envelope_hash
+                    or result["trusted_send"] != "disabled"
+                    or result["source"] != {
+                        "kind": "security_error",
+                        "template_id": "native-cart-invalid" if expected_status == 400 else "native-cart-rejected",
+                        "contract_revision": "medusa-cart-1",
+                    }
+                    or not isinstance(result["scope"], dict)
+                    or set(result["scope"]) != {
+                        "environment_id", "deployment_id", "session_id", "world_generation_id"}
+                    or any(not isinstance(value, str) or not value for value in result["scope"].values())
+                    or response_hashes(expected_status, (("content-type", "application/json"),), body)[0]
+                    != expected_envelope_hash):
+                raise ValueError("native_validator_projection_binding_mismatch")
+        except (ValueError, KeyError, TypeError) as exc:
+            raise ProtectedRpcConfigurationError("native_validator_projection_binding_mismatch") from exc
+        return {"status_code": expected_status,
+                "envelope_hash": expected_envelope_hash,
+                "body_sha256": response_hashes(expected_status, (("content-type", "application/json"),), body)[1]}
 
 
 def _canonical_base64(raw: str, *, max_bytes: int) -> bytes:
@@ -196,10 +274,66 @@ def create_fixed_executor_app(*, executor) -> FastAPI:
     return app
 
 
+def create_native_validator_app(*, projector) -> FastAPI:
+    """在專用 Validator mTLS 入口重建受保護的 Medusa 原生拒絕候選。
+
+    只接受 Receipt，不接受 Caller 指定模板、Scope、Status 或 Payload。
+    回傳的是內部候選交接資料，**不能**作為已授權的客戶端 HTTP 回應。
+    """
+    from deception.world.protected_native_http import PostgresProtectedNativeProjector
+
+    if not isinstance(projector, PostgresProtectedNativeProjector):
+        raise ProtectedRpcConfigurationError("native_validator_requires_protected_projector")
+    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+
+    @app.get("/internal/ready")
+    async def ready() -> dict[str, str]:
+        """只回報 Validator 已掛載且 Sender 關閉，不承諾來源或 Profile 已核准。"""
+        return {"control_plane": "native-validator-candidate-only", "trusted_send": "disabled"}
+
+    @app.post("/internal/v1/project-medusa-rejection")
+    async def project(request: Request) -> dict[str, object]:
+        """將精確 Receipt 的受保護 Read／Rejection 轉成不可直接發送的 JSON 封套。"""
+        if request.scope.get("scheme") != "https":
+            raise HTTPException(status_code=503, detail="native_validator_tls_required")
+        received = bytearray()
+        async for chunk in request.stream():
+            if len(received) + len(chunk) > 1024:
+                raise HTTPException(status_code=413, detail="native_validator_request_too_large")
+            received.extend(chunk)
+        try:
+            parsed = json.loads(received, object_pairs_hook=unique_object,
+                                parse_constant=reject_constant)
+            if not isinstance(parsed, dict):
+                raise ValueError("native_validator_object_required")
+            call = FixedNativeProjectionCall.model_validate_json(received)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="native_validator_request_invalid") from exc
+        try:
+            projected = projector.project_medusa_rejection(UUID(str(call.receipt_id)))
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="native_validator_source_unverifiable") from exc
+        return {
+            "receipt_id": str(projected.receipt_id), "operation_id": projected.operation_id,
+            "scope": projected.scope.model_dump(),
+            "request_fingerprint": projected.request_fingerprint,
+            "status_code": projected.status_code,
+            "headers": list(projected.headers),
+            "body_b64": base64.b64encode(projected.body_bytes).decode("ascii"),
+            "envelope_hash": projected.envelope_hash,
+            "source": projected.source.model_dump(),
+            "trusted_send": "disabled",
+        }
+
+    return app
+
+
 def create_direct_verifier_app(
     *, verifier, postgres_dsn: str, environment_id: str, deployment_id: str,
     expected_issuer: str, expected_audience: str,
     executor_client: FixedExecutorMTLSClient | None = None,
+    executor_clients: Mapping[str, FixedExecutorMTLSClient] | None = None,
+    native_validator_client: FixedNativeValidatorMTLSClient | None = None,
 ) -> FastAPI:
     """在獨立 Gateway mTLS 入口由實際 HTTP 訊息建立受保護 Operation Receipt。
 
@@ -214,6 +348,17 @@ def create_direct_verifier_app(
         raise ProtectedRpcConfigurationError("direct_verifier_requires_trusted_verifier")
     if executor_client is not None and not isinstance(executor_client, FixedExecutorMTLSClient):
         raise ProtectedRpcConfigurationError("direct_verifier_executor_client_invalid")
+    if executor_client is not None and executor_clients is not None:
+        raise ProtectedRpcConfigurationError("direct_verifier_executor_routes_ambiguous")
+    if native_validator_client is not None and not isinstance(native_validator_client, FixedNativeValidatorMTLSClient):
+        raise ProtectedRpcConfigurationError("direct_verifier_native_validator_invalid")
+    if executor_clients is not None and (
+            not isinstance(executor_clients, Mapping) or not executor_clients
+            or any(platform not in {"synthetic-inventory", "synthetic-carts", "medusa-native-cart"}
+                   or not isinstance(client, FixedExecutorMTLSClient)
+                   for platform, client in executor_clients.items())):
+        raise ProtectedRpcConfigurationError("direct_verifier_executor_routes_invalid")
+    fixed_clients = MappingProxyType(dict(executor_clients or {}))
     if not isinstance(postgres_dsn, str) or not postgres_dsn.strip():
         raise ProtectedRpcConfigurationError("direct_verifier_requires_db")
     if any(not isinstance(value, str) or not 1 <= len(value) <= 128 for value in (
@@ -224,7 +369,7 @@ def create_direct_verifier_app(
     @app.get("/internal/ready")
     async def ready() -> dict[str, str]:
         """只證明內部 Verifier HTTP Listener 存活，正式發送仍封閉。"""
-        return {"control_plane": "verifier-dispatch" if executor_client else "verifier-only",
+        return {"control_plane": "verifier-dispatch" if executor_client or fixed_clients else "verifier-only",
                 "trusted_send": "disabled"}
 
     @app.post("/internal/v1/execute")
@@ -250,6 +395,9 @@ def create_direct_verifier_app(
         normalized = await normalize_request(request, resolve_request_id(request))
         try:
             operation = derive_verified_operation(normalized)
+            if fixed_clients and operation.platform not in fixed_clients:
+                raise HTTPException(status_code=503,
+                                    detail="direct_verifier_executor_platform_unavailable")
             tokens = [value for name, value in normalized.headers
                       if name.lower() == "x-trusted-session"]
             if len(tokens) != 1 or not tokens[0]:
@@ -269,9 +417,10 @@ def create_direct_verifier_app(
             raise HTTPException(status_code=403, detail="direct_verifier_request_denied") from exc
         # 已建立 Receipt 後的 RPC 結果不明，不能重新消費 JTI 或盲目重執行。
         outcome = None
-        if executor_client is not None:
+        selected_client = (fixed_clients.get(operation.platform) if fixed_clients else executor_client)
+        if selected_client is not None:
             try:
-                outcome = await executor_client.execute_receipt(
+                outcome = await selected_client.execute_receipt(
                     receipt_id=receipt_id, operation_id=operation.operation_id,
                     raw_path=normalized.raw_path, raw_body=normalized.body,
                     original_request=normalized,
@@ -279,11 +428,28 @@ def create_direct_verifier_app(
             except Exception as exc:
                 raise HTTPException(status_code=503,
                                     detail="direct_verifier_executor_unverifiable") from exc
+        projection = None
+        if isinstance(outcome, dict) and outcome.get("kind") == "medusa_rejection":
+            if native_validator_client is None:
+                raise HTTPException(status_code=503,
+                                    detail="direct_verifier_native_validator_not_wired")
+            try:
+                projection = await native_validator_client.project_receipt(
+                    receipt_id=receipt_id, operation_id=operation.operation_id,
+                    request_fingerprint=fingerprint_request(normalized),
+                    expected_status=outcome["status_code"],
+                    expected_envelope_hash=outcome["envelope_hash"],
+                )
+            except Exception as exc:
+                raise HTTPException(status_code=503,
+                                    detail="direct_verifier_native_projection_unverifiable") from exc
         # 不能在 HTTP 回應暴露已驗證 claims 或受保護 DB Secret；此結果非 Sender。
         result: dict[str, object] = {"receipt_id": str(receipt_id),
                                      "operation_id": operation.operation_id}
         if outcome is not None:
             result["executor_result"] = outcome
+        if projection is not None:
+            result["native_projection"] = projection
         return result
 
     return app
@@ -396,6 +562,29 @@ def serve_fixed_executor_mtls(
     )
     if config.ssl_cert_reqs is not ssl.CERT_REQUIRED:
         raise ProtectedRpcConfigurationError("fixed_executor_mtls_not_required")
+    uvicorn.Server(config).run()
+
+
+def serve_native_validator_mtls(
+    *, app: FastAPI, host: str, port: int, server_cert: Path,
+    server_key: Path, verifier_client_ca: Path,
+) -> None:
+    """以獨立 Validator Server TLS 與專屬 Verifier Client CA 啟動只讀候選入口。"""
+    if not isinstance(app, FastAPI):
+        raise ProtectedRpcConfigurationError("native_validator_app_required")
+    require_mtls_files(server_cert=server_cert, server_key=server_key,
+                       client_ca=verifier_client_ca)
+    if not isinstance(host, str) or not host or type(port) is not int or not 1 <= port <= 65535:
+        raise ProtectedRpcConfigurationError("native_validator_bind_invalid")
+    config = uvicorn.Config(
+        app, host=host, port=port,
+        ssl_certfile=str(server_cert), ssl_keyfile=str(server_key),
+        ssl_ca_certs=str(verifier_client_ca), ssl_cert_reqs=ssl.CERT_REQUIRED,
+        ssl_version=ssl.PROTOCOL_TLS_SERVER, http="h11", log_level="warning",
+        proxy_headers=False, access_log=False,
+    )
+    if config.ssl_cert_reqs is not ssl.CERT_REQUIRED:
+        raise ProtectedRpcConfigurationError("native_validator_mtls_not_required")
     uvicorn.Server(config).run()
 
 
