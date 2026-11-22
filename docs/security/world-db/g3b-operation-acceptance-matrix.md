@@ -7,6 +7,13 @@
 Promotion、Authorized Snapshot、Send Lease 已真正完成。以下沒有一條路由
 取得正式 G3b 全操作端到端 PASS。
 
+**傳輸子項實測**：固定程式 SHA `cb3e8a6a7d218e7f2144ba0d8ea641486e987898`，
+[PostgreSQL 17.6 CI 45056622731](https://github.com/IAN40070510/Mirage_API/actions/runs/45056622731)
+`65 passed`、實體 mTLS `4 passed`；
+[容器 CI 45056622629](https://github.com/IAN40070510/Mirage_API/actions/runs/45056622629)
+`success`。新增真三程序 Gateway→Verifier→Executor 及不同 CA 互相拒絕測試，
+不等於獨立 DB Login 或正式部署 Secret／路由權威通過。
+
 | 編號 | 實際方法／路由 | 來源 Proof | 固定 Executor | 2xx／4xx 完整相容簽收 |
 | --- | --- | --- | --- | --- |
 | I-01 | POST `/synthetic/inventory/reservations` | 隔離 PASS | 受保護 reserve；單一 Receipt Commit | OPEN：尚無可信原生回應 Payload／Validator |

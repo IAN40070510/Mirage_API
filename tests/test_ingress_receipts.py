@@ -2,6 +2,8 @@
 
 import base64
 import hashlib
+import os
+import secrets
 import time
 from uuid import uuid4
 
@@ -36,6 +38,77 @@ def signed(key, *, jti: str, reference_time: int | None = None,
     prefix = encode(dict(alg="Ed25519", kid="old", protocol_version="1.1",
                          typ="mirage-trusted-session+jwt")) + "." + encode(claims)
     return prefix + "." + base64.urlsafe_b64encode(key.sign(prefix.encode())).decode().rstrip("=")
+
+
+def _isolated_three_process_service_logins(dsn: str, request):
+    """只在拋棄式 CI PG 建立 Verifier／Executor／Runtime 真 SCRAM Login 與窄授權。
+
+    Login 彼此不繼承，Verifier 僅能建 Replay／Receipt／Operation Proof；
+    Executor 僅能查受保護來源及提交固定世界，Runtime 沒有敏感表 DML。
+    以 pytest finalizer 確保失敗也會清除專用 Role，不碰現有正式帳號。
+    """
+    if os.environ.get("MIRAGE_WORLD_ROLE_TEST_ISOLATED") != "true":
+        pytest.skip("requires explicitly disposable PostgreSQL cluster for real login roles")
+    import psycopg
+    from psycopg import sql
+    from psycopg.conninfo import conninfo_to_dict, make_conninfo
+
+    schema = conninfo_to_dict(dsn)["options"].split("search_path=", 1)[1].split(" ", 1)[0]
+    suffix = uuid4().hex[:12]
+    users = {role: (f"mirage_g3b_{role}_{suffix}", secrets.token_urlsafe(32))
+             for role in ("verifier", "executor", "runtime")}
+    with psycopg.connect(dsn, autocommit=True) as admin:
+        for name, password in users.values():
+            admin.execute(sql.SQL(
+                "CREATE ROLE {} LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE "
+                "NOREPLICATION NOBYPASSRLS PASSWORD {}"
+            ).format(sql.Identifier(name), sql.Literal(password)))
+            admin.execute(sql.SQL("GRANT USAGE ON SCHEMA {} TO {}").format(
+                sql.Identifier(schema), sql.Identifier(name)))
+        verifier_role = sql.Identifier(users["verifier"][0])
+        executor_role = sql.Identifier(users["executor"][0])
+        admin.execute(sql.SQL(
+            "GRANT SELECT ON trusted_key_revocations,replay_entries,ingress_receipts "
+            "TO {}"
+        ).format(verifier_role))
+        admin.execute(sql.SQL(
+            "GRANT INSERT ON replay_entries,ingress_receipts,protected_http_operation_bindings "
+            "TO {}"
+        ).format(verifier_role))
+        admin.execute(sql.SQL(
+            "GRANT SELECT ON ingress_receipts,protected_http_operation_bindings,"
+            "session_heads,session_world_bindings,generation_controls,trusted_key_revocations,"
+            "world_snapshots,world_operations,read_admissions,protected_world_read_sources,"
+            "protected_world_commit_sources TO {}"
+        ).format(executor_role))
+        admin.execute(sql.SQL(
+            "GRANT UPDATE ON session_heads,session_world_bindings,generation_controls,"
+            "world_snapshots TO {}"
+        ).format(executor_role))
+        admin.execute(sql.SQL(
+            "GRANT INSERT ON read_admissions,protected_world_read_sources,world_operations,"
+            "world_events,world_commit_receipts,protected_world_commit_sources TO {}"
+        ).format(executor_role))
+        admin.execute(sql.SQL(
+            "GRANT EXECUTE ON FUNCTION protected_lock_reference(text,jsonb) TO {}"
+        ).format(executor_role))
+        for name, _ in users.values():
+            row = admin.execute(
+                "SELECT rolpassword LIKE 'SCRAM-SHA-256$%' FROM pg_authid WHERE rolname=%s",
+                (name,),
+            ).fetchone()
+            assert row == (True,), "isolated service login must use SCRAM-SHA-256"
+
+    def cleanup_roles():
+        """使用同一拋棄式管理 DSN 僅撤銷並移除本測試創建的三個 Login。"""
+        with psycopg.connect(dsn, autocommit=True) as admin:
+            for name, _ in users.values():
+                admin.execute(sql.SQL("DROP OWNED BY {}").format(sql.Identifier(name)))
+                admin.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(name)))
+
+    request.addfinalizer(cleanup_roles)
+    return {role: (make_conninfo(dsn, user=name, password=password), name)
+            for role, (name, password) in users.items()}
 
 
 def verify_with_receipt(checker, token, writer, *, now: int | None = None,
@@ -389,8 +462,8 @@ def test_direct_verifier_medusa_400_over_real_executor_mtls(isolated_test_dsn, t
             worker.join(timeout=5)
 
 
-def test_three_process_gateway_verifier_executor_distinct_mtls_roots(isolated_test_dsn, tmp_path):
-    """真三程序與兩條獨立 CA：原始 HTTP Gateway 不經 Runtime 建立 Proof 並固定執行一次。"""
+def test_three_process_gateway_verifier_executor_distinct_mtls_roots(isolated_test_dsn, tmp_path, request):
+    """真三程序／CA／SCRAM：Gateway 原始 HTTP 不經 Runtime 建 Proof 並執行一次。"""
     import json
     import multiprocessing
     import ssl
@@ -398,6 +471,7 @@ def test_three_process_gateway_verifier_executor_distinct_mtls_roots(isolated_te
 
     import httpx
     import psycopg
+    from psycopg import sql
 
     from deception.domains.ecommerce.inventory import SyntheticInventory
     from deception.security.protected_rpc import (
@@ -414,9 +488,19 @@ def test_three_process_gateway_verifier_executor_distinct_mtls_roots(isolated_te
     world = SyntheticInventory(dsn)
     snapshot = world.resolve(binding, {"inventory": {"sku-1": 5}, "reservations": {}},
                              now=now, ttl=120)
-    with psycopg.connect(dsn) as connection:
-        login = connection.execute("SELECT session_user").fetchone()[0]
-    trusted_executor = PostgresProtectedWorldExecutor(dsn, expected_login=login, world_store=world)
+    logins = _isolated_three_process_service_logins(dsn, request)
+    executor_dsn, executor_login = logins["executor"]
+    verifier_dsn, _ = logins["verifier"]
+    with psycopg.connect(verifier_dsn) as verifier_connection:
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            verifier_connection.execute("SELECT * FROM protected_world_commit_sources LIMIT 0")
+    with psycopg.connect(executor_dsn) as executor_connection:
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            executor_connection.execute("INSERT INTO ingress_receipts DEFAULT VALUES")
+    trusted_executor = PostgresProtectedWorldExecutor(
+        executor_dsn, expected_login=executor_login,
+        world_store=SyntheticInventory(executor_dsn),
+    )
     gateway_ca_root, executor_ca_root = tmp_path / "gateway-root", tmp_path / "executor-root"
     gateway_ca_root.mkdir()
     executor_ca_root.mkdir()
@@ -434,7 +518,7 @@ def test_three_process_gateway_verifier_executor_distinct_mtls_roots(isolated_te
         client_key=verifier_client_key, server_ca=executor_ca,
     )
     verifier_app = create_direct_verifier_app(
-        verifier=verifier(dsn, {"old": signer}), postgres_dsn=dsn,
+        verifier=verifier(verifier_dsn, {"old": signer}), postgres_dsn=verifier_dsn,
         environment_id="env", deployment_id="deploy",
         expected_issuer="gateway", expected_audience="mirage",
         executor_client=executor_client,
@@ -523,6 +607,13 @@ def test_three_process_gateway_verifier_executor_distinct_mtls_roots(isolated_te
                                       ).fetchone()[0] == 1
             assert connection.execute("SELECT count(*) FROM protected_world_commit_sources"
                                       ).fetchone()[0] == 1
+        with psycopg.connect(logins["runtime"][0]) as runtime:
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                runtime.execute("INSERT INTO protected_http_operation_bindings(receipt_id) VALUES (%s)",
+                                (uuid4(),))
+        with psycopg.connect(logins["runtime"][0]) as runtime:
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                runtime.execute(sql.SQL("SET ROLE {}").format(sql.Identifier(executor_login)))
     finally:
         for worker in (verifier_worker, executor_worker):
             worker.terminate()
