@@ -57,8 +57,21 @@ Receipt Scope、Key、Read Source、World Generation 並執行 `reserve` 或
 Attempt ID 的選擇權。重複 JSON key、擅改 body、URL 識別碼與 Legacy Receipt
 均 Fail-Closed；真正查回受保護 Proof 的 DB Login／ACL 是必要部署前提。
 
-**此 primitive 尚未成為 mTLS 的 HTTP 業務 RPC，固定 Cart／Order／Medusa Handler
-尚待接線**；當前 `create_sealed_app()` 的 execute endpoint 依舊回 503。
+`commit_verified_cart_http()` 現在亦涵蓋合成 Cart／Order 的五種受保護
+寫入事件（add／update／remove／complete／cancel_order）：從已綁 Receipt 的
+Operation ID、原始 Path、嚴格 Body 與原始 Cart/Order Resource ID 推導唯一
+事件，絕不使用 RPC 提供的 action。合法省略 `commit_attempt_id` 時，
+用 Receipt 生成穩定 UUIDv4，避免再次呼叫時產生不同副作用。
+`_verify_receipt` 額外要求 Cart／Order 目標具有可信 Creator Lineage 和
+實際 `synthetic_resources` 對應，舊 Runtime 創建的 Cart 不能取得可信
+Read Source，也就不能借用既有 Candidate Promotion 路徑。
+
+Medusa 的七個本地核准路由現從 SHA-256 固定的官方 OpenAPI 來源載入
+Operation 身分，**這只有 Verifier 綁定證據、沒有開啟 Medusa 事件執行**。
+合成 `createGuestCart`／GET 的固定 RPC、Medusa 原生表頭／身份與
+400／404／409 拒絕來源仍未驗收。
+**上述 primitive 尚未成為 mTLS 的 HTTP 業務 RPC**；當前
+`create_sealed_app()` 的 execute endpoint 依舊回 503。
 格式不合法但需要 409／400／404 的請求尚無可 Promote 的獨立拒絕證據，
 不得把「拒絕執行」視為完整相容性 PASS。Verifier 的 URL/authority 入口政策
 及實體服務邊界仍待驗收。**獨立 mTLS sealed 服務不因本表存在就開放 Trusted Send。**

@@ -177,6 +177,136 @@ def test_inventory_http_legacy_receipt_cannot_select_operation(isolated_test_dsn
         )
 
 
+def test_cart_http_verified_receipt_drives_real_fixed_world_handler(isolated_test_dsn):
+    """真 PostgreSQL Cart 派生 Scope 與固定 add Handler 一致，重送／換品項／換資源不能再寫入。"""
+    import psycopg
+
+    dsn, now = isolated_test_dsn, int(time.time())
+    creator = SessionBinding(environment_id="cart-http", deployment_id="isolated",
+                             session_id=uuid4().hex, session_epoch=1, access_mode="cart")
+    store = SyntheticCarts(dsn)
+    catalog = {"v1": {"sku": "sku-1", "unit_price": 100}}
+    inventory = {"sku-1": 6}
+    store.resolve(creator, {"catalog": catalog, "inventory": inventory,
+                            "reservations": {}}, now=now, ttl=180)
+    creator_receipt, creator_jti = uuid4(), uuid4().hex
+    with psycopg.connect(dsn) as connection:
+        connection.execute("INSERT INTO replay_entries VALUES ('gateway','mirage',%s,%s)",
+                           (creator_jti, now + 120))
+        connection.execute(
+            """INSERT INTO ingress_receipts (
+                   receipt_id,issuer,audience,jti,key_id,environment_id,deployment_id,
+                   session_id,session_epoch,request_fingerprint,assessment_digest,
+                   claims_digest,verification_policy_version,token_issued_at,
+                   token_not_before,token_expires_at,access_mode)
+               VALUES (%s,'gateway','mirage',%s,'kid',%s,%s,%s,1,%s,%s,%s,
+                       'trusted-session-v1.1',%s,%s,%s,'cart')""",
+            (creator_receipt, creator_jti, creator.environment_id, creator.deployment_id,
+             creator.session_id, digest("a"), digest("b"), digest("c"),
+             now - 5, now - 5, now + 90),
+        )
+    executor = PostgresProtectedWorldExecutor(dsn, expected_login=_real_login(dsn),
+                                               world_store=store,
+                                               cart_initial_state={"catalog": catalog, "inventory": inventory})
+    created = executor.create_cart(receipt_id=creator_receipt, creator=creator,
+                                   request_fingerprint=digest("a"), idempotency_key=uuid4(),
+                                   commit_attempt_id=uuid4(), creation_digest=digest("d"), ttl=180)
+    binding = created.binding
+    snapshot = store.inspect_binding(binding, now=now)
+    path = "/synthetic/carts/" + binding.resource_id + "/line-items"
+    body = json.dumps(dict(variant_id="v1", quantity=2, expected_version=1,
+                           idempotency_key="single-add")).encode()
+    request = replace(original_request(path=path), body=body)
+    proof = derive_verified_operation(request)
+    receipt, jti = uuid4(), uuid4().hex
+    with psycopg.connect(dsn) as connection:
+        connection.execute("INSERT INTO replay_entries VALUES ('gateway','mirage',%s,%s)",
+                           (jti, now + 120))
+        connection.execute(
+            """INSERT INTO ingress_receipts (
+                   receipt_id,issuer,audience,jti,key_id,environment_id,deployment_id,
+                   session_id,session_epoch,request_fingerprint,assessment_digest,
+                   claims_digest,verification_policy_version,token_issued_at,
+                   token_not_before,token_expires_at,access_mode,resource_id)
+               VALUES (%s,'gateway','mirage',%s,'kid',%s,%s,%s,1,%s,%s,%s,
+                       'trusted-session-v1.1',%s,%s,%s,'cart',%s)""",
+            (receipt, jti, binding.environment_id, binding.deployment_id,
+             binding.session_id, proof.request_fingerprint, digest("b"), digest("c"),
+             now - 5, now - 5, now + 90, binding.resource_id),
+        )
+        connection.execute(
+            """INSERT INTO protected_http_operation_bindings (
+                   receipt_id,platform,operation_id,method,path_template,
+                   request_fingerprint,request_body_sha256,request_path,request_content_type)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+            (receipt, proof.platform, proof.operation_id, proof.method, proof.path_template,
+             proof.request_fingerprint, proof.request_body_sha256,
+             proof.request_path, proof.request_content_type),
+        )
+    executor.admit_read(receipt_id=receipt, binding=binding,
+                        request_fingerprint=proof.request_fingerprint, expires_at=now + 30)
+    args = dict(receipt_id=receipt, binding=binding, authorized_scope=snapshot.scope,
+                raw_path=request.raw_path, raw_body=request.body)
+    with pytest.raises(OperationBindingError, match="snapshot_mismatch"):
+        executor.commit_verified_cart_http(**{**args, "raw_body": body.replace(b'"v1"', b'"v2"')})
+    with pytest.raises(OperationBindingError, match="resource_denied"):
+        executor.commit_verified_cart_http(**{**args, "binding": binding.model_copy(
+            update={"resource_id": "cart_" + "f" * 32})})
+    outcome = executor.commit_verified_cart_http(**args)
+    assert outcome.status == "committed" and outcome.committed_state_version == 2
+    assert executor.commit_verified_cart_http(**args).status == "already_committed"
+    with psycopg.connect(dsn) as connection:
+        assert connection.execute("SELECT operation FROM world_operations WHERE commit_attempt_id=%s",
+                                  (outcome.commit_attempt_id,)).fetchone()[0] == "cart.add"
+        assert connection.execute("SELECT count(*) FROM protected_world_commit_sources WHERE receipt_id=%s",
+                                  (receipt,)).fetchone()[0] == 1
+        row = connection.execute("SELECT state->'cart'->'items' FROM world_snapshots WHERE world_generation_id=%s",
+                                 (snapshot.scope.world_generation_id,)).fetchone()[0]
+        assert len(row) == 1 and next(iter(row.values()))["quantity"] == 2
+
+
+def test_untrusted_legacy_cart_cannot_enter_verified_http_executor(isolated_test_dsn):
+    """即使舊 Cart World 有有效資源映射，缺 Creator 的受保護 Lineage 不得成為 RPC 目標。"""
+    import psycopg
+
+    dsn, now = isolated_test_dsn, int(time.time())
+    creator = SessionBinding(environment_id="legacy-cart", deployment_id="isolated",
+                             session_id=uuid4().hex, session_epoch=1, access_mode="cart")
+    store = SyntheticCarts(dsn)
+    catalog = {"v1": {"sku": "sku-1", "unit_price": 100}}
+    inventory = {"sku-1": 6}
+    store.resolve(creator, {"catalog": catalog, "inventory": inventory,
+                            "reservations": {}}, now=now, ttl=180)
+    created = store.create_cart(creator, catalog=catalog, inventory=inventory,
+                                idempotency_key=uuid4(), commit_attempt_id=uuid4(), now=now, ttl=180)
+    snapshot = store.inspect_binding(created.binding, now=now)
+    executor = PostgresProtectedWorldExecutor(dsn, expected_login=_real_login(dsn), world_store=store)
+    receipt, jti = uuid4(), uuid4().hex
+    with psycopg.connect(dsn) as connection:
+        connection.execute("INSERT INTO replay_entries VALUES ('gateway','mirage',%s,%s)",
+                           (jti, now + 120))
+        connection.execute(
+            """INSERT INTO ingress_receipts (
+                   receipt_id,issuer,audience,jti,key_id,environment_id,deployment_id,
+                   session_id,session_epoch,request_fingerprint,assessment_digest,
+                   claims_digest,verification_policy_version,token_issued_at,
+                   token_not_before,token_expires_at,access_mode,resource_id)
+               VALUES (%s,'gateway','mirage',%s,'kid',%s,%s,%s,1,%s,%s,%s,
+                       'trusted-session-v1.1',%s,%s,%s,'cart',%s)""",
+            (receipt, jti, created.binding.environment_id, created.binding.deployment_id,
+             created.binding.session_id, digest("a"), digest("b"), digest("c"),
+             now - 5, now - 5, now + 90, created.binding.resource_id),
+        )
+    with pytest.raises(ProtectedGrantError, match="cart_lineage_missing"):
+        executor.admit_read(receipt_id=receipt, binding=created.binding,
+                            request_fingerprint=digest("a"), expires_at=now + 30)
+    with pytest.raises(ProtectedGrantError, match="derived_lineage_missing"):
+        executor.commit_verified_cart_http(
+            receipt_id=uuid4(), binding=created.binding, authorized_scope=snapshot.scope,
+            raw_path=b"/synthetic/carts/legacy/line-items", raw_body=b"{}",
+        )
+
+
 def test_protected_cart_creator_receipt_mints_one_derived_scope(isolated_test_dsn):
     """Creator Receipt 只能原子建立一個衍生 Cart，重試查回且不能改綁新的建立鍵。"""
     import psycopg

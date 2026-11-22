@@ -66,6 +66,16 @@ Operation Proof 決定 Inventory reserve/cancel 的命令、資料與提交鍵�
 和真 PostgreSQL World 無副作用回滾。此方法**尚未接入 mTLS 服務端**，且
 Cart／Order／Medusa、完整合法拒絕回應與 Verifier 物理隔離均未驗收。
 
+**再下一增量：Cart／Order 固定命令及 Medusa 來源綁定**：
+`operation_binding.py` 以確切 raw HTTP Proof 推導合成 Cart／Order 五種 mutation；
+省略可選提交 UUID 時按 Receipt 確定性生成，同 Receipt 重放不能改變事件。
+`PostgresProtectedWorldExecutor.commit_verified_cart_http()` 只容許
+受保護 Creator Lineage 派生的 Cart／Order Scope；
+`_verify_receipt()` 對可信 Read Source 也要求資源映射與衍生鏈。
+另將 Medusa Operation 來源綁到既有 SHA-256 固定的 OpenAPI 檔案，
+**僅是 Request Identity，尚無 Native Executor／400／404 證據**。
+這個增量也沒有對外啟用 mTLS execute，保留 503 和正式 Send Release Fuse。
+
 Owner 已核准獨立 mTLS Trusted Service；`src/deception/security/protected_rpc.py`
 建立只允許 Client Certificate、預設 loopback 的封閉傳輸服務。
 未具證書拒絕 TLS 握手，具證書仍只能獲得 `sealed` 健康狀態，不能觸發業務；

@@ -10,7 +10,8 @@ from uuid import UUID
 
 from deception.security.key_revocation import PostgresTrustedKeyRevocations
 from deception.security.operation_binding import (
-    VerifiedOperationBinding, decode_verified_inventory_mutation,
+    VerifiedOperationBinding, decode_verified_cart_mutation,
+    decode_verified_inventory_mutation,
 )
 
 from .commit import CommitResult, validate_commit_metadata
@@ -206,6 +207,22 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
         key._lock(cursor, receipt[5], receipt[6])
         if key._select(cursor, receipt[5], receipt[6]) is not None:
             raise ProtectedGrantError("protected_world_key_revoked")
+        if binding.access_mode == "cart" and binding.resource_id is not None:
+            cursor.execute(
+                """SELECT 1 FROM protected_cart_creations p
+                   JOIN synthetic_resources r
+                     ON r.environment_id=p.environment_id
+                    AND r.deployment_id=p.deployment_id
+                    AND r.session_id=p.derived_session_id
+                    AND r.world_generation_id=p.derived_world_generation_id
+                   WHERE p.environment_id=%s AND p.deployment_id=%s
+                     AND p.derived_session_id=%s AND p.derived_world_generation_id=%s
+                     AND r.resource_id=%s""",
+                (binding.environment_id, binding.deployment_id,
+                 binding.session_id, generation[0], binding.resource_id),
+            )
+            if cursor.fetchone() is None:
+                raise ProtectedGrantError("protected_world_cart_lineage_missing")
         return WorldScope(environment_id=binding.environment_id,
                           deployment_id=binding.deployment_id, session_id=binding.session_id,
                           world_generation_id=generation[0])
@@ -264,10 +281,25 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
         """
         from deception.domains.ecommerce.inventory import SyntheticInventory
 
-        if not isinstance(receipt_id, UUID) or receipt_id.version != 4:
-            raise ProtectedGrantError("invalid_world_receipt_id")
         if not isinstance(self._world_store, SyntheticInventory) or self._world_store.write_modes != frozenset({"inventory"}):
             raise ProtectedGrantError("verified_inventory_handler_unavailable")
+        proof = self._http_operation_proof(receipt_id)
+        mutation = decode_verified_inventory_mutation(
+            proof, raw_path=raw_path, raw_body=raw_body,
+        )
+        return self.commit_event(
+            receipt_id=receipt_id, binding=binding,
+            request_fingerprint=proof.request_fingerprint,
+            authorized_scope=authorized_scope, operation=mutation.operation,
+            command=mutation.command, expected_version=mutation.expected_version,
+            idempotency_key=mutation.idempotency_key,
+            commit_attempt_id=mutation.commit_attempt_id,
+        )
+
+    def _http_operation_proof(self, receipt_id: UUID) -> VerifiedOperationBinding:
+        """只用專屬 Executor DB Login 按 Receipt 取回不可變的 Verifier HTTP Proof。"""
+        if not isinstance(receipt_id, UUID) or receipt_id.version != 4:
+            raise ProtectedGrantError("invalid_world_receipt_id")
         with self._connection() as connection:
             row = connection.execute(
                 """SELECT platform,operation_id,method,path_template,request_fingerprint,
@@ -276,10 +308,42 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
                 (receipt_id,),
             ).fetchone()
         if row is None or row[6] is None:
-            raise ProtectedGrantError("verified_inventory_operation_proof_missing")
-        proof = VerifiedOperationBinding(*row)
-        mutation = decode_verified_inventory_mutation(
-            proof, raw_path=raw_path, raw_body=raw_body,
+            raise ProtectedGrantError("verified_http_operation_proof_missing")
+        return VerifiedOperationBinding(*row)
+
+    def commit_verified_cart_http(
+        self, *, receipt_id: UUID, binding: SessionBinding,
+        authorized_scope: WorldScope, raw_path: bytes, raw_body: bytes,
+    ) -> CommitResult:
+        """僅由 Receipt 精確 HTTP path/body 映射 Cart／Order 固定事件與提交鍵。
+
+        不接受 Runtime 自稱 action、品項、資源 ID 或提交鍵；它們必須全部
+        來自 Verifier 原始 Request 與已簽 Receipt capability。這是受保護內部
+        primitive，尚未暴露為 mTLS／正式 Trusted HTTP 業務 RPC。
+        """
+        from deception.domains.ecommerce.carts import SyntheticCarts
+
+        if not isinstance(self._world_store, SyntheticCarts):
+            raise ProtectedGrantError("verified_cart_handler_unavailable")
+        checked = SessionBinding.model_validate(binding.model_dump())
+        if checked.access_mode != "cart" or not checked.resource_id:
+            raise ProtectedGrantError("verified_cart_resource_capability_denied")
+        # 只有從可信 Creator Receipt 原子派生的 World 可以進入正式 Cart RPC。
+        # 不能把 Runtime 先前建立的 guest_cart_creations 當作可信來源。
+        with self._connection() as connection:
+            lineage = connection.execute(
+                """SELECT 1 FROM protected_cart_creations
+                   WHERE environment_id=%s AND deployment_id=%s
+                     AND derived_session_id=%s AND derived_world_generation_id=%s""",
+                (checked.environment_id, checked.deployment_id, checked.session_id,
+                 authorized_scope.world_generation_id),
+            ).fetchone()
+        if lineage is None:
+            raise ProtectedGrantError("verified_cart_derived_lineage_missing")
+        proof = self._http_operation_proof(receipt_id)
+        mutation = decode_verified_cart_mutation(
+            proof, receipt_id=receipt_id, resource_id=checked.resource_id,
+            raw_path=raw_path, raw_body=raw_body,
         )
         return self.commit_event(
             receipt_id=receipt_id, binding=binding,

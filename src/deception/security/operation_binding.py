@@ -1,9 +1,11 @@
 """由可信 Ingress 的原始 HTTP 快照推導固定業務 Operation，拒絕路由歧義。"""
 
 from dataclasses import dataclass
+from functools import lru_cache
 import hashlib
 import hmac
 import json
+from pathlib import Path
 import re
 from uuid import UUID
 
@@ -39,6 +41,105 @@ class VerifiedInventoryMutation:
     expected_version: int
     idempotency_key: str
     commit_attempt_id: UUID
+
+
+@dataclass(frozen=True)
+class VerifiedCartMutation:
+    """由原始 Cart／Order HTTP Proof 推導的固定世界事件，不接受 RPC 自選 action。"""
+
+    operation: str
+    command: dict
+    expected_version: int
+    idempotency_key: str
+    commit_attempt_id: UUID
+
+
+@lru_cache(maxsize=1)
+def _pinned_medusa_operations() -> tuple[tuple[str, str, str], ...]:
+    """只從本地 SHA-256 鎖定的官方 Medusa 來源載入七個審核過的路由。"""
+    from deception.domains.ecommerce.medusa_cart_projection import load_contract
+
+    root = Path(__file__).resolve().parents[3]
+    source = root / "domains/ecommerce/inputs/sources/medusa/openapi.yaml"
+    _, specification = load_contract(source)
+    return tuple((template, method, data["operationId"])
+                 for template, methods in specification["paths"].items()
+                 for method, data in methods.items())
+
+
+def _receipt_uuid4(receipt_id: UUID, purpose: bytes) -> UUID:
+    """為省略可選 UUIDv4 的合法 Cart 請求建立穩定重試 ID，不重新隨機起送。"""
+    if not isinstance(receipt_id, UUID) or receipt_id.version != 4:
+        raise OperationBindingError("verified_cart_receipt_id_invalid")
+    return UUID(bytes=hashlib.sha256(receipt_id.bytes + purpose).digest()[:16], version=4)
+
+
+def decode_verified_cart_mutation(
+    proof: VerifiedOperationBinding, *, receipt_id: UUID, resource_id: str,
+    raw_path: bytes, raw_body: bytes,
+) -> VerifiedCartMutation:
+    """對照受保護 Receipt 的唯一 Cart／Order Operation，嚴格解析原始 Body。
+
+    這是獨立 Executor 的內部映射：Client 可略過可選 commit_attempt_id，
+    重試值從一次性 Receipt 決定。對應的實際 resource_id 必須與 Verifier
+    收到的 URL 相符。非法 409 尚缺獨立驗證記錄，因此此處固定拒絕執行。
+    """
+    from deception.domains.ecommerce.cart_http import AddItemBody, CartMutationBody, UpdateItemBody
+
+    _receipt_uuid4(receipt_id, b"cart-mutation")
+    if (not isinstance(proof, VerifiedOperationBinding)
+            or proof.platform != "synthetic-carts"
+            or not isinstance(raw_path, bytes) or not isinstance(raw_body, bytes)
+            or len(raw_body) > MAX_BODY_BYTES
+            or raw_path != proof.request_path.encode("utf-8")
+            or not hmac.compare_digest(hashlib.sha256(raw_body).hexdigest(), proof.request_body_sha256)
+            or proof.request_content_type is None
+            or proof.request_content_type.split(";", 1)[0].strip().lower() != "application/json"
+            or not isinstance(resource_id, str)):
+        raise OperationBindingError("verified_cart_http_snapshot_mismatch")
+    operations = (
+        ("addGuestCartItem", "POST", "/synthetic/carts/{cart_id}/line-items",
+         rb"/synthetic/carts/(cart_[0-9a-f]{32})/line-items", "cart.add", AddItemBody),
+        ("updateGuestCartItem", "POST", "/synthetic/carts/{cart_id}/line-items/{item_id}",
+         rb"/synthetic/carts/(cart_[0-9a-f]{32})/line-items/(item_[0-9a-f]{32})", "cart.update", UpdateItemBody),
+        ("removeGuestCartItem", "DELETE", "/synthetic/carts/{cart_id}/line-items/{item_id}",
+         rb"/synthetic/carts/(cart_[0-9a-f]{32})/line-items/(item_[0-9a-f]{32})", "cart.remove", CartMutationBody),
+        ("completeGuestCart", "POST", "/synthetic/carts/{cart_id}/complete",
+         rb"/synthetic/carts/(cart_[0-9a-f]{32})/complete", "cart.complete", CartMutationBody),
+        ("cancelSyntheticOrder", "POST", "/synthetic/orders/{order_id}/cancel",
+         rb"/synthetic/orders/(order_[0-9a-f]{32})/cancel", "cart.cancel_order", CartMutationBody),
+    )
+    chosen = None
+    for operation_id, method, template, pattern, action, model in operations:
+        if (proof.operation_id, proof.method, proof.path_template) != (operation_id, method, template):
+            continue
+        match = re.fullmatch(pattern, raw_path)
+        if match is not None and match[1].decode("ascii") == resource_id:
+            chosen = action, model, match
+            break
+    if chosen is None:
+        raise OperationBindingError("verified_cart_operation_or_resource_denied")
+    action, model, match = chosen
+    try:
+        parsed = json.loads(raw_body, object_pairs_hook=unique_object, parse_constant=reject_constant)
+        if not isinstance(parsed, dict):
+            raise ValueError("cart JSON object required")
+        parsed.setdefault("commit_attempt_id", str(_receipt_uuid4(receipt_id, b"cart-mutation")))
+        body = model.model_validate_json(json.dumps(parsed, ensure_ascii=False,
+                                                   separators=(",", ":")).encode("utf-8")).model_dump()
+    except (ValueError, UnicodeError) as exc:
+        raise OperationBindingError("verified_cart_body_invalid") from exc
+    command = {key: value for key, value in body.items()
+               if key not in {"expected_version", "idempotency_key", "commit_attempt_id"}}
+    command["resource_id"] = resource_id
+    if len(match.groups()) == 2:
+        command["item_id"] = match[2].decode("ascii")
+    return VerifiedCartMutation(
+        operation=action, command=command,
+        expected_version=body["expected_version"],
+        idempotency_key=body["idempotency_key"],
+        commit_attempt_id=body["commit_attempt_id"],
+    )
 
 
 def decode_verified_inventory_mutation(
@@ -92,7 +193,8 @@ def derive_verified_operation(request: NormalizedRequest) -> VerifiedOperationBi
     """使用固定 Synthetic API 規格及實際接收的原始 path 導出唯一 Operation。
 
     不接受百分比編碼路徑、非空 query、斜線或方法替代、重複／重疊路由。
-    Medusa 映射須另外加入固定已審核的 native contract，未完成前 Fail-Closed。
+    Medusa 只建立來自固定 SHA-256 審核來源的 Operation 證據；目前仍不得
+    用它直接執行 Native Handler 或生成未核准的 400／404 回應。
     """
     if not isinstance(request, NormalizedRequest):
         raise OperationBindingError("verified_operation_requires_http_snapshot")
@@ -118,6 +220,10 @@ def derive_verified_operation(request: NormalizedRequest) -> VerifiedOperationBi
             expression = re.sub(r"\{[a-z_]+\}", r"[^/]+", concrete)
             if re.fullmatch(expression, request.path) and request.method.lower() in methods:
                 matches.append((platform, methods[request.method.lower()]["operationId"], concrete))
+    for template, method, operation_id in _pinned_medusa_operations():
+        expression = re.sub(r"\{[a-z_]+\}", r"[^/]+", template)
+        if re.fullmatch(expression, request.path) and request.method.lower() == method:
+            matches.append(("medusa-native-cart", operation_id, template))
     if len(matches) != 1:
         raise OperationBindingError("verified_operation_unknown_or_ambiguous")
     platform, operation_id, path_template = matches[0]

@@ -8,7 +8,8 @@ import pytest
 
 from deception.api.ingress import NormalizedRequest
 from deception.security.operation_binding import (
-    OperationBindingError, decode_verified_inventory_mutation, derive_verified_operation,
+    OperationBindingError, decode_verified_cart_mutation, decode_verified_inventory_mutation,
+    derive_verified_operation,
 )
 
 
@@ -38,10 +39,10 @@ def test_trusted_operation_is_fixed_from_http_route_and_body():
     {"path": "/synthetic/inventory/reservations/", "raw_path": b"/synthetic/inventory/reservations/"},
     {"raw_path": b"/synthetic/inventory/%72eservations"},
     {"query_string": b"id=1", "query": (("id", "1"),)},
-    {"path": "/store/carts", "raw_path": b"/store/carts"},
+    {"path": "/store/unsupported", "raw_path": b"/store/unsupported"},
 ])
 def test_verified_operation_rejects_alias_and_unknown_routes(change):
-    """拒絕方法替換、尾斜線、百分比編碼別名、Query 與未核准 Medusa 路由。"""
+    """拒絕方法替換、尾斜線、百分比編碼別名、Query 與不存在的 Medusa 路由。"""
     with pytest.raises(OperationBindingError):
         derive_verified_operation(replace(original_request(), **change))
 
@@ -83,3 +84,64 @@ def test_inventory_command_denies_duplicate_keys_and_bad_path_parameters():
     with pytest.raises(OperationBindingError, match="path_parameter_invalid"):
         decode_verified_inventory_mutation(derive_verified_operation(cancel),
                                            raw_path=cancel.raw_path, raw_body=cancel.body)
+
+
+@pytest.mark.parametrize("path,method,operation,action", [
+    ("/synthetic/carts/cart_" + "a" * 32 + "/line-items", "POST", "addGuestCartItem", "cart.add"),
+    ("/synthetic/carts/cart_" + "a" * 32 + "/line-items/item_" + "b" * 32,
+     "POST", "updateGuestCartItem", "cart.update"),
+    ("/synthetic/carts/cart_" + "a" * 32 + "/line-items/item_" + "b" * 32,
+     "DELETE", "removeGuestCartItem", "cart.remove"),
+    ("/synthetic/carts/cart_" + "a" * 32 + "/complete", "POST", "completeGuestCart", "cart.complete"),
+    ("/synthetic/orders/order_" + "c" * 32 + "/cancel", "POST", "cancelSyntheticOrder", "cart.cancel_order"),
+])
+def test_cart_order_commands_derive_from_verified_resource_and_retry(path, method, operation, action):
+    """合成 Cart／Order 五個固定寫入路由只按證據選 action，省略 UUID 仍穩定重試。"""
+    body = {"expected_version": 1, "idempotency_key": "cart-once"}
+    if action == "cart.add":
+        body.update(variant_id="variant-1", quantity=2)
+    elif action == "cart.update":
+        body["quantity"] = 3
+    request = replace(original_request(path=path, method=method), body=json.dumps(body).encode())
+    proof = derive_verified_operation(request)
+    assert proof.operation_id == operation
+    resource = path.split("/")[3]
+    receipt = uuid4()
+    args = dict(proof=proof, receipt_id=receipt, resource_id=resource,
+                raw_path=request.raw_path, raw_body=request.body)
+    result = decode_verified_cart_mutation(**args)
+    assert result.operation == action and result.command["resource_id"] == resource
+    assert result.commit_attempt_id.version == 4
+    assert decode_verified_cart_mutation(**args).commit_attempt_id == result.commit_attempt_id
+    with pytest.raises(OperationBindingError, match="resource_denied"):
+        decode_verified_cart_mutation(**{**args, "resource_id": "cart_" + "f" * 32})
+    with pytest.raises(OperationBindingError, match="snapshot_mismatch"):
+        decode_verified_cart_mutation(**{**args, "raw_body": request.body + b" "})
+
+
+def test_cart_body_rejects_duplicates_and_operation_substitution():
+    """雙重 JSON key 或 Receipt Operation 改成別的業務動作，都不能產生 World 命令。"""
+    path = "/synthetic/carts/cart_" + "a" * 32 + "/line-items"
+    body = (b'{"expected_version":1,"idempotency_key":"once","quantity":1,'
+            b'"quantity":2,"variant_id":"v1"}')
+    request = replace(original_request(path=path), body=body)
+    proof = derive_verified_operation(request)
+    args = dict(proof=proof, receipt_id=uuid4(), resource_id="cart_" + "a" * 32,
+                raw_path=request.raw_path, raw_body=body)
+    with pytest.raises(OperationBindingError, match="body_invalid"):
+        decode_verified_cart_mutation(**args)
+    with pytest.raises(OperationBindingError, match="resource_denied"):
+        decode_verified_cart_mutation(**{**args, "proof": replace(proof, operation_id="completeGuestCart")})
+
+
+@pytest.mark.parametrize("path,method,operation", [
+    ("/store/carts", "POST", "PostCarts"),
+    ("/store/carts/cart_" + "a" * 32 + "/complete", "POST", "PostCartsIdComplete"),
+    ("/store/orders/order_" + "b" * 32, "GET", "GetOrdersId"),
+])
+def test_medusa_verified_route_comes_from_pinned_native_contract(path, method, operation):
+    """只綁定固定來源 SHA-256 的原生 Medusa 契約，不自動開放業務 RPC。"""
+    proof = derive_verified_operation(original_request(path=path, method=method))
+    assert (proof.platform, proof.operation_id, proof.path_template.startswith("/store/")) == (
+        "medusa-native-cart", operation, True,
+    )
