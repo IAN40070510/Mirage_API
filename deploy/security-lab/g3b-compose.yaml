@@ -14,6 +14,9 @@ x-g3b-hardening: &g3b-hardening
   tmpfs: ["/tmp:size=16m,mode=1777"]
   profiles: ["g3b-isolated"]
   command: ["python", "-m", "deception.security.protected_services"]
+  # Runtime image 的 /healthz:8000 屬於展示 API，不能當作隔離 mTLS 服務健康判定。
+  healthcheck:
+    disable: true
 
 services:
   verifier:

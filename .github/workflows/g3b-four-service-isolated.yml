@@ -1,0 +1,107 @@
+name: G3b four-service mTLS and ACL (isolated)
+
+on:
+  push:
+    branches:
+      - fix/mir-sec-world-001-resume-20261122
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  isolated-g3b-containers:
+    name: Four distinct real Docker services / PostgreSQL 17.6
+    runs-on: ubuntu-latest
+    timeout-minutes: 22
+    env:
+      MIRAGE_G3B_CI_EXPLICIT: ephemeral-four-services-only
+      MIRAGE_G3B_ENVIRONMENT_ID: env
+      MIRAGE_G3B_DEPLOYMENT_ID: deploy
+      MIRAGE_G3B_WORLD_SCHEMA: public
+      MIRAGE_G3B_EXPECTED_ISSUER: gateway
+      MIRAGE_G3B_EXPECTED_AUDIENCE: mirage
+      MIRAGE_G3B_VERIFIER_LOGIN: mirage_g3b_ci_verifier
+      MIRAGE_G3B_INVENTORY_LOGIN: mirage_g3b_ci_inventory
+      MIRAGE_G3B_CART_LOGIN: mirage_g3b_ci_cart
+      MIRAGE_G3B_VALIDATOR_LOGIN: mirage_g3b_ci_validator
+      MIRAGE_TRUSTED_SEND_ENABLE: 'false'
+      G3B_CI_ADMIN_DSN: postgresql://mirage_ci_owner:mirage_ci_only@127.0.0.1:55433/mirage_g3b_ci?connect_timeout=5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install controlled CI tools
+        run: python -m pip install -e '.[test]'
+
+      - name: Build protected service image
+        run: docker build --tag mirage-api:standalone .
+
+      - name: Create disposable Docker networks and database
+        run: |
+          docker network create mirage-g3b-gateway-net
+          docker network create mirage-g3b-execution-net
+          docker network create mirage-g3b-database-net
+          docker run --detach --name mirage-g3b-ci-db \
+            --network mirage-g3b-database-net --network-alias g3b-postgres \
+            --publish 127.0.0.1:55433:5432 \
+            --env POSTGRES_DB=mirage_g3b_ci \
+            --env POSTGRES_USER=mirage_ci_owner \
+            --env POSTGRES_PASSWORD=mirage_ci_only \
+            --env POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256 \
+            postgres:17.6-alpine
+          for attempt in $(seq 1 50); do
+            if docker exec mirage-g3b-ci-db pg_isready -U mirage_ci_owner -d mirage_g3b_ci; then
+              break
+            fi
+            sleep 1
+          done
+          docker exec mirage-g3b-ci-db pg_isready -U mirage_ci_owner -d mirage_g3b_ci
+
+      - name: Generate ephemeral physical logins and role-specific TLS secrets
+        run: |
+          lab_root=$(mktemp -d)
+          echo "G3B_LAB_ROOT=$lab_root" >> "$GITHUB_ENV"
+          python deploy/security-lab/g3b_ci_prepare.py --root "$lab_root" --dsn "$G3B_CI_ADMIN_DSN"
+
+      - name: Launch four real non-root mTLS services on isolated networks
+        run: |
+          docker compose -f deploy/security-lab/g3b-compose.yaml \
+            -f "$G3B_LAB_ROOT/ci-override.yaml" --profile g3b-isolated config --quiet
+          docker compose -f deploy/security-lab/g3b-compose.yaml \
+            -f "$G3B_LAB_ROOT/ci-override.yaml" --profile g3b-isolated up --detach
+
+      - name: Verify real Gateway HTTP, mTLS and fixed Executor routing
+        run: |
+          docker run --rm --user 0:0 --network mirage-g3b-gateway-net \
+            --mount "type=bind,src=$G3B_LAB_ROOT/probe,dst=/lab/probe,readonly" \
+            --mount "type=bind,src=$PWD/deploy/security-lab/g3b_ci_probe.py,dst=/lab/ci_probe.py,readonly" \
+            mirage-api:standalone python /lab/ci_probe.py --mode gateway
+
+      - name: Check container secret visibility, networks and real PostgreSQL ACL
+        run: python deploy/security-lab/g3b_ci_probe.py --mode audit --root "$G3B_LAB_ROOT"
+
+      - name: Capture protected container topology without passwords
+        if: always()
+        run: |
+          docker ps -a --filter name=mirage-g3b-ci-db --format '{{.Names}} {{.Status}}' || true
+          if [ -n "${G3B_LAB_ROOT:-}" ] && [ -f "$G3B_LAB_ROOT/ci-override.yaml" ]; then
+            docker compose -f deploy/security-lab/g3b-compose.yaml \
+              -f "$G3B_LAB_ROOT/ci-override.yaml" --profile g3b-isolated ps -a || true
+            docker compose -f deploy/security-lab/g3b-compose.yaml \
+              -f "$G3B_LAB_ROOT/ci-override.yaml" --profile g3b-isolated logs --no-color --tail=70 || true
+          fi
+
+      - name: Tear down only isolated G3b CI containers and networks
+        if: always()
+        run: |
+          if [ -n "${G3B_LAB_ROOT:-}" ] && [ -f "$G3B_LAB_ROOT/ci-override.yaml" ]; then
+            docker compose -f deploy/security-lab/g3b-compose.yaml \
+              -f "$G3B_LAB_ROOT/ci-override.yaml" --profile g3b-isolated down --remove-orphans || true
+          fi
+          docker rm --force mirage-g3b-ci-db || true
+          docker network rm mirage-g3b-gateway-net || true
+          docker network rm mirage-g3b-execution-net || true
+          docker network rm mirage-g3b-database-net || true

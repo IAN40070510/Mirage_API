@@ -148,3 +148,53 @@ def test_g3b_native_validator_only_accepts_https_receipt_uuid4():
                            content=b"x" * 1025).status_code == 413
         assert secure.post("/internal/v1/project-medusa-rejection",
                            json={"receipt_id": receipt}).status_code == 503
+
+
+def test_g3b_real_container_ci_has_explicit_isolation_and_no_sender():
+    """真正容器驗收需隔離 DB／三網／四服務，不能把範本靜態測試冒充部署證據。"""
+    root = Path(__file__).resolve().parents[1]
+    workflow = root / ".github/workflows/g3b-four-service-isolated.yml"
+    code = workflow.read_text(encoding="utf-8")
+    assert "MIRAGE_G3B_CI_EXPLICIT: ephemeral-four-services-only" in code
+    assert "MIRAGE_TRUSTED_SEND_ENABLE: 'false'" in code
+    for network in ("mirage-g3b-gateway-net", "mirage-g3b-execution-net",
+                    "mirage-g3b-database-net"):
+        assert "docker network create " + network in code
+    for source in ("g3b_ci_prepare.py", "g3b_ci_probe.py", "g3b-compose.yaml",
+                   "postgres:17.6-alpine"):
+        assert source in code
+    assert "--network mirage-g3b-gateway-net" in code
+    assert "--mode audit" in code
+    assert "--profile g3b-isolated up --detach" in code
+    assert "staging" not in code and "production" not in code
+    compose = yaml.safe_load((root / "deploy/security-lab/g3b-compose.yaml").read_text(
+        encoding="utf-8"))
+    assert all(service["healthcheck"]["disable"] is True
+               for service in compose["services"].values())
+
+
+def test_g3b_ci_signed_claims_are_pinned_and_short_lived():
+    """真容器 Gateway Probe 的 JWS 不能選擇部署、issuer 或無期限有效期。"""
+    import importlib.util
+
+    root = Path(__file__).resolve().parents[1]
+    path = root / "deploy/security-lab/g3b_ci_probe.py"
+    spec = importlib.util.spec_from_file_location("g3b_ci_probe", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    signer = Ed25519PrivateKey.generate()
+    signed = module._sign(signer, fingerprint="a" * 64, session="session", mode="inventory")
+    header, claims, signature = signed.split(".")
+    unpack = lambda value: json.loads(base64.urlsafe_b64decode(value + "=" * (-len(value) % 4)))
+    assert unpack(header) == {
+        "alg": "Ed25519", "kid": "old", "protocol_version": "1.1",
+        "typ": "mirage-trusted-session+jwt",
+    }
+    payload = unpack(claims)
+    assert (payload["iss"], payload["aud"], payload["environment_id"],
+            payload["deployment_id"], payload["access_mode"], payload["request_fingerprint"]) == (
+        "gateway", "mirage", "env", "deploy", "inventory", "a" * 64,
+    )
+    assert payload["exp"] - payload["iat"] == 50
+    assert len(base64.urlsafe_b64decode(signature + "=" * (-len(signature) % 4))) == 64

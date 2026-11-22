@@ -128,6 +128,43 @@ Executor 亦不得取得 Verifier 的 DSN 或 JWS 公鑰清單。Role 不可取�
 自動建立高權限 Role、不發布 public port、不取代既有安全 Fuse**。
 這仍是部署規格範本，不是已部署、已完成 pg_hba／NetworkPolicy 簽核的證據。
 
+### 四容器真實隔離 CI（僅拋棄環境）
+
+新增 `.github/workflows/g3b-four-service-isolated.yml`，使用真 Docker Engine
+建置 `mirage-api:standalone`，另起 PostgreSQL 17.6，建立**三張獨立網路**與
+四個固定非 root 服務。`g3b_ci_prepare.py` 必須取得
+`MIRAGE_G3B_CI_EXPLICIT=ephemeral-four-services-only`，且只能對指定的
+`mirage_g3b_ci`／`mirage_ci_owner` 新資料庫執行；否則拒絕任何 migration／
+CREATE ROLE。建立五個獨立 SCRAM 身分（四服務加一個負面測試 Runtime），
+檢查 NOINHERIT／NOREPLICATION／NOBYPASSRLS 並逐表 GRANT。
+
+CI 每輪臨時簽發三組互異 CA：Gateway→Verifier、Verifier→雙 Executor、
+Verifier→Native Validator。臨時原始檔保存在 0700 工作目錄，覆寫 Compose
+`external` Secrets 成**本次 CI 的唯讀 file secrets**。不同容器有不同 DSN、
+Secret 列表；不替使用者準備正式環境密碼，不呼叫 staging／production DB。
+基礎映像的展示 `/healthz:8000` 不適用於專用 mTLS Listener；Compose
+關閉該內建 healthcheck，真實 readiness 由 Gateway mTLS probe 檢查。
+
+`g3b_ci_probe.py` 的 Gateway 模式只加入 `g3b_gateway` 網路：
+
+- 真實 CA／Client Certificate 握手後連到 Verifier，匿名拒絕；直接指定 Handler
+  RPC 固定 503；Gateway 不能解析 Executor／Validator／DB 的私網 DNS。
+- 固定 Inventory Request 先驗缺 JWS／篡改／重放都被拒，再送原始 HTTP、
+  產生 Proof、固定 Inventory Executor Commit 且只提交一次。
+- 對受保護衍生 Cart 發出 Medusa M-03 兩個固定 400／404 原因，必須由
+  Executor 產生來源、獨立 Validator 重建相同 Envelope Hash；此 HTTP 200
+  只是**內部對帳 RPC**，不是實際送出的客戶端原生 400／404。
+
+Host Audit 模式逐容器比較 Docker Inspect 的**實際** Secret Mount、
+Network、non-root UID、read-only rootfs、capability 與沒有 published port；
+再用獨立 Runtime SCRAM 確認無權讀取可信 Receipt，且 PG 裡只有指定
+Commit／Medusa Source／Operation Proof 數量。任何不符直接使 workflow 紅燈。
+
+以上屬於**真實拋棄式容器與 DB 的 CI 故障／隔離驗證**，仍不等同正式部署
+的 Docker/Swarm/Kubernetes NetworkPolicy、Secret ACL、pg_hba、TLS 輪替、
+稽核環境權限或正式 Client HTTP Contract 簽核。沒通過實際 workflow 前
+不得標記 CI PASS；更不可把這些控制面 200 作為 Trusted Send 證據。
+
 ## 失敗處理與驗收
 
 - 缺少設定、同時提供兩種 DSN、密碼與 Login 不符、危險 ACL 或超權限：
