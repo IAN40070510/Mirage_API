@@ -72,6 +72,9 @@ Cart／Order／Medusa、完整合法拒絕回應與 Verifier 物理隔離均未�
 `PostgresProtectedWorldExecutor.commit_verified_cart_http()` 只容許
 受保護 Creator Lineage 派生的 Cart／Order Scope；
 `_verify_receipt()` 對可信 Read Source 也要求資源映射與衍生鏈。
+`create_verified_cart_http()` 從原始 POST /synthetic/carts Receipt 綁定
+穩定建立鍵與內容摘要，使用受保護 `create_cart()` 同交易產生衍生世界，
+且不接受 Runtime 任意初始庫存或價格。
 另將 Medusa Operation 來源綁到既有 SHA-256 固定的 OpenAPI 檔案，
 **僅是 Request Identity，尚無 Native Executor／400／404 證據**。
 這個增量也沒有對外啟用 mTLS execute，保留 503 和正式 Send Release Fuse。

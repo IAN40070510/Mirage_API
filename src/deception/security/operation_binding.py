@@ -54,6 +54,54 @@ class VerifiedCartMutation:
     commit_attempt_id: UUID
 
 
+@dataclass(frozen=True)
+class VerifiedCartCreation:
+    """受保護 Creator Receipt 的一次性 Cart 建立意圖與穩定提交識別碼。"""
+
+    idempotency_key: UUID
+    commit_attempt_id: UUID
+    creation_digest: str
+
+
+def decode_verified_cart_creation(
+    proof: VerifiedOperationBinding, *, receipt_id: UUID,
+    raw_path: bytes, raw_body: bytes,
+) -> VerifiedCartCreation:
+    """從原始 POST /synthetic/carts 還原單次 Creator 意圖，不信任 RPC 提交鍵。"""
+    from deception.domains.ecommerce.cart_http import CreateCartBody
+
+    _receipt_uuid4(receipt_id, b"cart-create")
+    if (not isinstance(proof, VerifiedOperationBinding)
+            or (proof.platform, proof.operation_id, proof.method, proof.path_template) != (
+                "synthetic-carts", "createGuestCart", "POST", "/synthetic/carts")
+            or not isinstance(raw_path, bytes) or raw_path != b"/synthetic/carts"
+            or raw_path != proof.request_path.encode("utf-8")
+            or not isinstance(raw_body, bytes) or len(raw_body) > MAX_BODY_BYTES
+            or not hmac.compare_digest(hashlib.sha256(raw_body).hexdigest(), proof.request_body_sha256)
+            or proof.request_content_type is None
+            or proof.request_content_type.split(";", 1)[0].strip().lower() != "application/json"):
+        raise OperationBindingError("verified_cart_creation_snapshot_mismatch")
+    try:
+        parsed = json.loads(raw_body, object_pairs_hook=unique_object, parse_constant=reject_constant)
+        if not isinstance(parsed, dict):
+            raise ValueError("cart JSON object required")
+        parsed.setdefault("idempotency_key", str(_receipt_uuid4(receipt_id, b"cart-create-idempotency")))
+        parsed.setdefault("commit_attempt_id", str(_receipt_uuid4(receipt_id, b"cart-create-attempt")))
+        validated = CreateCartBody.model_validate_json(json.dumps(
+            parsed, ensure_ascii=False, separators=(",", ":"),
+        ).encode("utf-8"))
+        data = validated.model_dump(mode="json")
+    except (ValueError, UnicodeError) as exc:
+        raise OperationBindingError("verified_cart_creation_body_invalid") from exc
+    return VerifiedCartCreation(
+        idempotency_key=validated.idempotency_key,
+        commit_attempt_id=validated.commit_attempt_id,
+        creation_digest=hashlib.sha256(json.dumps(
+            data, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        ).encode("utf-8")).hexdigest(),
+    )
+
+
 @lru_cache(maxsize=1)
 def _pinned_medusa_operations() -> tuple[tuple[str, str, str], ...]:
     """只從本地 SHA-256 鎖定的官方 Medusa 來源載入七個審核過的路由。"""

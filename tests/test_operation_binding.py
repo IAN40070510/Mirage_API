@@ -8,7 +8,8 @@ import pytest
 
 from deception.api.ingress import NormalizedRequest
 from deception.security.operation_binding import (
-    OperationBindingError, decode_verified_cart_mutation, decode_verified_inventory_mutation,
+    OperationBindingError, decode_verified_cart_creation, decode_verified_cart_mutation,
+    decode_verified_inventory_mutation,
     derive_verified_operation,
 )
 
@@ -132,6 +133,35 @@ def test_cart_body_rejects_duplicates_and_operation_substitution():
         decode_verified_cart_mutation(**args)
     with pytest.raises(OperationBindingError, match="resource_denied"):
         decode_verified_cart_mutation(**{**args, "proof": replace(proof, operation_id="completeGuestCart")})
+
+
+def test_cart_creator_receipt_derives_stable_cart_keys_without_runtime_choice():
+    """合成 Cart 建立省略兩個可選 UUID 仍同 Receipt 固定；錯 Body 或其他操作不得改選建立。"""
+    request = replace(original_request(path="/synthetic/carts"), body=b"{}")
+    proof = derive_verified_operation(request)
+    args = dict(proof=proof, receipt_id=uuid4(),
+                raw_path=request.raw_path, raw_body=request.body)
+    first = decode_verified_cart_creation(**args)
+    second = decode_verified_cart_creation(**args)
+    assert first == second
+    assert first.idempotency_key.version == first.commit_attempt_id.version == 4
+    assert first.idempotency_key != first.commit_attempt_id
+    with pytest.raises(OperationBindingError, match="snapshot_mismatch"):
+        decode_verified_cart_creation(**{**args, "raw_body": b'{"other":1}'})
+    with pytest.raises(OperationBindingError, match="snapshot_mismatch"):
+        decode_verified_cart_creation(**{**args, "proof": replace(proof, operation_id="getGuestCart")})
+
+
+def test_cart_creator_does_not_accept_duplicate_json_or_extra_world_settings():
+    """Creator 無法透過雙重欄位或加上任意 World／價格資料改變服務端初始狀態。"""
+    for body in (b'{"idempotency_key":"x","idempotency_key":"y"}',
+                 b'{"inventory":{"sku-1":999}}'):
+        request = replace(original_request(path="/synthetic/carts"), body=body)
+        with pytest.raises(OperationBindingError, match="body_invalid"):
+            decode_verified_cart_creation(
+                derive_verified_operation(request), receipt_id=uuid4(),
+                raw_path=request.raw_path, raw_body=body,
+            )
 
 
 @pytest.mark.parametrize("path,method,operation", [

@@ -10,7 +10,7 @@ from uuid import UUID
 
 from deception.security.key_revocation import PostgresTrustedKeyRevocations
 from deception.security.operation_binding import (
-    VerifiedOperationBinding, decode_verified_cart_mutation,
+    VerifiedOperationBinding, decode_verified_cart_creation, decode_verified_cart_mutation,
     decode_verified_inventory_mutation,
 )
 
@@ -138,6 +138,28 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
                     (receipt_id, *expected, *actual),
                 )
                 return created
+
+    def create_verified_cart_http(
+        self, *, receipt_id: UUID, creator: SessionBinding,
+        raw_path: bytes, raw_body: bytes,
+    ) -> object:
+        """只由 Verifier 的 createGuestCart Proof 衍生 Cart Session 和固定建立鍵。
+
+        使用受保護 Executor 預設的合成 catalog／inventory 與固定 3600 秒
+        TTL；不能接受 Runtime 指定要建立的 Resource、World 初始資料或事件。
+        首次提交與 Creator Lineage 原子，重試只能讀取相同 Receipt 之既有結果。
+        """
+        proof = self._http_operation_proof(receipt_id)
+        intent = decode_verified_cart_creation(
+            proof, receipt_id=receipt_id, raw_path=raw_path, raw_body=raw_body,
+        )
+        return self.create_cart(
+            receipt_id=receipt_id, creator=creator,
+            request_fingerprint=proof.request_fingerprint,
+            idempotency_key=intent.idempotency_key,
+            commit_attempt_id=intent.commit_attempt_id,
+            creation_digest=intent.creation_digest, ttl=3600,
+        )
 
     def _verify_receipt(self, cursor, *, receipt_id: UUID, binding: SessionBinding,
                         fingerprint: str) -> WorldScope:

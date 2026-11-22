@@ -65,10 +65,14 @@ Operation ID、原始 Path、嚴格 Body 與原始 Cart/Order Resource ID 推導
 `_verify_receipt` 額外要求 Cart／Order 目標具有可信 Creator Lineage 和
 實際 `synthetic_resources` 對應，舊 Runtime 創建的 Cart 不能取得可信
 Read Source，也就不能借用既有 Candidate Promotion 路徑。
+`create_verified_cart_http()` 另外只接受 Verifier 已綁的原始
+`POST /synthetic/carts`，由 Receipt 固定可選 UUIDv4 與建立摘要，
+再在同一受保護交易中建立新 Cart Session／World、資源映射及 Creator
+Lineage；catalog／inventory 僅由 Executor 部署設定取得。
 
 Medusa 的七個本地核准路由現從 SHA-256 固定的官方 OpenAPI 來源載入
 Operation 身分，**這只有 Verifier 綁定證據、沒有開啟 Medusa 事件執行**。
-合成 `createGuestCart`／GET 的固定 RPC、Medusa 原生表頭／身份與
+合成 GET 的固定 RPC、Medusa 原生表頭／身份與
 400／404／409 拒絕來源仍未驗收。
 **上述 primitive 尚未成為 mTLS 的 HTTP 業務 RPC**；當前
 `create_sealed_app()` 的 execute endpoint 依舊回 503。
