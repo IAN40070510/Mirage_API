@@ -5,6 +5,9 @@ from __future__ import annotations
 import hashlib
 from uuid import UUID
 
+from deception.api.ingress import NormalizedRequest
+
+from .operation_binding import VerifiedOperationBinding, derive_verified_operation
 from .trusted_session import TrustedSessionClaims
 
 
@@ -15,8 +18,13 @@ class IngressReceiptError(ValueError):
 class PostgresIngressReceiptWriter:
     """僅供持有獨立 Verifier DB 身分的驗證程序在 IngressTx 內使用。"""
 
-    def __init__(self, dsn: str, *, environment_id: str, deployment_id: str) -> None:
-        """固定與 Replay／Key Guard 相同的物理資料庫登入域及部署範圍。"""
+    def __init__(self, dsn: str, *, environment_id: str, deployment_id: str,
+                 verified_request: NormalizedRequest | None = None) -> None:
+        """固定物理資料庫登入域及部署範圍，可從 Verifier 原始 HTTP 快照核准操作。
+
+        `verified_request` 僅能由獨立 Verifier 的受保護入口注入。缺少時相容
+        舊 Receipt 流程，但不建立可信 Operation Binding，也不能解封業務 RPC。
+        """
         if not isinstance(dsn, str) or not dsn.strip():
             raise IngressReceiptError("ingress_receipt_requires_dsn")
         if any(not isinstance(value, str) or not value or len(value) > 128
@@ -25,6 +33,9 @@ class PostgresIngressReceiptWriter:
         self._dsn = dsn
         self._environment_id = environment_id
         self._deployment_id = deployment_id
+        self._operation: VerifiedOperationBinding | None = (
+            derive_verified_operation(verified_request) if verified_request is not None else None
+        )
 
     def _write_on_cursor(self, cursor, *, claims: TrustedSessionClaims, kid: str) -> UUID:
         """在既有 Key Guard／Replay 交易寫入 Receipt，不建立連線、不自行提交。
@@ -39,6 +50,9 @@ class PostgresIngressReceiptWriter:
             raise IngressReceiptError("ingress_receipt_invalid_verified_input")
         if (claims.environment_id, claims.deployment_id) != (self._environment_id, self._deployment_id):
             raise IngressReceiptError("ingress_receipt_scope_mismatch")
+        operation = self._operation
+        if operation is not None and operation.request_fingerprint != claims.request_fingerprint:
+            raise IngressReceiptError("ingress_operation_fingerprint_mismatch")
         claims_digest = hashlib.sha256(claims.model_dump_json().encode("utf-8")).hexdigest()
         cursor.execute(
             """INSERT INTO ingress_receipts (
@@ -54,4 +68,15 @@ class PostgresIngressReceiptWriter:
              "trusted-session-v1.1", claims.iat, claims.nbf, claims.exp,
              claims.access_mode, claims.resource_id),
         )
-        return cursor.fetchone()[0]
+        receipt_id = cursor.fetchone()[0]
+        if operation is not None:
+            cursor.execute(
+                """INSERT INTO protected_http_operation_bindings (
+                       receipt_id,platform,operation_id,method,path_template,
+                       request_fingerprint,request_body_sha256)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s)""",
+                (receipt_id, operation.platform, operation.operation_id,
+                 operation.method, operation.path_template,
+                 operation.request_fingerprint, operation.request_body_sha256),
+            )
+        return receipt_id

@@ -27,6 +27,7 @@
 | 固定安全錯誤 Renderer | `src/deception/core/security_error.py` | [獨立模板、精確封套與請求綁定](security-errors.md) |
 | 可信簽章金鑰撤銷 | `src/deception/security/key_revocation.py`、`migrations/014_trusted_key_revocations.sql` | [永久墓碑、Replay 排序與輪替](key-revocation.md) |
 | 可信 Ingress Receipt 交易子切面 | `src/deception/security/ingress_receipt.py`、`migrations/017_trusted_ingress_receipts.sql`、`deploy/security-lab/receipt_atomic_probe.py`、`verifier_receipt_role_probe.py` | [JWS／Key Guard／Replay／Receipt 單交易與 Verifier 角色驗收界線](ingress-receipt.md) |
+| 可信 HTTP Operation Binding（G3b） | `src/deception/security/operation_binding.py`、`migrations/023_verified_http_operations.sql` | [由原始 HTTP Snapshot 決定固定 Handler，與 Receipt 同交易記錄](ingress-receipt.md) |
 | World DB 隔離權限驗收 Lab | `deploy/security-lab/compose.yaml`、`provision.py`、`probe.py`、`atomic_ingress_probe.py` | [單機獨立 Docker 網路、SCRAM Role、SQLSTATE 42501 及同交易 Replay 實測](security/world-db/isolated-oracle-lab.md) |
 | 可信入口拒絕稽核 | `src/deception/security/ingress_audit.py`、`migrations/013_ingress_refusal_audit.sql` | [固定分類、資料最小化與故障處理](ingress-audit.md) |
 | Profile 整體撤銷 | `src/deception/world/projection_registry.py`、`admission.py`、`postgres_admission.py` | [一般／緊急墓碑、控制邊界與驗證](profile-revocation.md) |

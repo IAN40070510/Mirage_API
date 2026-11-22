@@ -29,6 +29,31 @@ claims, receipt_id = verifier.verify_with_receipt(
 
 ## 驗證
 
+### G3b：固定 HTTP Operation 證據（增量，未接線）
+
+獨立 Verifier 可使用 `PostgresIngressReceiptWriter(..., verified_request=normalized)`；
+`normalized` 必須是 Verifier 直接取得的 `NormalizedRequest`，不能由 Runtime
+宣稱為「已驗證 JSON」。`derive_verified_operation()` 從固定的 synthetic
+Inventory／Cart OpenAPI 路由與原始 request method/path 導出唯一 Operation，
+要求 raw_path 與解碼後路徑一致、禁止 percent-encoding 路由別名與非空 query。
+若 Signature 綁定的 Request Fingerprint 與這份原始快照不一致，Receipt Writer
+在 Replay/Receipt 同一交易內拒絕，JTI 消費也回滾。
+
+`migrations/023_verified_http_operations.sql` 新增受保護
+`protected_http_operation_bindings`，保存 Receipt ID、固定 platform／operation、
+method／path_template、完整 Request Fingerprint 與 Body SHA-256；資料不得更新
+或刪除。舊 Receipt 即使 fingerprint 相同，也沒有新 Operation Binding，
+不得以新服務 RPC 自動執行。此增量保留原本 `verified_request=None` 相容測試，
+但這種舊入口不具可信 Operation 權威。
+
+目前只支援 Synthetic Inventory/Cart，Medusa native mapping、URL/authority
+部署政策、固定 handler 與 RPC 消費端的交叉驗證仍未完成。**獨立 mTLS sealed
+服務不因本表存在就開放業務或 Trusted Send。**
+
+驗證：`python -m pytest -q tests/test_operation_binding.py`；真實 PostgreSQL
+則以 `MIRAGE_POSTGRES_TEST_DSN` 執行
+`python -m pytest -q tests/test_ingress_receipts.py`。
+
 - `tests/test_ingress_receipts.py`：完整 pytest／真實 PostgreSQL 隔離 Schema 測試（需 `MIRAGE_POSTGRES_TEST_DSN`）；未在本地執行，等待 CI。
 - `deploy/security-lab/receipt_atomic_probe.py`：不依賴 pytest 的獨立 Oracle PostgreSQL 17.6 探針；只有 `MIRAGE_LAB_EXPLICIT=mir-sec-world001-lab` 且固定專用 DB 身分、一次性新 Schema 才可執行。
 - `deploy/security-lab/verifier_receipt_role_probe.py`：在同一隔離 Lab 以實體 `mir_sec_verifier` SCRAM 登入驗證 Receipt／Replay 正向寫入；檢查 Admission、Generation、Receipt DELETE 及 `SET ROLE` 越權遭 SQLSTATE `42501` 拒絕。測試腳本只為一次性 Schema 授予最低需要的 DML，並由 Schema Owner 做建置與清除。不可外推為正式服務 Secret 或 IPC 隔離已通過。

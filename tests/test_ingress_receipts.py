@@ -9,6 +9,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from deception.security import TrustedSessionError
 from deception.security.ingress_receipt import IngressReceiptError, PostgresIngressReceiptWriter
+from deception.api.fingerprint import fingerprint_request
+from test_operation_binding import original_request
 from deception.world import PostgresReplayStore
 from deception.world.replay import ReplayConsumeResult
 from test_key_revocation import verifier
@@ -16,22 +18,24 @@ from test_postgres_conformance import isolated_test_dsn
 from test_trusted_session import encode
 
 
-def signed(key, *, jti: str, reference_time: int | None = None) -> str:
+def signed(key, *, jti: str, reference_time: int | None = None,
+           fingerprint: str = "a" * 64) -> str:
     """依目前時間簽發有效 JWS，讓 DB lock 後的權威時鐘檢查能實測。"""
     now = int(time.time()) if reference_time is None else reference_time
     prefix = encode(dict(alg="Ed25519", kid="old", protocol_version="1.1",
                          typ="mirage-trusted-session+jwt")) + "." + encode(dict(
         iss="gateway", aud="mirage", iat=now - 5, nbf=now - 5, exp=now + 45,
         jti=jti, environment_id="env", deployment_id="deploy", session_id="session",
-        session_epoch=1, request_fingerprint="a" * 64, assessment_id="assessment",
+        session_epoch=1, request_fingerprint=fingerprint, assessment_id="assessment",
         assessment_digest="b" * 64))
     return prefix + "." + base64.urlsafe_b64encode(key.sign(prefix.encode())).decode().rstrip("=")
 
 
-def verify_with_receipt(checker, token, writer, *, now: int | None = None):
+def verify_with_receipt(checker, token, writer, *, now: int | None = None,
+                        fingerprint: str = "a" * 64):
     """以固定測試環境對完整 JWS 驗章並產生同交易 Receipt。"""
     return checker.verify_with_receipt(token, expected_issuer="gateway", expected_audience="mirage",
-                                       request_fingerprint="a" * 64, environment_id="env",
+                                       request_fingerprint=fingerprint, environment_id="env",
                                        deployment_id="deploy", receipt_writer=writer,
                                        now=int(time.time()) if now is None else now)
 
@@ -58,6 +62,43 @@ def test_ingress_receipt_is_atomic_with_replay_and_single_use(isolated_test_dsn)
         verify_with_receipt(checker, token, writer)
     with psycopg.connect(isolated_test_dsn) as connection:
         assert connection.execute("SELECT count(*) FROM ingress_receipts WHERE jti=%s", (jti,)).fetchone()[0] == 1
+
+
+def test_verified_http_operation_is_atomic_with_ingress_receipt(isolated_test_dsn):
+    """原始 HTTP Operation 與 JTI／Receipt 同交易提交；不匹配則一起回滾。"""
+    import psycopg
+
+    key = Ed25519PrivateKey.generate()
+    checker = verifier(isolated_test_dsn, {"old": key})
+    request = original_request()
+    fingerprint = fingerprint_request(request)
+    writer = PostgresIngressReceiptWriter(
+        isolated_test_dsn, environment_id="env", deployment_id="deploy",
+        verified_request=request,
+    )
+    jti = uuid4().hex
+    _, receipt = verify_with_receipt(
+        checker, signed(key, jti=jti, fingerprint=fingerprint), writer,
+        fingerprint=fingerprint,
+    )
+    with psycopg.connect(isolated_test_dsn) as connection:
+        row = connection.execute(
+            """SELECT operation_id,method,path_template,request_fingerprint
+               FROM protected_http_operation_bindings WHERE receipt_id=%s""", (receipt,),
+        ).fetchone()
+        assert row == ("reserveSyntheticInventory", "POST", "/synthetic/inventory/reservations", fingerprint)
+    wrong_jti = uuid4().hex
+    with pytest.raises(IngressReceiptError, match="fingerprint_mismatch"):
+        verify_with_receipt(
+            checker, signed(key, jti=wrong_jti, fingerprint="a" * 64), writer,
+            fingerprint="a" * 64,
+        )
+    with psycopg.connect(isolated_test_dsn) as connection:
+        assert connection.execute("SELECT count(*) FROM replay_entries WHERE jti=%s",
+                                  (wrong_jti,)).fetchone()[0] == 0
+        assert connection.execute("SELECT count(*) FROM ingress_receipts WHERE jti=%s",
+                                  (wrong_jti,)).fetchone()[0] == 0
+        assert connection.execute("SELECT count(*) FROM protected_http_operation_bindings").fetchone()[0] == 1
 
 
 def test_ingress_receipt_failure_rolls_back_consumed_replay(isolated_test_dsn):

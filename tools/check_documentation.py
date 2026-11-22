@@ -19,6 +19,7 @@ GUIDES = {
     "security_error_renderer": ("src/deception/core/security_error.py", "docs/security-errors.md"),
     "trusted_key_revocations": ("src/deception/security/key_revocation.py", "docs/key-revocation.md"),
     "trusted_ingress_receipt": ("src/deception/security/ingress_receipt.py", "docs/ingress-receipt.md"),
+    "verified_http_operation": ("src/deception/security/operation_binding.py", "docs/ingress-receipt.md"),
     "world_security_lab_receipt_probe": ("deploy/security-lab/receipt_atomic_probe.py", "docs/ingress-receipt.md"),
     "world_security_lab_verifier_role_probe": ("deploy/security-lab/verifier_receipt_role_probe.py", "docs/ingress-receipt.md"),
     "world_security_lab": ("deploy/security-lab/compose.yaml", "docs/security/world-db/isolated-oracle-lab.md"),

@@ -50,6 +50,13 @@
 
 ### 獨立 mTLS 服務決策及 sealed 入口（2026-11-22）
 
+**G3b Operation Binding 新增增量**：`023_verified_http_operations.sql` 與
+`operation_binding.py` 讓獨立 Verifier 在同一 IngressTx 把實際 HTTP method、
+唯一 OpenAPI Operation、路由模板、body hash、JWS 請求摘要綁定 Receipt。
+不修改 Freeze v1 JWS 的 Signed Claims；需 Verifier 真正收到完整原始請求，
+不接受 Runtime 自填「verified」或另選 Handler。Medusa／固定 RPC 消費端
+尚未驗收，不能將表結構存在視為 G3b 整體 PASS。
+
 Owner 已核准獨立 mTLS Trusted Service；`src/deception/security/protected_rpc.py`
 建立只允許 Client Certificate、預設 loopback 的封閉傳輸服務。
 未具證書拒絕 TLS 握手，具證書仍只能獲得 `sealed` 健康狀態，不能觸發業務；
