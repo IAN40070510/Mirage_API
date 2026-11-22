@@ -43,7 +43,7 @@ def test_single_send_lease_claims_exact_snapshot_and_never_rearms(isolated_test_
     args = dict(admission_id=admission.admission_id, owner=owner,
                 request_fingerprint=admission.request_binding_digest, expected_envelope=envelope)
     assert sender.start_send(**{**args, "owner": "not-owner"}) is None
-    assert sender.start_send(**{**args, "request_fingerprint": "a" * 64}) is None
+    assert sender.start_send(**{**args, "request_fingerprint": "b" * 64}) is None
     assert sender.start_send(**{**args, "expected_envelope": envelope + b"evil"}) is None
     with psycopg.connect(isolated_test_dsn) as connection:
         assert connection.execute("SELECT state FROM response_admissions WHERE admission_id=%s",

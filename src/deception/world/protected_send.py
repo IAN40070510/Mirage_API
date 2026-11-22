@@ -124,6 +124,7 @@ class PostgresProtectedSender(_ProtectedConnection):
         if (not isinstance(lease_id, UUID) or lease_id.version != 4
                 or not isinstance(owner, str) or not 1 <= len(owner) <= 128
                 or type(attempted) is not bool
+                or not isinstance(outcome, AdmissionState)
                 or outcome not in {AdmissionState.SEND_COMPLETED, AdmissionState.SEND_FAILED,
                                    AdmissionState.SEND_PARTIAL_FAILURE}):
             raise ProtectedGrantError("protected_send_terminal_invalid")
