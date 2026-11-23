@@ -62,7 +62,15 @@ Inventory I-03 `GET /synthetic/operations/{attempt}` 與 I-04
 ReadAdmission；RPC 僅返回 `inventory_read_admitted`、來源 ID、世代及
 版本／Hash。它**不會產生查詢成功／業務拒絕 Payload**，也沒有可送出的
 原生 HTTP Status／Headers／Body。包含百分比編碼 SKU 的 URI 相容測試仍
-未解決，且需要真 PostgreSQL CI 固定 SHA 才能簽收這項子切面。
+未解決；ReadAdmission 子切面已在固定 SHA `49fc6ed8` 的
+[真 PostgreSQL CI](https://github.com/IAN40070510/Mirage_API/actions/runs/45185402530)
+通過，但完整 GET 回應仍 OPEN。
+新增 Synthetic 固定 mutation 真業務拒絕來源：Executor 將已保存
+`rejected` 的結果與 409 固定 Envelope Hash 原子寫入受保護拒絕表，
+獨立 Validator 從 Receipt 重建 JSON `{"code":"..."}`。Verifier 僅在
+Executor 結果為真 `rejected` 時透過另一組 mTLS 取得 `native_projection`，
+且會重驗完整 409 bytes、Scope、Fingerprint；此候選不可視為 Client HTTP
+409，也不包含尚未取得來源的 CAS conflict／未知操作拒絕。新切面尚待真 PG CI。
 已存在可信 Read Source 的重試只查回既有唯一來源的完整 Scope／Fingerprint／
 State Version／Hash／期限，不能再 INSERT 第二個 ReadAdmission 來源；來源錯配
 或到期拒絕。首次提交才建立新的受保護讀取來源。

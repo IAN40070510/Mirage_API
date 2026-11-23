@@ -59,6 +59,25 @@ Session 逐欄比對，保留已驗證的 `native_projection.status_code`、
 仍是 OPEN。投影使用 Read Committed 的當前資料庫檢查，尚不能取代
 G5 Restore Fence 及 Send 前重新驗證。
 
+### Synthetic 真實 Handler 409 來源（新增候選子切面，待真 PG CI）
+
+Inventory／Cart Executor 啟動時從本地固定合成契約配置拒絕碼與 Contract
+Revision；僅在業務 Handler 真的以保存的 `rejected` 結果回傳，並且核對
+Result Digest、Receipt／Read Source 後，才在**同一次受保護提交交易**寫入
+不可更新的 `protected_world_rejection_sources`。獨立 Validator 的專用唯讀
+SCRAM 身分增加對該來源及 `world_operations` 的 `SELECT`，不得
+`INSERT`／`UPDATE`／`DELETE`；服務啟動時檢查 ACL，缺少權限直接拒絕。
+
+`POST /internal/v1/project-synthetic-rejection` **僅接受 UUID4 Receipt**，由
+獨立 Validator 重新核對 Handler↔Operation Proof、Result Digest、回應模板、
+Scope／Epoch／Key／期限、ReadAdmission 與 409 Envelope Hash，最後生成
+`{"code":"..."}` 原生合成 JSON 及不可發送的候選 Status／Headers／Body。
+Verifier 再對照本次已驗簽 JWS Scope、Request Fingerprint 與完整候選 bytes。
+這只適用 I-01／I-02、C-03～C-06、C-08 的**真業務 rejected**，不會把
+無效 HTTP、未知 COMMIT、CAS conflict、任意 Runtime SecurityErrorSource
+或無受保護 Result 的錯誤補簽為 409。原生 200、其他拒絕以及 G4 Sender
+仍是 OPEN，包含 M-03 400／404 在內的外層 HTTP 繼續只回內部對帳 `200`。
+
 本輪新增 `tests/test_protected_services.py` 的 400／404 精確候選交接正反測試：
 包含錯 Session／Environment、Fingerprint、Status、Body、固定模板、Headers、
 額外 Handler、Base64 與偽造的 Sender 啟用旗標。Verifier 的 Executor RPC
@@ -157,6 +176,10 @@ Verifier→Native Validator。臨時原始檔保存在 0700 工作目錄，覆�
 Secret 列表；不替使用者準備正式環境密碼，不呼叫 staging／production DB。
 基礎映像的展示 `/healthz:8000` 不適用於專用 mTLS Listener；Compose
 關閉該內建 healthcheck，真實 readiness 由 Gateway mTLS probe 檢查。
+最新 Gateway Probe 另覆蓋一筆合法 JWS／固定 Inventory Handler 的
+`unknown_synthetic_sku` **409 候選**：來源表寫入、獨立 Validator mTLS
+重建 Status／Headers／Body、重播拒絕和 Runtime 無 INSERT 權限均逐項檢查。
+此增量須待本次固定 SHA 真容器 CI 才可簽收，**仍不是客戶端原生 409**。
 
 `g3b_ci_probe.py` 的 Gateway 模式只加入 `g3b_gateway` 網路：
 

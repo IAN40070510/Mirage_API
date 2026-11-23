@@ -24,6 +24,7 @@ from deception.security.protected_services import (
 from deception.world.protected_grant import ProtectedGrantError
 from deception.world.protected_native_http import (
     PostgresProtectedNativeProjector, fixed_medusa_rejection_bytes,
+    fixed_synthetic_rejection_bytes,
 )
 from deception.world.transmission import response_hashes
 
@@ -193,6 +194,8 @@ def test_g3b_native_validator_only_accepts_https_receipt_uuid4():
     with TestClient(app, base_url="http://validator.test") as insecure:
         assert insecure.post("/internal/v1/project-medusa-rejection",
                              json={"receipt_id": receipt}).status_code == 503
+        assert insecure.post("/internal/v1/project-synthetic-rejection",
+                             json={"receipt_id": receipt}).status_code == 503
     with TestClient(app, base_url="https://validator.test") as secure:
         assert secure.post("/internal/v1/project-medusa-rejection",
                            json={"receipt_id": receipt, "status_code": 200}).status_code == 400
@@ -205,6 +208,97 @@ def test_g3b_native_validator_only_accepts_https_receipt_uuid4():
                            content=b"x" * 1025).status_code == 413
         assert secure.post("/internal/v1/project-medusa-rejection",
                            json={"receipt_id": receipt}).status_code == 503
+        assert secure.post("/internal/v1/project-synthetic-rejection",
+                           json={"receipt_id": receipt, "template_id": "version_conflict"}).status_code == 400
+        assert secure.post("/internal/v1/project-synthetic-rejection",
+                           json={"receipt_id": receipt}).status_code == 503
+
+
+def test_g3b_synthetic_rejection_has_fixed_native_409_contract():
+    """合成庫存與 Cart 的 409 僅輸出精確 JSON，不允許 Runtime 自造模板碼。"""
+    for platform, code in (("synthetic-inventory", "insufficient_synthetic_inventory"),
+                           ("synthetic-carts", "cart_not_active")):
+        headers, body = fixed_synthetic_rejection_bytes(platform, code)
+        assert headers == (("content-type", "application/json"),)
+        assert json.loads(body) == {"code": code}
+        assert response_hashes(409, headers, body)[0] != response_hashes(200, headers, body)[0]
+    for platform, code in (("medusa-native-cart", "version_conflict"),
+                           ("synthetic-inventory", "runtime_defined"),
+                           ("synthetic-carts", "unknown_synthetic_sku")):
+        with pytest.raises(ProtectedGrantError, match="rejection_code_unapproved"):
+            fixed_synthetic_rejection_bytes(platform, code)
+
+
+@pytest.mark.parametrize("platform,operation,code", [
+    ("synthetic-inventory", "reserveSyntheticInventory", "insufficient_synthetic_inventory"),
+    ("synthetic-carts", "addGuestCartItem", "unknown_synthetic_variant"),
+])
+def test_g3b_independent_synthetic_409_handoff_denies_candidate_rebinding(
+        monkeypatch, platform, operation, code):
+    """真實 HTTPX JSON 交接僅接受 Validator 的固定 Body/Scope，不能改送業務 200。"""
+    from deception.security import protected_rpc
+
+    receipt = uuid4()
+    headers, body = fixed_synthetic_rejection_bytes(platform, code)
+    envelope, body_hash, _ = response_hashes(409, headers, body)
+    baseline = {
+        "receipt_id": str(receipt), "operation_id": operation,
+        "scope": {"environment_id": "env", "deployment_id": "deploy",
+                  "session_id": "session", "world_generation_id": "world"},
+        "request_fingerprint": "a" * 64, "status_code": 409,
+        "headers": [["content-type", "application/json"]],
+        "body_b64": base64.b64encode(body).decode("ascii"), "envelope_hash": envelope,
+        "source": {"kind": "security_error", "template_id": code,
+                   "contract_revision": platform + "-1"}, "trusted_send": "disabled",
+    }
+    projected = deepcopy(baseline)
+
+    class StubAsyncClient:
+        """模擬隔離 Validator 的精確 JSON，測試 Verifier 不信任結果中的欄位。"""
+
+        def __init__(self, **kwargs):
+            """強制核對獨立 mTLS 連線不得經環境 Proxy。"""
+            assert kwargs["trust_env"] is False
+
+        async def __aenter__(self):
+            """提供可模擬篡改結果的 AsyncClient。"""
+            return self
+
+        async def __aexit__(self, *_):
+            """關閉受控測試 HTTPX context。"""
+            return False
+
+        async def post(self, url, *, json):
+            """驗證唯一 Receipt 輸入，不接受 Runtime 傳入偽造來源。"""
+            assert url == "https://validator.invalid:8445/internal/v1/project-synthetic-rejection"
+            assert json == {"receipt_id": str(receipt)}
+            return httpx.Response(200, json=projected)
+
+    monkeypatch.setattr(protected_rpc.httpx, "AsyncClient", StubAsyncClient)
+    client = object.__new__(FixedNativeValidatorMTLSClient)
+    client._origin, client._tls = "https://validator.invalid:8445", object()
+    args = dict(receipt_id=receipt, operation_id=operation, platform=platform,
+                request_fingerprint="a" * 64, expected_environment_id="env",
+                expected_deployment_id="deploy", expected_session_id="session")
+    admitted = asyncio.run(client.project_synthetic_rejection(**args))
+    assert admitted["status_code"] == 409 and admitted["body_sha256"] == body_hash
+    assert base64.b64decode(admitted["body_b64"], validate=True) == body
+    assert admitted["delivery"] == "candidate_only_no_send_authorization"
+    for mutation in ({"status_code": 200}, {"receipt_id": str(uuid4())},
+                     {"request_fingerprint": "b" * 64}, {"trusted_send": "enabled"},
+                     {"body_b64": base64.b64encode(body + b"x").decode("ascii")},
+                     {"envelope_hash": "f" * 64}, {"headers": [["x-fake", "1"]]},
+                     {"operation_id": "cancelSyntheticOrder"},
+                     {"source": {"kind": "security_error", "template_id": "runtime_defined",
+                                 "contract_revision": platform + "-1"}},
+                     {"scope": {**baseline["scope"], "session_id": "cross-session"}},
+                     {"handler": "caller-selected"}):
+        projected.clear()
+        projected.update(deepcopy(baseline))
+        projected.update(mutation)
+        with pytest.raises(ProtectedRpcConfigurationError,
+                           match="synthetic_validator_projection_binding_mismatch"):
+            asyncio.run(client.project_synthetic_rejection(**args))
 
 
 @pytest.mark.parametrize("status,template", [

@@ -241,7 +241,7 @@ def test_direct_https_verifier_captures_actual_request_and_mints_atomic_proof(is
 
 
 def test_direct_verifier_dispatches_inventory_over_real_executor_mtls_once(isolated_test_dsn, tmp_path):
-    """兩個真程序與實體 TLS：原始 JWS HTTP → Verifier Proof → Executor 固定庫存提交。"""
+    """真三程序雙 CA：Verifier→Executor 固定 Inventory 提交及獨立 Validator 409。"""
     import json
     import multiprocessing
     import ssl
@@ -253,9 +253,14 @@ def test_direct_verifier_dispatches_inventory_over_real_executor_mtls_once(isola
 
     from deception.domains.ecommerce.inventory import SyntheticInventory
     from deception.security.protected_rpc import (
-        FixedExecutorMTLSClient, create_fixed_executor_app, serve_fixed_executor_mtls,
+        FixedExecutorMTLSClient, FixedNativeValidatorMTLSClient,
+        create_fixed_executor_app, create_native_validator_app,
+        serve_fixed_executor_mtls, serve_native_validator_mtls,
     )
     from deception.world.protected_world import PostgresProtectedWorldExecutor
+    from deception.world.protected_native_http import (
+        PostgresProtectedNativeProjector, fixed_synthetic_rejection_bytes,
+    )
     from deception.world.session import SessionBinding
     from test_protected_rpc_mtls import _issue_mtls_certificates, _unused_local_port
 
@@ -268,14 +273,32 @@ def test_direct_verifier_dispatches_inventory_over_real_executor_mtls_once(isola
                              now=now, ttl=120)
     with psycopg.connect(dsn) as connection:
         login = connection.execute("SELECT session_user").fetchone()[0]
-    executor = PostgresProtectedWorldExecutor(dsn, expected_login=login, world_store=world)
+    executor = PostgresProtectedWorldExecutor(
+        dsn, expected_login=login, world_store=world,
+        rejection_templates={"unknown_synthetic_sku": "synthetic-inventory-1"},
+    )
     ca, server_cert, server_key, client_cert, client_key = _issue_mtls_certificates(tmp_path)
-    port = _unused_local_port()
+    validator_root = tmp_path / "inventory-validator-ca"
+    validator_root.mkdir()
+    validator_ca, validator_cert, validator_key, validator_client_cert, validator_client_key = (
+        _issue_mtls_certificates(validator_root))
+    assert validator_ca.read_bytes() != ca.read_bytes()
+    port, validator_port = _unused_local_port(), _unused_local_port()
+    while port == validator_port:
+        validator_port = _unused_local_port()
     worker = multiprocessing.Process(target=serve_fixed_executor_mtls, kwargs={
         "app": create_fixed_executor_app(executor=executor), "host": "127.0.0.1", "port": port,
         "server_cert": server_cert, "server_key": server_key, "verifier_client_ca": ca,
     })
+    validator_worker = multiprocessing.Process(target=serve_native_validator_mtls, kwargs={
+        "app": create_native_validator_app(projector=PostgresProtectedNativeProjector(
+            dsn, expected_login=login)),
+        "host": "127.0.0.1", "port": validator_port,
+        "server_cert": validator_cert, "server_key": validator_key,
+        "verifier_client_ca": validator_ca,
+    })
     worker.start()
+    validator_worker.start()
     try:
         context = ssl.create_default_context(cafile=str(ca))
         context.load_cert_chain(str(client_cert), str(client_key))
@@ -291,16 +314,35 @@ def test_direct_verifier_dispatches_inventory_over_real_executor_mtls_once(isola
                     clock.sleep(0.1)
             else:
                 pytest.fail("Executor server did not become ready")
+        validator_context = ssl.create_default_context(cafile=str(validator_ca))
+        validator_context.load_cert_chain(str(validator_client_cert), str(validator_client_key))
+        with httpx.Client(verify=validator_context, trust_env=False, timeout=1.0) as validator_mtls:
+            for _ in range(50):
+                try:
+                    assert validator_mtls.get(
+                        f"https://127.0.0.1:{validator_port}/internal/ready").status_code == 200
+                    break
+                except httpx.ConnectError:
+                    if not validator_worker.is_alive():
+                        pytest.fail("Inventory validator crashed before readiness")
+                    clock.sleep(0.1)
+            else:
+                pytest.fail("Inventory validator did not become ready")
         key = Ed25519PrivateKey.generate()
         executor_client = FixedExecutorMTLSClient(
             origin=f"https://127.0.0.1:{port}", client_cert=client_cert,
             client_key=client_key, server_ca=ca,
         )
+        native_client = FixedNativeValidatorMTLSClient(
+            origin=f"https://127.0.0.1:{validator_port}",
+            client_cert=validator_client_cert, client_key=validator_client_key,
+            server_ca=validator_ca,
+        )
         verifier_app = create_direct_verifier_app(
             verifier=verifier(dsn, {"old": key}), postgres_dsn=dsn,
             environment_id="env", deployment_id="deploy",
             expected_issuer="gateway", expected_audience="mirage",
-            executor_client=executor_client,
+            executor_client=executor_client, native_validator_client=native_client,
         )
         body = json.dumps({"sku": "sku-1", "quantity": 2, "expected_version": 1,
                            "idempotency_key": "real-mtls-once",
@@ -339,20 +381,46 @@ def test_direct_verifier_dispatches_inventory_over_real_executor_mtls_once(isola
                 assert internal["state_version"] == 2
                 assert "status_code" not in internal and "body_b64" not in internal
                 assert gateway.send(original).status_code == 403
+            # 真實拒絕來源只有被固定 Handler 拒絕後才能由另一程序投影。
+            failed_body = json.dumps({"sku": "missing", "quantity": 1,
+                                      "expected_version": 2, "idempotency_key": "real-409",
+                                      "commit_attempt_id": str(uuid4())}).encode()
+            rejected = gateway.build_request(
+                "POST", "/synthetic/inventory/reservations", content=failed_body,
+                headers={"x-request-id": "three-process-409", "content-type": "application/json"},
+            )
+            refusal_fingerprint = fingerprint_httpx_request(rejected, "three-process-409")
+            rejected.headers["x-trusted-session"] = signed(
+                key, jti=uuid4().hex, fingerprint=refusal_fingerprint, access_mode="inventory",
+            )
+            refused = gateway.send(rejected)
+            assert refused.status_code == 200, refused.text  # 僅內部對帳，非 Client 原生 409。
+            assert refused.json()["executor_result"]["status"] == "rejected"
+            candidate = refused.json()["native_projection"]
+            headers, expected_body = fixed_synthetic_rejection_bytes(
+                "synthetic-inventory", "unknown_synthetic_sku")
+            assert candidate["status_code"] == 409
+            assert candidate["headers"] == [list(header) for header in headers]
+            assert base64.b64decode(candidate["body_b64"], validate=True) == expected_body
+            assert candidate["scope"]["session_id"] == binding.session_id
+            assert candidate["delivery"] == "candidate_only_no_send_authorization"
+            assert gateway.send(rejected).status_code == 403
         with psycopg.connect(dsn) as connection:
             assert connection.execute(
                 "SELECT state->'inventory'->>'sku-1' FROM world_snapshots WHERE world_generation_id=%s",
                 (snapshot.scope.world_generation_id,),
             ).fetchone()[0] == "2"
             assert connection.execute("SELECT count(*) FROM protected_world_commit_sources").fetchone()[0] == 1
-            assert connection.execute("SELECT count(*) FROM protected_world_read_sources").fetchone()[0] == 3
-            assert connection.execute("SELECT count(*) FROM ingress_receipts").fetchone()[0] == 3
+            assert connection.execute("SELECT count(*) FROM protected_world_read_sources").fetchone()[0] == 4
+            assert connection.execute("SELECT count(*) FROM ingress_receipts").fetchone()[0] == 4
+            assert connection.execute("SELECT count(*) FROM protected_world_rejection_sources").fetchone()[0] == 1
     finally:
-        worker.terminate()
-        worker.join(timeout=5)
-        if worker.is_alive():
-            worker.kill()
-            worker.join(timeout=5)
+        for process in (worker, validator_worker):
+            process.terminate()
+            process.join(timeout=5)
+            if process.is_alive():
+                process.kill()
+                process.join(timeout=5)
 
 
 def test_direct_verifier_medusa_400_over_real_executor_mtls(isolated_test_dsn, tmp_path):

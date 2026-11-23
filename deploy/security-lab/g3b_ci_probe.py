@@ -22,6 +22,8 @@ from deception.api.fingerprint import fingerprint_httpx_request
 from deception.security.operation_binding import _pinned_medusa_operations
 from deception.domains.ecommerce.cart_http import cart_specification
 from deception.domains.ecommerce.inventory_http import inventory_specification
+from deception.world.protected_native_http import fixed_synthetic_rejection_bytes
+from deception.world.transmission import response_hashes
 
 
 def _twenty_native_routes() -> tuple[tuple[str, str, str, str], ...]:
@@ -158,6 +160,42 @@ def _gateway() -> None:
         }, sort_keys=True))
         if gateway.send(request).status_code != 403:
             raise RuntimeError("g3b_ci_replay_accepted")
+        # 真實四容器與兩組 mTLS CA：已拒絕的 Handler 結果只能由獨立 Validator
+        # 還原 409 候選，外層控制面 200 不能冒稱 Client 已收到原生 409。
+        rejection_body = json.dumps({
+            "sku": "sku-does-not-exist", "quantity": 1, "expected_version": 2,
+            "idempotency_key": "g3b-container-rejected", "commit_attempt_id": str(uuid4()),
+        }).encode("utf-8")
+        rejected = gateway.build_request(
+            "POST", origin + "/synthetic/inventory/reservations", content=rejection_body,
+            headers={"x-request-id": "g3b-ci-inventory-409", "content-type": "application/json"},
+        )
+        rejected.headers["x-trusted-session"] = _sign(
+            key, fingerprint=fingerprint_httpx_request(rejected, "g3b-ci-inventory-409"),
+            session="session", mode="inventory",
+        )
+        business_denial = gateway.send(rejected)
+        if business_denial.status_code != 200:
+            raise RuntimeError("g3b_ci_synthetic_409_internal_rpc_unverifiable")
+        denial = business_denial.json()
+        source = denial.get("native_projection", {})
+        headers, expected_body = fixed_synthetic_rejection_bytes(
+            "synthetic-inventory", "unknown_synthetic_sku")
+        expected_envelope = response_hashes(409, headers, expected_body)[0]
+        if (denial.get("executor_result", {}).get("status") != "rejected"
+                or source.get("status_code") != 409
+                or source.get("headers") != [list(header) for header in headers]
+                or source.get("envelope_hash") != expected_envelope
+                or source.get("scope", {}).get("session_id") != "session"
+                or source.get("delivery") != "candidate_only_no_send_authorization"
+                or base64.b64decode(source.get("body_b64", ""), validate=True) != expected_body
+                or gateway.send(rejected).status_code != 403):
+            raise RuntimeError("g3b_ci_synthetic_409_validator_source_mismatch")
+        print("G3B_ROUTE_PROTECTED_SYNTHETIC_REJECTION " + json.dumps({
+            "operation_id": "reserveSyntheticInventory", "http_status": business_denial.status_code,
+            "validated_native_status": 409, "template_id": "unknown_synthetic_sku",
+            "source": "protected_world_rejection_sources", "native_business_response": False,
+        }, sort_keys=True))
         for suffix, payload, status, template in (
                 ("bad-item", b'{"variant_id":"known","quantity":0}', 400,
                  "native-cart-invalid"),
@@ -205,7 +243,7 @@ def _gateway() -> None:
         except socket.gaierror:
             continue
         raise RuntimeError("g3b_ci_gateway_network_leak:" + hostname)
-    print("G3B_GATEWAY_PASS unsigned_routes=20/20 inventory_commit=1 medusa_400=1 "
+    print("G3B_GATEWAY_PASS unsigned_routes=20/20 inventory_commit=1 synthetic_409=1 medusa_400=1 "
           "medusa_404=1 replay=denied anonymous=denied execution_network=unreachable trusted_send=off")
 
 
@@ -258,11 +296,14 @@ def _audit(root: Path) -> None:
             raise RuntimeError("g3b_ci_inventory_commit_evidence_missing")
         if admin.execute("SELECT count(*) FROM protected_medusa_rejection_sources").fetchone()[0] != 2:
             raise RuntimeError("g3b_ci_medusa_rejection_evidence_missing")
-        if admin.execute("SELECT count(*) FROM protected_http_operation_bindings").fetchone()[0] != 3:
+        if admin.execute("SELECT count(*) FROM protected_world_rejection_sources").fetchone()[0] != 1:
+            raise RuntimeError("g3b_ci_synthetic_rejection_evidence_missing")
+        if admin.execute("SELECT count(*) FROM protected_http_operation_bindings").fetchone()[0] != 4:
             raise RuntimeError("g3b_ci_operation_proof_count_mismatch")
         for role, forbidden in (
                 ("mirage_g3b_ci_verifier", "protected_world_commit_sources"),
                 ("mirage_g3b_ci_validator", "protected_medusa_rejection_sources"),
+                ("mirage_g3b_ci_validator", "protected_world_rejection_sources"),
                 ("mirage_g3b_ci_runtime", "ingress_receipts")):
             if admin.execute("SELECT has_table_privilege(%s,%s,'INSERT')",
                              (role, forbidden)).fetchone() != (False,):

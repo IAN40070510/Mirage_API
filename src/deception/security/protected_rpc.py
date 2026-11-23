@@ -225,6 +225,74 @@ class FixedNativeValidatorMTLSClient:
             "delivery": "candidate_only_no_send_authorization",
         }
 
+    async def project_synthetic_rejection(
+        self, *, receipt_id: UUID, operation_id: str, platform: str,
+        request_fingerprint: str, expected_environment_id: str,
+        expected_deployment_id: str, expected_session_id: str,
+    ) -> dict[str, object]:
+        """只由獨立 Validator 的受保護 DB 拒絕來源取得真正 409 候選。
+
+        Verifier 不傳錯誤碼、Body、Template 或 Scope 選擇值；收到的 JSON
+        必須與本地固定合成契約的精確 bytes/hash、Receipt／JWS Scope 一致。
+        """
+        from deception.world.protected_native_http import (
+            _SYNTHETIC_MUTATION_HANDLERS, fixed_synthetic_rejection_bytes,
+        )
+        from deception.world.transmission import response_hashes
+
+        expected = _SYNTHETIC_MUTATION_HANDLERS.get(operation_id)
+        if expected is None or expected[0] != platform:
+            raise ProtectedRpcConfigurationError("synthetic_validator_operation_unapproved")
+        async with httpx.AsyncClient(verify=self._tls, trust_env=False, timeout=8.0) as client:
+            response = await client.post(
+                self._origin + "/internal/v1/project-synthetic-rejection",
+                json={"receipt_id": str(receipt_id)},
+            )
+        if response.status_code != 200:
+            raise ProtectedRpcConfigurationError("synthetic_validator_projection_unverifiable")
+        try:
+            result = json.loads(response.content, object_pairs_hook=unique_object,
+                                parse_constant=reject_constant)
+            if not isinstance(result, dict) or set(result) != {
+                    "receipt_id", "operation_id", "scope", "request_fingerprint",
+                    "status_code", "headers", "body_b64", "envelope_hash", "source",
+                    "trusted_send"}:
+                raise ValueError("synthetic_validator_response_shape_invalid")
+            body = _canonical_base64(result["body_b64"], max_bytes=4096)
+            source = result["source"]
+            if (not isinstance(source, dict)
+                    or set(source) != {"kind", "template_id", "contract_revision"}
+                    or source.get("kind") != "security_error"
+                    or source.get("contract_revision") != platform + "-1"):
+                raise ValueError("synthetic_validator_source_invalid")
+            headers, expected_body = fixed_synthetic_rejection_bytes(platform, source.get("template_id"))
+            envelope_hash, body_hash, _ = response_hashes(409, headers, expected_body)
+            if (result["receipt_id"] != str(receipt_id)
+                    or result["operation_id"] != operation_id
+                    or result["request_fingerprint"] != request_fingerprint
+                    or type(result["status_code"]) is not int or result["status_code"] != 409
+                    or result["headers"] != [["content-type", "application/json"]]
+                    or body != expected_body or result["envelope_hash"] != envelope_hash
+                    or result["trusted_send"] != "disabled"
+                    or not isinstance(result["scope"], dict)
+                    or set(result["scope"]) != {
+                        "environment_id", "deployment_id", "session_id", "world_generation_id"}
+                    or result["scope"].get("environment_id") != expected_environment_id
+                    or result["scope"].get("deployment_id") != expected_deployment_id
+                    or result["scope"].get("session_id") != expected_session_id
+                    or not isinstance(result["scope"].get("world_generation_id"), str)
+                    or not result["scope"]["world_generation_id"]):
+                raise ValueError("synthetic_validator_projection_binding_mismatch")
+        except (ValueError, KeyError, TypeError, UnicodeError) as exc:
+            raise ProtectedRpcConfigurationError("synthetic_validator_projection_binding_mismatch") from exc
+        return {
+            "status_code": 409, "headers": [["content-type", "application/json"]],
+            "body_b64": base64.b64encode(body).decode("ascii"),
+            "envelope_hash": envelope_hash, "body_sha256": body_hash,
+            "scope": dict(result["scope"]), "source": dict(source),
+            "delivery": "candidate_only_no_send_authorization",
+        }
+
 
 def _canonical_base64(raw: str, *, max_bytes: int) -> bytes:
     """嚴格拒絕替代編碼與超大資料，避免 RPC 與 Verifier 解析分歧。"""
@@ -326,9 +394,10 @@ def create_native_validator_app(*, projector) -> FastAPI:
         """只回報 Validator 已掛載且 Sender 關閉，不承諾來源或 Profile 已核准。"""
         return {"control_plane": "native-validator-candidate-only", "trusted_send": "disabled"}
 
+    @app.post("/internal/v1/project-synthetic-rejection")
     @app.post("/internal/v1/project-medusa-rejection")
     async def project(request: Request) -> dict[str, object]:
-        """將精確 Receipt 的受保護 Read／Rejection 轉成不可直接發送的 JSON 封套。"""
+        """按固定 URL 選 Medusa 400/404 或 Synthetic 409，不接受 Caller 選模板。"""
         if request.scope.get("scheme") != "https":
             raise HTTPException(status_code=503, detail="native_validator_tls_required")
         received = bytearray()
@@ -345,7 +414,10 @@ def create_native_validator_app(*, projector) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="native_validator_request_invalid") from exc
         try:
-            projected = projector.project_medusa_rejection(UUID(str(call.receipt_id)))
+            if request.scope.get("path") == "/internal/v1/project-synthetic-rejection":
+                projected = projector.project_synthetic_rejection(UUID(str(call.receipt_id)))
+            else:
+                projected = projector.project_medusa_rejection(UUID(str(call.receipt_id)))
         except Exception as exc:
             raise HTTPException(status_code=503, detail="native_validator_source_unverifiable") from exc
         return {
@@ -481,6 +553,23 @@ def create_direct_verifier_app(
             except Exception as exc:
                 raise HTTPException(status_code=503,
                                     detail="direct_verifier_native_projection_unverifiable") from exc
+        elif (isinstance(outcome, dict) and outcome.get("kind") == "world_mutation"
+              and outcome.get("status") == "rejected"):
+            if native_validator_client is None:
+                raise HTTPException(status_code=503,
+                                    detail="direct_verifier_native_validator_not_wired")
+            try:
+                projection = await native_validator_client.project_synthetic_rejection(
+                    receipt_id=receipt_id, operation_id=operation.operation_id,
+                    platform=operation.platform,
+                    request_fingerprint=fingerprint_request(normalized),
+                    expected_environment_id=claims.environment_id,
+                    expected_deployment_id=claims.deployment_id,
+                    expected_session_id=claims.session_id,
+                )
+            except Exception as exc:
+                raise HTTPException(status_code=503,
+                                    detail="direct_verifier_synthetic_projection_unverifiable") from exc
         # 不能在 HTTP 回應暴露已驗證 claims 或受保護 DB Secret；此結果非 Sender。
         result: dict[str, object] = {"receipt_id": str(receipt_id),
                                      "operation_id": operation.operation_id}

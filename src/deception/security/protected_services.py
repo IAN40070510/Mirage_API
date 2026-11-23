@@ -75,13 +75,17 @@ def _login_preflight(dsn: str, login: str, *, role: str, schema: str,
                 ("read_admissions", "SELECT"),
                 ("protected_world_read_sources", "SELECT"),
                 ("protected_world_commit_sources", "SELECT"),
+                ("protected_world_rejection_sources", "SELECT"),
                 ("read_admissions", "INSERT"), ("protected_world_read_sources", "INSERT"),
+                ("protected_world_rejection_sources", "INSERT"),
                 ("world_events", "INSERT"), ("world_operations", "INSERT"),
                 ("world_commit_receipts", "INSERT"), ("protected_world_commit_sources", "INSERT"),
                 ("session_heads", "UPDATE"), ("session_world_bindings", "UPDATE"),
                 ("generation_controls", "UPDATE"), ("world_snapshots", "UPDATE"))
                 if role == "executor" else (
                 ("protected_medusa_rejection_sources", "SELECT"),
+                ("protected_world_rejection_sources", "SELECT"),
+                ("world_operations", "SELECT"),
                 ("ingress_receipts", "SELECT"), ("protected_http_operation_bindings", "SELECT"),
                 ("protected_world_read_sources", "SELECT"), ("read_admissions", "SELECT"),
                 ("session_heads", "SELECT"), ("session_world_bindings", "SELECT"),
@@ -142,6 +146,7 @@ def _login_preflight(dsn: str, login: str, *, role: str, schema: str,
             if role == "validator":
                 for table in (
                         "protected_medusa_rejection_sources", "ingress_receipts",
+                        "protected_world_rejection_sources", "world_operations",
                         "protected_http_operation_bindings", "protected_world_read_sources",
                         "read_admissions", "session_heads", "session_world_bindings",
                         "generation_controls", "trusted_key_revocations", "world_operations",
@@ -241,7 +246,9 @@ def create_verifier_service(config: Mapping[str, str]) -> FastAPI:
 def create_executor_service(config: Mapping[str, str]) -> FastAPI:
     """以單一核准平台與專屬 Executor SCRAM 身分掛固定 Handler，不接 Runtime 指令。"""
     from deception.domains.ecommerce.carts import SyntheticCarts
+    from deception.domains.ecommerce.cart_http import CART_ERRORS
     from deception.domains.ecommerce.inventory import SyntheticInventory
+    from deception.domains.ecommerce.inventory_http import ERROR_CODES
     from deception.world.protected_world import PostgresProtectedWorldExecutor
 
     if (config.get("MIRAGE_G3B_VERIFIER_DSN_FILE")
@@ -271,6 +278,9 @@ def create_executor_service(config: Mapping[str, str]) -> FastAPI:
     executor = PostgresProtectedWorldExecutor(
         dsn, expected_login=login, world_store=store,
         cart_initial_state=state, medusa_publishable_key=publishable,
+        rejection_templates={code: ("synthetic-inventory-1" if platform == "synthetic-inventory"
+                                    else "synthetic-carts-1")
+                             for code in (ERROR_CODES if platform == "synthetic-inventory" else CART_ERRORS)},
     )
     return create_fixed_executor_app(executor=executor)
 

@@ -203,6 +203,128 @@ def test_inventory_http_legacy_receipt_cannot_select_operation(isolated_test_dsn
         )
 
 
+def test_fixed_inventory_409_has_independent_validator_and_promotable_source(
+        isolated_test_dsn, request):
+    """真 PostgreSQL Handler 拒絕才有可 Promotion 的 409；獨立唯讀 Login 重新建構。
+
+    Client HTTP 仍是內部對帳 200，本測試只核對候選與受保護來源。
+    """
+    import psycopg
+    from psycopg import sql
+    from psycopg.conninfo import conninfo_to_dict, make_conninfo
+
+    from deception.world.protected_native_http import (
+        PostgresProtectedNativeProjector, fixed_synthetic_rejection_bytes,
+    )
+
+    dsn, now = isolated_test_dsn, int(time.time())
+    binding = SessionBinding(environment_id="inventory-409-proof", deployment_id="isolated",
+                             session_id=uuid4().hex, session_epoch=1, access_mode="inventory")
+    world = SyntheticInventory(dsn)
+    snapshot = world.resolve(binding, {"inventory": {"sku-1": 3}, "reservations": {}},
+                             now=now, ttl=120)
+    body = json.dumps(dict(sku="unknown-sku", quantity=1, expected_version=1,
+                           idempotency_key="reject-once", commit_attempt_id=str(uuid4()))).encode()
+    original = replace(original_request(), body=body)
+    proof = derive_verified_operation(original)
+    receipt, jti = uuid4(), uuid4().hex
+    with psycopg.connect(dsn) as connection:
+        connection.execute("INSERT INTO replay_entries VALUES ('gateway','mirage',%s,%s)",
+                           (jti, now + 120))
+        connection.execute(
+            """INSERT INTO ingress_receipts (
+                   receipt_id,issuer,audience,jti,key_id,environment_id,deployment_id,
+                   session_id,session_epoch,request_fingerprint,assessment_digest,
+                   claims_digest,verification_policy_version,token_issued_at,
+                   token_not_before,token_expires_at,access_mode)
+               VALUES (%s,'gateway','mirage',%s,'kid',%s,%s,%s,1,%s,%s,%s,
+                       'trusted-session-v1.1',%s,%s,%s,'inventory')""",
+            (receipt, jti, binding.environment_id, binding.deployment_id,
+             binding.session_id, proof.request_fingerprint, digest("b"), digest("c"),
+             now - 5, now - 5, now + 90),
+        )
+        connection.execute(
+            """INSERT INTO protected_http_operation_bindings (
+                   receipt_id,platform,operation_id,method,path_template,
+                   request_fingerprint,request_body_sha256,request_path,request_content_type)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+            (receipt, proof.platform, proof.operation_id, proof.method, proof.path_template,
+             proof.request_fingerprint, proof.request_body_sha256,
+             proof.request_path, proof.request_content_type),
+        )
+    executor = PostgresProtectedWorldExecutor(
+        dsn, expected_login=_real_login(dsn), world_store=world,
+        rejection_templates={"unknown_synthetic_sku": "synthetic-inventory-1"},
+    )
+    outcome = executor.execute_verified_http(receipt_id=receipt,
+                                             raw_path=original.raw_path, raw_body=body)
+    assert outcome["status"] == "rejected" and outcome["kind"] == "world_mutation"
+    assert outcome["operation"] == "reserveSyntheticInventory"
+    with psycopg.connect(dsn) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM protected_world_rejection_sources WHERE receipt_id=%s",
+            (receipt,),
+        ).fetchone() == (1,)
+        assert connection.execute("SELECT count(*) FROM world_events").fetchone() == (0,)
+        assert connection.execute("SELECT state->'inventory'->>'sku-1' FROM world_snapshots").fetchone() == ("3",)
+    projector_dsn, projector_login = dsn, _real_login(dsn)
+    if os.environ.get("MIRAGE_WORLD_ROLE_TEST_ISOLATED") == "true":
+        schema = conninfo_to_dict(dsn)["options"].split("search_path=", 1)[1].split(" ", 1)[0]
+        projector_login = "mirage_g3b_inventory_validator_" + uuid4().hex[:10]
+        password = secrets.token_urlsafe(32)
+        with psycopg.connect(dsn, autocommit=True) as admin:
+            admin.execute(sql.SQL(
+                "CREATE ROLE {} LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE "
+                "NOREPLICATION NOBYPASSRLS PASSWORD {}"
+            ).format(sql.Identifier(projector_login), sql.Literal(password)))
+            admin.execute(sql.SQL("GRANT USAGE ON SCHEMA {} TO {}").format(
+                sql.Identifier(schema), sql.Identifier(projector_login)))
+            admin.execute(sql.SQL(
+                "GRANT SELECT ON protected_world_rejection_sources,world_operations,"
+                "ingress_receipts,protected_http_operation_bindings,protected_world_read_sources,"
+                "read_admissions,session_heads,session_world_bindings,generation_controls,"
+                "trusted_key_revocations TO {}"
+            ).format(sql.Identifier(projector_login)))
+
+        def cleanup_validator_role():
+            """移除僅在拋棄式測試 Schema 內的獨立 SCRAM Validator Role。"""
+            with psycopg.connect(dsn, autocommit=True) as admin:
+                admin.execute(sql.SQL("DROP OWNED BY {}").format(sql.Identifier(projector_login)))
+                admin.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(projector_login)))
+
+        request.addfinalizer(cleanup_validator_role)
+        projector_dsn = make_conninfo(dsn, user=projector_login, password=password)
+        with psycopg.connect(projector_dsn) as isolated:
+            assert isolated.execute("SELECT session_user,current_user").fetchone() == (
+                projector_login, projector_login,
+            )
+            assert isolated.execute("SELECT has_table_privilege('protected_world_rejection_sources','INSERT')"
+                                    ).fetchone() == (False,)
+    projector = PostgresProtectedNativeProjector(projector_dsn, expected_login=projector_login)
+    projection = projector.project_synthetic_rejection(receipt)
+    headers, expected_body = fixed_synthetic_rejection_bytes(
+        "synthetic-inventory", "unknown_synthetic_sku",
+    )
+    assert projection.status_code == 409 and projection.headers == headers
+    assert projection.body_bytes == expected_body and projection.envelope_hash == response_hashes(
+        409, headers, expected_body,
+    )[0]
+    assert projection.operation_id == "reserveSyntheticInventory"
+    assert projection.scope == snapshot.scope and projection.request_fingerprint == proof.request_fingerprint
+    assert projection.source == SecurityErrorSource(
+        template_id="unknown_synthetic_sku", contract_revision="synthetic-inventory-1",
+    )
+    assert _candidate(dsn, scope=snapshot.scope, source=projection.source,
+                      receipt_id=receipt, fingerprint=proof.request_fingerprint,
+                      status=409, body=projection.body_bytes) == 1
+    with pytest.raises(ProtectedGrantError, match="candidate_source_unverifiable"):
+        _candidate(dsn, scope=snapshot.scope, source=projection.source,
+                   receipt_id=receipt, fingerprint=proof.request_fingerprint,
+                   status=409, body=b'{"code":"runtime_forgery"}')
+    with pytest.raises(ProtectedGrantError, match="source_missing"):
+        projector.project_synthetic_rejection(uuid4())
+
+
 @pytest.mark.parametrize("path,operation", [
     ("/synthetic/inventory/sku-1", "getSyntheticInventory"),
     ("/synthetic/operations/" + str(uuid4()), "getSyntheticOperation"),
@@ -442,6 +564,7 @@ def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolat
                 sql.Identifier(schema), sql.Identifier(projector_login)))
             admin.execute(sql.SQL(
                 "GRANT SELECT ON protected_medusa_rejection_sources,ingress_receipts,"
+                "protected_world_rejection_sources,world_operations,"
                 "protected_http_operation_bindings,protected_world_read_sources,"
                 "read_admissions,session_heads,session_world_bindings,"
                 "generation_controls,trusted_key_revocations TO {}"

@@ -109,26 +109,29 @@ def _provision_roles(admin_dsn: str) -> dict[str, str]:
             ("inventory", "SELECT", "ingress_receipts,protected_http_operation_bindings,"
              "session_heads,session_world_bindings,generation_controls,trusted_key_revocations,"
              "world_snapshots,world_operations,read_admissions,protected_world_read_sources,"
-             "protected_world_commit_sources"),
+             "protected_world_commit_sources,protected_world_rejection_sources"),
             ("inventory", "INSERT", "read_admissions,protected_world_read_sources,"
              "world_operations,world_events,world_commit_receipts,protected_world_commit_sources"),
+            ("inventory", "INSERT", "protected_world_rejection_sources"),
             ("inventory", "UPDATE", "session_heads,session_world_bindings,"
              "generation_controls,world_snapshots"),
             ("cart", "SELECT", "ingress_receipts,protected_http_operation_bindings,"
              "session_heads,session_world_bindings,generation_controls,trusted_key_revocations,"
              "world_snapshots,world_operations,read_admissions,protected_world_read_sources,"
-             "protected_world_commit_sources,protected_cart_creations,synthetic_resources,"
+             "protected_world_commit_sources,protected_world_rejection_sources,"
+             "protected_cart_creations,synthetic_resources,"
              "guest_cart_creations,protected_medusa_rejection_sources"),
             ("cart", "INSERT", "read_admissions,protected_world_read_sources,world_operations,"
              "world_events,world_commit_receipts,protected_world_commit_sources,"
              "protected_cart_creations,synthetic_resources,guest_cart_creations,"
              "protected_medusa_rejection_sources,session_heads,session_world_bindings,"
-             "generation_controls,world_snapshots"),
+             "generation_controls,world_snapshots,protected_world_rejection_sources"),
             ("cart", "UPDATE", "session_heads,session_world_bindings,"
              "generation_controls,world_snapshots"),
             ("validator", "SELECT", "protected_medusa_rejection_sources,ingress_receipts,"
              "protected_http_operation_bindings,protected_world_read_sources,read_admissions,"
-             "session_heads,session_world_bindings,generation_controls,trusted_key_revocations"),
+             "session_heads,session_world_bindings,generation_controls,trusted_key_revocations,"
+             "protected_world_rejection_sources,world_operations"),
         )
         for role, privilege, names in grants:
             admin.execute(sql.SQL("GRANT {} ON {} TO {}").format(
