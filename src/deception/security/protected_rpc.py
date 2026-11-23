@@ -297,6 +297,8 @@ class FixedNativeValidatorMTLSClient:
         self, *, receipt_id: UUID, operation_id: str, resource_id: str,
         request_fingerprint: str, expected_environment_id: str,
         expected_deployment_id: str, expected_session_id: str,
+        expected_read_admission_id: str, expected_world_generation_id: str,
+        expected_state_version: int, expected_state_hash: str,
     ) -> dict[str, object]:
         """只從唯讀 Validator 的固定 I-04 ReadAdmission 重建 200 候選。
 
@@ -341,9 +343,12 @@ class FixedNativeValidatorMTLSClient:
                     or source["kind"] != "snapshot"
                     or not isinstance(source["read_admission_id"], str)
                     or re.fullmatch(r"[0-9a-f]{32}", source["read_admission_id"]) is None
+                    or source["read_admission_id"] != expected_read_admission_id
                     or source["state_version"] != parsed_body["state_version"]
+                    or source["state_version"] != expected_state_version
                     or not isinstance(source["state_hash"], str)
                     or re.fullmatch(r"[0-9a-f]{64}", source["state_hash"]) is None
+                    or source["state_hash"] != expected_state_hash
                     or not isinstance(scope, dict) or set(scope) != {
                         "environment_id", "deployment_id", "session_id", "world_generation_id"}
                     or (scope.get("environment_id"), scope.get("deployment_id"),
@@ -352,6 +357,7 @@ class FixedNativeValidatorMTLSClient:
                     or not isinstance(scope.get("world_generation_id"), str)
                     or not scope["world_generation_id"]
                     or source["world_generation_id"] != scope["world_generation_id"]
+                    or source["world_generation_id"] != expected_world_generation_id
                     or body != json.dumps(parsed_body, ensure_ascii=False, sort_keys=True,
                                           separators=(",", ":")).encode("utf-8")
                     or result["receipt_id"] != str(receipt_id)
@@ -649,6 +655,10 @@ def create_direct_verifier_app(
                     expected_environment_id=claims.environment_id,
                     expected_deployment_id=claims.deployment_id,
                     expected_session_id=claims.session_id,
+                    expected_read_admission_id=outcome["read_admission_id"],
+                    expected_world_generation_id=outcome["world_generation_id"],
+                    expected_state_version=outcome["state_version"],
+                    expected_state_hash=outcome["state_hash"],
                 )
             except Exception as exc:
                 raise HTTPException(status_code=503,

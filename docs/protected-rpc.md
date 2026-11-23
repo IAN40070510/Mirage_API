@@ -64,6 +64,8 @@ ReadAdmission；RPC 僅返回 `inventory_read_admitted`、來源 ID、世代及
 `POST /internal/v1/project-inventory-snapshot`，只按 Receipt 及唯讀 World
 Snapshot 重建精確 `200 {sku,available,state_version}` 候選；Verifier 逐欄核對
 Scope、Fingerprint、SnapshotSource、Body 與 Hash，**仍只回內部 200**。
+此外 Validator 的來源 ID／Generation／Version／State Hash 必須與先前已驗證的
+Executor ReadAdmission Metadata 完全一致；任何兩服務來源分歧固定 503。
 I-03 尚未產生可信查詢 Payload，I-04 未知 SKU 的業務 409 也尚無獨立來源。
 包含百分比編碼 SKU 的 URI 相容測試仍
 未解決；ReadAdmission 子切面已在固定 SHA `49fc6ed8` 的

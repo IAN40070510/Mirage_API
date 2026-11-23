@@ -283,7 +283,10 @@ def test_g3b_inventory_200_validator_handoff_rejects_modified_world_bytes(monkey
     kwargs = dict(receipt_id=receipt, operation_id="getSyntheticInventory",
                   resource_id="sku-1", request_fingerprint="a" * 64,
                   expected_environment_id="env", expected_deployment_id="deploy",
-                  expected_session_id="session")
+                  expected_session_id="session",
+                  expected_read_admission_id=baseline["source"]["read_admission_id"],
+                  expected_world_generation_id="world", expected_state_version=2,
+                  expected_state_hash="b" * 64)
     accepted = asyncio.run(client.project_inventory_snapshot(**kwargs))
     assert accepted["body_sha256"] == body_hash
     assert accepted["delivery"] == "candidate_only_no_send_authorization"
@@ -307,6 +310,13 @@ def test_g3b_inventory_200_validator_handoff_rejects_modified_world_bytes(monkey
             asyncio.run(client.project_inventory_snapshot(**kwargs))
     with pytest.raises(ProtectedRpcConfigurationError, match="operation_unapproved"):
         asyncio.run(client.project_inventory_snapshot(**{**kwargs, "resource_id": "%73ku-1"}))
+    for mismatch in ({"expected_read_admission_id": uuid4().hex},
+                     {"expected_world_generation_id": "another-world"},
+                     {"expected_state_version": 3}, {"expected_state_hash": "c" * 64}):
+        projected.clear()
+        projected.update(deepcopy(baseline))
+        with pytest.raises(ProtectedRpcConfigurationError, match="inventory_validator_binding_mismatch"):
+            asyncio.run(client.project_inventory_snapshot(**{**kwargs, **mismatch}))
 
 
 @pytest.mark.parametrize("platform,operation,code", [
