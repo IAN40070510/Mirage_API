@@ -344,6 +344,8 @@ def test_g3b_native_validator_only_accepts_https_receipt_uuid4():
                              json={"receipt_id": receipt}).status_code == 503
         assert insecure.post("/internal/v1/project-inventory-operation",
                              json={"receipt_id": receipt}).status_code == 503
+        assert insecure.post("/internal/v1/project-cart-read",
+                             json={"receipt_id": receipt}).status_code == 503
     with TestClient(app, base_url="https://validator.test") as secure:
         assert secure.post("/internal/v1/project-medusa-rejection",
                            json={"receipt_id": receipt, "status_code": 200}).status_code == 400
@@ -368,6 +370,105 @@ def test_g3b_native_validator_only_accepts_https_receipt_uuid4():
                            json={"receipt_id": receipt, "status_code": 200}).status_code == 400
         assert secure.post("/internal/v1/project-inventory-operation",
                            json={"receipt_id": receipt}).status_code == 503
+        assert secure.post("/internal/v1/project-cart-read",
+                           json={"receipt_id": receipt, "status_code": 200}).status_code == 400
+        assert secure.post("/internal/v1/project-cart-read",
+                           json={"receipt_id": receipt}).status_code == 503
+
+
+def test_g3b_cart_order_read_200_validator_rejects_forged_native_payloads(monkeypatch):
+    """C-02／C-07 獨立 Validator 固定成功 JSON，不接受錯綁 Cart／Order 或任意 Header。"""
+    from deception.security import protected_rpc
+
+    receipt = uuid4()
+    cart_id, order_id = "cart_" + uuid4().hex, "order_" + uuid4().hex
+    headers = (("content-type", "application/json"),)
+    projection = {}
+
+    class MockCartValidator:
+        """模擬隔離 Validator 傳輸，保留真實用戶端 JSON／Digest 驗證流程。"""
+
+        def __init__(self, **kwargs):
+            """禁止模擬過程降級 TLS 或環境 Proxy。"""
+            assert kwargs["trust_env"] is False
+
+        async def __aenter__(self):
+            """提供有限範圍的測試 mTLS 實體。"""
+            return self
+
+        async def __aexit__(self, *_):
+            """不吞掉驗證失敗。"""
+            return False
+
+        async def post(self, url, *, json):
+            """唯讀 Validator 只接受受保護 Receipt，不接受狀態或 Body 選擇。"""
+            assert url == "https://validator.invalid:8445/internal/v1/project-cart-read"
+            assert json == {"receipt_id": str(receipt)}
+            return httpx.Response(200, json=projection)
+
+    monkeypatch.setattr(protected_rpc.httpx, "AsyncClient", MockCartValidator)
+    client = object.__new__(FixedNativeValidatorMTLSClient)
+    client._origin, client._tls = "https://validator.invalid:8445", object()
+    for operation, resource, kind, entity in (
+            ("getGuestCart", cart_id, "cart", {
+                "id": cart_id, "items": [], "currency_code": "usd", "total": 0,
+                "status": "active"}),
+            ("getSyntheticOrder", order_id, "order", {
+                "id": order_id, "cart_id": cart_id, "items": [], "currency_code": "usd",
+                "total": 0, "status": "placed"}),
+    ):
+        payload = {kind: entity, "state_version": 2, "state_hash": "b" * 64,
+                   "commit_attempt_id": None}
+        body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        envelope, body_hash, _ = response_hashes(200, headers, body)
+        baseline = {
+            "receipt_id": str(receipt), "operation_id": operation,
+            "scope": {"environment_id": "env", "deployment_id": "deploy",
+                      "session_id": "session", "world_generation_id": "world"},
+            "request_fingerprint": "a" * 64, "status_code": 200,
+            "headers": [["content-type", "application/json"]],
+            "body_b64": base64.b64encode(body).decode("ascii"),
+            "envelope_hash": envelope,
+            "source": {"kind": "snapshot", "read_admission_id": uuid4().hex,
+                       "world_generation_id": "world", "state_version": 2,
+                       "state_hash": "b" * 64},
+            "trusted_send": "disabled",
+        }
+        kwargs = dict(receipt_id=receipt, operation_id=operation, resource_id=resource,
+                      request_fingerprint="a" * 64,
+                      expected_environment_id="env", expected_deployment_id="deploy",
+                      expected_session_id="session",
+                      expected_read_admission_id=baseline["source"]["read_admission_id"],
+                      expected_world_generation_id="world", expected_state_version=2,
+                      expected_state_hash="b" * 64)
+        projection.clear()
+        projection.update(deepcopy(baseline))
+        accepted = asyncio.run(client.project_cart_read(**kwargs))
+        assert accepted["body_sha256"] == body_hash
+        assert accepted["status_code"] == 200
+        assert accepted["delivery"] == "candidate_only_no_send_authorization"
+        for change in (
+                {"status_code": 409}, {"receipt_id": str(uuid4())},
+                {"request_fingerprint": "f" * 64}, {"trusted_send": "enabled"},
+                {"envelope_hash": "f" * 64},
+                {"headers": [["x-runtime", "false"]]},
+                {"source": {**baseline["source"], "read_admission_id": uuid4().hex}},
+                {"scope": {**baseline["scope"], "session_id": "other"}},
+                {"body_b64": base64.b64encode(body + b" ").decode()},
+                {"body_b64": base64.b64encode(body.replace(resource.encode(),
+                                                              ("cart_" + "0" * 32 if kind == "cart"
+                                                               else "order_" + "0" * 32).encode())).decode()},
+                {"body_b64": base64.b64encode(body.replace(b'"state_version":2',
+                                                             b'"state_version":3')).decode()},
+                {"extra": "forged"},
+        ):
+            projection.clear()
+            projection.update(deepcopy(baseline))
+            projection.update(change)
+            with pytest.raises(ProtectedRpcConfigurationError, match="cart_validator_binding_mismatch"):
+                asyncio.run(client.project_cart_read(**kwargs))
+        with pytest.raises(ProtectedRpcConfigurationError, match="cart_validator_operation_unapproved"):
+            asyncio.run(client.project_cart_read(**{**kwargs, "resource_id": "wrong"}))
 
 
 def test_g3b_synthetic_rejection_has_fixed_native_409_contract():
@@ -839,6 +940,59 @@ def test_g3b_executor_inventory_get_response_is_admission_metadata_only(monkeypa
             asyncio.run(client.execute_receipt(**args))
         response.clear()
         response.update(previous)
+
+
+def test_g3b_cart_read_executor_metadata_cannot_change_operation_or_source(monkeypatch):
+    """Cart GET Executor RPC 必須保留完整固定路徑、ReadAdmission 及 Snapshot 身分。"""
+    from deception.security import protected_rpc
+
+    cart_id = "cart_" + uuid4().hex
+    reply = {"kind": "cart_read_admitted", "operation": "getGuestCart",
+             "resource_id": cart_id, "attempt_id": None,
+             "read_admission_id": uuid4().hex,
+             "world_generation_id": uuid4().hex,
+             "state_version": 2, "state_hash": "a" * 64}
+
+    class MockExecutor:
+        """隔離 Executor HTTP 假資料，測試用戶端是否 fail closed。"""
+
+        def __init__(self, **kwargs):
+            """驗證測試客戶端禁用環境 Proxy。"""
+            assert kwargs["trust_env"] is False
+
+        async def __aenter__(self):
+            """提供 AsyncClient Context。"""
+            return self
+
+        async def __aexit__(self, *_):
+            """傳播驗證例外。"""
+            return False
+
+        async def post(self, url, *, json):
+            """業務 Handler、Scope 不得從 Caller RPC JSON 自選。"""
+            assert url == "https://executor.invalid:8444/internal/v1/execute"
+            assert set(json) == {"receipt_id", "raw_path_b64", "raw_body_b64"}
+            return httpx.Response(200, json=reply)
+
+    monkeypatch.setattr(protected_rpc.httpx, "AsyncClient", MockExecutor)
+    client = object.__new__(FixedExecutorMTLSClient)
+    client._origin, client._tls = "https://executor.invalid:8444", object()
+    kwargs = dict(receipt_id=uuid4(), operation_id="getGuestCart",
+                  raw_path=("/synthetic/carts/" + cart_id).encode(), raw_body=b"")
+    assert asyncio.run(client.execute_receipt(**kwargs)) == reply
+    for change in ({"attempt_id": str(uuid4())}, {"read_admission_id": "untrusted"},
+                   {"world_generation_id": "untrusted"}, {"state_version": True},
+                   {"state_hash": "short"}, {"resource_id": "cart_" + uuid4().hex},
+                   {"operation": "getSyntheticOrder"}, {"status_code": 200},
+                   {"body_b64": "e30="}):
+        previous = deepcopy(reply)
+        reply.update(change)
+        with pytest.raises(ProtectedRpcConfigurationError, match="fixed_executor_result_binding_mismatch"):
+            asyncio.run(client.execute_receipt(**kwargs))
+        reply.clear()
+        reply.update(previous)
+    with pytest.raises(ProtectedRpcConfigurationError, match="fixed_executor_result_binding_mismatch"):
+        asyncio.run(client.execute_receipt(**{**kwargs, "raw_body": b"{}"}))
 
 
 def test_g3b_real_container_ci_has_explicit_isolation_and_no_sender():

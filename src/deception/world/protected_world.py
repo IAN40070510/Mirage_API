@@ -143,6 +143,7 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
                 return {"kind": "cart_read_admitted", "operation": query.operation,
                         "resource_id": query.resource_id,
                         "attempt_id": str(query.attempt_id) if query.attempt_id else None,
+                        "read_admission_id": read.source.read_admission_id,
                         "world_generation_id": read.snapshot.scope.world_generation_id,
                         "state_version": read.snapshot.version,
                         "state_hash": read.snapshot.state_hash}

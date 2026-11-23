@@ -14,6 +14,7 @@ from deception.world import (CommitSource, SnapshotSource, PostgresCandidateProm
                              PostgresEventWorldStore, PostgresProtectedWorldExecutor,
                              PostgresProjectionRegistry, ProtectedGrantError, SecurityErrorSource)
 from deception.world.session import SessionBinding
+from deception.world.protected_native_http import PostgresProtectedNativeProjector
 from deception.world.transmission import response_envelope, response_hashes
 from deception.domains.ecommerce.carts import SyntheticCarts
 from deception.domains.ecommerce.inventory import SyntheticInventory
@@ -589,7 +590,7 @@ def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolat
                 "protected_http_operation_bindings,protected_world_read_sources,"
                 "read_admissions,session_heads,session_world_bindings,"
                 "generation_controls,trusted_key_revocations,world_snapshots,"
-                "world_commit_receipts TO {}"
+                "world_commit_receipts,synthetic_resources TO {}"
             ).format(sql.Identifier(projector_login)))
 
         def cleanup_validator_role():
@@ -909,6 +910,20 @@ def test_verified_cart_get_requires_creator_lineage_and_original_receipt(isolate
     read, query = executor.read_verified_cart_http(**args)
     assert query.operation == "getGuestCart"
     assert read.snapshot.state["cart"]["id"] == created.binding.resource_id
+    projected = PostgresProtectedNativeProjector(dsn, expected_login=_real_login(dsn)).project_cart_read(
+        get_receipt)
+    assert projected.status_code == 200
+    assert projected.operation_id == "getGuestCart"
+    assert projected.request_fingerprint == proof.request_fingerprint
+    assert projected.source.state_hash == read.snapshot.state_hash
+    assert projected.source.read_admission_id == read.source.read_admission_id
+    assert json.loads(projected.body_bytes) == {
+        "cart": SyntheticCarts.public_cart(read.snapshot.state["cart"]),
+        "state_version": read.snapshot.version, "state_hash": read.snapshot.state_hash,
+        "commit_attempt_id": None,
+    }
+    with pytest.raises(ProtectedGrantError, match="cart_read_source_missing"):
+        PostgresProtectedNativeProjector(dsn, expected_login=_real_login(dsn)).project_cart_read(uuid4())
     with psycopg.connect(dsn) as connection:
         assert connection.execute(
             "SELECT count(*) FROM protected_world_read_sources WHERE receipt_id=%s",

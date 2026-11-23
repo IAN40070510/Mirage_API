@@ -82,6 +82,163 @@ class ProtectedNativeProjection:
 class PostgresProtectedNativeProjector(_ProtectedConnection):
     """以與 Verifier／Executor 不同的讀取 Login 查核拒絕及固定 HTTP Envelope。"""
 
+    def project_cart_read(self, receipt_id: UUID) -> ProtectedNativeProjection:
+        """由獨立唯讀證據重建 C-02／C-07 的 Cart／Order 200 候選。
+
+        只接受真 GET Proof、同一 Receipt 的 ReadAdmission、未到期的派生資源
+        與已驗 Hash 的當前快照；找不到資源、版本漂移或任何 ACL 不明時
+        拒絕產生候選，絕不將無法查證的 409 當成合法業務拒絕。
+        """
+        from jsonschema import Draft202012Validator
+
+        from deception.domains.ecommerce.cart_http import cart_specification
+        from deception.domains.ecommerce.carts import SyntheticCarts
+
+        if not isinstance(receipt_id, UUID) or receipt_id.version != 4:
+            raise ProtectedGrantError("protected_cart_read_receipt_invalid")
+        with self._connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SET LOCAL statement_timeout='5s'")
+                cursor.execute(
+                    """SELECT r.environment_id,r.deployment_id,r.session_id,r.session_epoch,
+                              r.request_fingerprint,r.issuer,r.key_id,r.token_expires_at,
+                              r.access_mode,r.resource_id,
+                              p.read_admission_id,p.world_generation_id,p.state_version,p.state_hash,
+                              a.request_binding_digest,a.state_version,a.state_hash,a.expires_at,
+                              a.environment_id,a.deployment_id,a.session_id,a.world_generation_id
+                       FROM ingress_receipts r
+                       JOIN protected_world_read_sources p ON p.receipt_id=r.receipt_id
+                         AND (p.environment_id,p.deployment_id,p.session_id)
+                             =(r.environment_id,r.deployment_id,r.session_id)
+                       JOIN read_admissions a ON a.read_admission_id=p.read_admission_id
+                         AND (a.environment_id,a.deployment_id,a.session_id,a.world_generation_id)
+                             =(p.environment_id,p.deployment_id,p.session_id,p.world_generation_id)
+                       WHERE r.receipt_id=%s""", (receipt_id,),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    raise ProtectedGrantError("protected_cart_read_source_missing")
+                (environment, deployment, session, epoch, fingerprint, issuer, key_id,
+                 token_deadline, mode, resource, read_id, generation, version, state_hash,
+                 binding_digest, admission_version, admission_hash, read_deadline,
+                 read_environment, read_deployment, read_session, read_generation) = row
+                if (mode != "cart" or not isinstance(resource, str)
+                        or re.fullmatch(r"(?:cart|order)_[0-9a-f]{32}", resource) is None
+                        or fingerprint != binding_digest
+                        or (version, state_hash) != (admission_version, admission_hash)
+                        or (environment, deployment, session, generation) != (
+                            read_environment, read_deployment, read_session, read_generation)):
+                    raise ProtectedGrantError("protected_cart_read_source_mismatch")
+                cursor.execute(
+                    """SELECT platform,operation_id,method,path_template,request_fingerprint,
+                              request_path,request_body_sha256
+                       FROM protected_http_operation_bindings WHERE receipt_id=%s""",
+                    (receipt_id,),
+                )
+                proof = cursor.fetchone()
+                choices = {
+                    "getGuestCart": ("/synthetic/carts/{cart_id}", "/synthetic/carts/", "cart"),
+                    "getSyntheticOrder": ("/synthetic/orders/{order_id}", "/synthetic/orders/", "order"),
+                }
+                selected = choices.get(proof[1]) if proof is not None else None
+                if (selected is None or proof[:3] != ("synthetic-carts", proof[1], "GET")
+                        or proof[3:5] != (selected[0], fingerprint)
+                        or proof[5] != selected[1] + resource
+                        or not resource.startswith(selected[2] + "_")
+                        or proof[6] != hashlib.sha256(b"").hexdigest()):
+                    raise ProtectedGrantError("protected_cart_read_proof_mismatch")
+                cursor.execute(
+                    """SELECT world_generation_id,expires_at FROM synthetic_resources
+                       WHERE resource_id=%s AND environment_id=%s AND deployment_id=%s
+                         AND session_id=%s AND session_epoch=%s""",
+                    (resource, environment, deployment, session, epoch),
+                )
+                resource_row = cursor.fetchone()
+                if resource_row is None or resource_row[0] != generation:
+                    raise ProtectedGrantError("protected_cart_read_lineage_mismatch")
+                cursor.execute(
+                    """SELECT version,state_hash,state,expires_at FROM world_snapshots
+                       WHERE environment_id=%s AND deployment_id=%s AND session_id=%s
+                         AND world_generation_id=%s""",
+                    (environment, deployment, session, generation),
+                )
+                snapshot_row = cursor.fetchone()
+                if snapshot_row is None:
+                    raise ProtectedGrantError("protected_cart_read_snapshot_missing")
+                scope = WorldScope(environment_id=environment, deployment_id=deployment,
+                                   session_id=session, world_generation_id=generation)
+                try:
+                    snapshot = WorldSnapshot(scope=scope, version=snapshot_row[0],
+                                             state_hash=snapshot_row[1], state=snapshot_row[2],
+                                             expires_at=snapshot_row[3])
+                except ValueError as exc:
+                    raise ProtectedGrantError("protected_cart_read_snapshot_invalid") from exc
+                if snapshot.version != version or snapshot.state_hash != state_hash:
+                    raise ProtectedGrantError("protected_cart_read_snapshot_stale")
+                if proof[1] == "getGuestCart":
+                    saved_cart = snapshot.state.get("cart")
+                    if (not isinstance(saved_cart, dict) or saved_cart.get("id") != resource
+                            or set(saved_cart) != {"id", "items", "currency_code", "total", "status"}
+                            or not isinstance(saved_cart.get("items"), dict)):
+                        raise ProtectedGrantError("protected_cart_read_entity_invalid")
+                    entity = SyntheticCarts.public_cart(saved_cart)
+                    kind = "cart"
+                    path = "/carts/{cart_id}"
+                else:
+                    orders = snapshot.state.get("orders")
+                    entity = orders.get(resource) if isinstance(orders, dict) else None
+                    if not isinstance(entity, dict) or entity.get("id") != resource:
+                        raise ProtectedGrantError("protected_cart_read_entity_missing")
+                    kind = "order"
+                    path = "/orders/{order_id}"
+                payload = {kind: entity, "state_version": version,
+                           "state_hash": state_hash, "commit_attempt_id": None}
+                schema = cart_specification()["paths"][path]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+                if not Draft202012Validator(schema).is_valid(payload):
+                    raise ProtectedGrantError("protected_cart_read_contract_invalid")
+                cursor.execute("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
+                now = cursor.fetchone()[0]
+                if (token_deadline <= now or read_deadline <= now or resource_row[1] <= now
+                        or snapshot.expires_at is not None and snapshot.expires_at <= now):
+                    raise ProtectedGrantError("protected_cart_read_source_expired")
+                cursor.execute(
+                    """SELECT session_epoch FROM session_heads WHERE environment_id=%s
+                       AND deployment_id=%s AND session_id=%s""",
+                    (environment, deployment, session),
+                )
+                if cursor.fetchone() != (epoch,):
+                    raise ProtectedGrantError("protected_cart_read_epoch_stale")
+                cursor.execute(
+                    """SELECT world_generation_id FROM session_world_bindings
+                       WHERE environment_id=%s AND deployment_id=%s AND session_id=%s
+                         AND session_epoch=%s""",
+                    (environment, deployment, session, epoch),
+                )
+                if cursor.fetchone() != (generation,):
+                    raise ProtectedGrantError("protected_cart_read_generation_mismatch")
+                cursor.execute(
+                    """SELECT sealed,emergency_revision FROM generation_controls
+                       WHERE world_generation_id=%s""", (generation,),
+                )
+                if cursor.fetchone() != (False, None):
+                    raise ProtectedGrantError("protected_cart_read_generation_revoked")
+                guard = PostgresTrustedKeyRevocations(
+                    self._dsn, environment_id=environment, deployment_id=deployment,
+                )
+                guard._lock(cursor, issuer, key_id)
+                if guard._select(cursor, issuer, key_id) is not None:
+                    raise ProtectedGrantError("protected_cart_read_key_revoked")
+        headers = (("content-type", "application/json"),)
+        body = json.dumps(payload, ensure_ascii=False, sort_keys=True,
+                          separators=(",", ":")).encode("utf-8")
+        return ProtectedNativeProjection(
+            receipt_id=receipt_id, scope=scope, operation_id=proof[1],
+            request_fingerprint=fingerprint, status_code=200, headers=headers,
+            body_bytes=body, envelope_hash=response_hashes(200, headers, body)[0],
+            source=SnapshotSource(read_admission_id=read_id, world_generation_id=generation,
+                                  state_version=version, state_hash=state_hash),
+        )
+
     def project_inventory_operation(self, receipt_id: UUID) -> ProtectedNativeProjection:
         """由受保護 GET Proof／ReadAdmission／真 Commit 結果重建 I-03 200 候選。
 

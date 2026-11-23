@@ -60,8 +60,8 @@ I-04 庫存 GET 新增另一個固定 mTLS 路徑
 `409 {"code":"unknown_synthetic_sku"}` 候選，核對不可變 ReadAdmission 與完整 WorldSnapshot
 版本、狀態雜湊、期限及 Epoch／Key。Verifier 重驗精確 JSON、SnapshotSource、
 Scope／Hash；篡改與過期固定 503，不會回退 Runtime 自填庫存數量。
-目前只有 I-04 合法成功的 **200 候選隔離子項**具既有真 CI 證據；
-新增缺 SKU 409 的獨立候選仍待本 SHA 真 CI。快照毀損、過期、世代錯置
+I-04 已有 200 與真正缺 SKU 409 的獨立候選：固定 SHA `808d07f`
+的真 PG 隔離 CI `125 passed`、mTLS `5 passed`。快照毀損、過期、世代錯置
 一律 503，不得冒充業務 409。原生 ASGI 傳輸與正式部署仍 OPEN；
 G4 只有隔離 primitive，尚無可用的發送服務。
 
@@ -73,8 +73,17 @@ ReadAdmission／Snapshot／Epoch／Key 核對當前查詢。結果重建與合�
 一致的 `200 {commit_attempt_id,state_version,state_hash,reservation}` 候選，
 拒絕由 RPC 選擇 Status 或 Body。若操作不存在、被拒或 Commit 不明，不會
 自行補成 `409`。獨立 Validator 需要新增 `world_commit_receipts` 唯讀權，
-仍不得 INSERT／UPDATE／DELETE；其正式真 PostgreSQL／四服務 CI 待驗。
+仍不得 INSERT／UPDATE／DELETE；固定 SHA `808d07f` 的真 PostgreSQL
+隔離 CI 已通過，新增四服務探針仍須逐版核對。
 **外層仍只回內部對帳 200，不是客戶端原生成功回應。**
+
+C-02 `getGuestCart` 與 C-07 `getSyntheticOrder` 新增獨立 Cart／Order GET
+成功候選：Cart Executor 對 ReadAdmission 加上來源 ID，Validator 固定
+`POST /internal/v1/project-cart-read` 只收 Receipt，再驗原始 GET 路由、
+`synthetic_resources` 派生資源、快照完整性、Epoch／Generation／Key、
+合成 OpenAPI Schema 及 200 精確 JSON；Verifier 與 Executor 的來源／Scope
+逐欄比對，拒絕不明 409。Validator 唯讀角色新增 `synthetic_resources SELECT`；
+此子項新增程式與測試，仍待本 SHA 的真 PG／四服務 CI，Sender 依舊封閉。
 
 候選投影結果可交既有 `PostgresCandidatePromoter` 的來源核對，
 **並沒有新增可對 Client 送出 400／404 的 HTTP endpoint**；正式獨立

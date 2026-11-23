@@ -284,6 +284,44 @@ def _gateway() -> None:
             "validated_native_status": 409, "template_id": "unknown_synthetic_sku",
             "source": "protected_world_rejection_sources", "native_business_response": False,
         }, sort_keys=True))
+        # C-02：同樣透過真 Gateway→Cart Executor→獨立唯讀 Validator，
+        # 只能查驗與既有派生 Cart Session 相符的原生成功 JSON 候選。
+        cart_request_id = "g3b-ci-cart-get-200"
+        cart_get = gateway.build_request(
+            "GET", origin + "/synthetic/carts/" + data["cart_id"],
+            headers={"x-request-id": cart_request_id},
+        )
+        cart_get.headers["x-trusted-session"] = _sign(
+            key, fingerprint=fingerprint_httpx_request(cart_get, cart_request_id),
+            session=data["cart_session"], mode="cart", resource_id=data["cart_id"],
+        )
+        cart_outcome = gateway.send(cart_get)
+        if cart_outcome.status_code != 200:
+            raise RuntimeError("g3b_ci_cart_get_rpc_unverifiable")
+        cart_metadata = cart_outcome.json().get("executor_result", {})
+        cart_projection = cart_outcome.json().get("native_projection", {})
+        cart_payload = base64.b64decode(cart_projection.get("body_b64", ""), validate=True)
+        cart_result = json.loads(cart_payload)
+        if (cart_metadata.get("kind") != "cart_read_admitted"
+                or cart_metadata.get("operation") != "getGuestCart"
+                or cart_projection.get("status_code") != 200
+                or cart_result.get("cart", {}).get("id") != data["cart_id"]
+                or cart_result.get("commit_attempt_id", "unexpected") is not None
+                or cart_result.get("state_version") != cart_metadata.get("state_version")
+                or cart_result.get("state_hash") != cart_metadata.get("state_hash")
+                or cart_projection.get("source", {}).get("read_admission_id")
+                != cart_metadata.get("read_admission_id")
+                or cart_projection.get("scope", {}).get("session_id") != data["cart_session"]
+                or cart_projection.get("delivery") != "candidate_only_no_send_authorization"
+                or cart_projection.get("envelope_hash") != response_hashes(
+                    200, read_headers, cart_payload)[0]
+                or gateway.send(cart_get).status_code != 403):
+            raise RuntimeError("g3b_ci_cart_get_validator_source_mismatch")
+        print("G3B_ROUTE_PROTECTED_CART_GET_CANDIDATE " + json.dumps({
+            "operation_id": "getGuestCart", "http_status": cart_outcome.status_code,
+            "validated_native_status": 200, "source": "protected_world_read_sources",
+            "native_business_response": False,
+        }, sort_keys=True))
         for suffix, payload, status, template in (
                 ("bad-item", b'{"variant_id":"known","quantity":0}', 400,
                  "native-cart-invalid"),

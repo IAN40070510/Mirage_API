@@ -81,8 +81,9 @@ Scope、Fingerprint、SnapshotSource、Body 與 Hash，**仍只回內部 200**�
 Executor ReadAdmission Metadata 完全一致；任何兩服務來源分歧固定 503。
 I-03 原先只有 ReadAdmission 而沒有可信查詢 Payload；I-04 未知 SKU 的
 業務 409 新增由獨立 WorldSnapshot 驗證「確實缺 SKU」的固定拒絕候選，
-仍待真 PG／四容器 CI，外層仍只回內部對帳 200。
-I-03 已增加另一條**待真 PG CI 的獨立候選**投影路徑：
+固定 SHA `808d07f` 的[真 PostgreSQL 隔離 CI](https://github.com/IAN40070510/Mirage_API/actions/runs/45235439692)
+已通過 `125 passed`、mTLS `5 passed`，外層仍只回內部對帳 200。
+I-03 已增加經真 PG CI 驗證的獨立候選投影路徑：
 `project-inventory-operation` 只接受 Receipt，核對同世代 `committed` 的
 WorldOperation＋Commit Receipt＋ReadAdmission，重建固定 `200` 操作結果。
 目前仍缺正式客戶端 HTTP、未知操作的可信 409 與完整 G4/G5，
@@ -92,11 +93,20 @@ WorldOperation＋Commit Receipt＋ReadAdmission，重建固定 `200` 操作結�
 [真 PostgreSQL CI](https://github.com/IAN40070510/Mirage_API/actions/runs/45185402530)
 通過，但完整 GET 回應仍 OPEN。
 
-**I-04 200 Candidate 待固定 SHA 真 CI**：Validator 對受保護的
+**I-04 200／409 Candidate 真 CI 已通過**：Validator 對受保護的
 `protected_world_read_sources`、`read_admissions`、原始 GET Proof 與
-World 快照完整性雜湊做一致性核對；快照版本已移動、過期、缺 SKU、
-Session Epoch／Key 撤銷時固定失敗而非合成業務 409。獨立 Validator
+World 快照完整性雜湊做一致性核對；快照版本已移動、過期、
+Session Epoch／Key 撤銷時固定失敗；**只有真缺 SKU** 可以建立 409 候選。獨立 Validator
 需要唯讀 `world_snapshots` SELECT，Runtime 無權持有該物理 Login。
+**C-02／C-07 Cart／Order GET 200 候選（本輪待真 CI）**：Cart Executor
+回傳固定 `cart_read_admitted`、`read_admission_id`、World Generation／版本／Hash；
+獨立 Validator 的 `POST /internal/v1/project-cart-read` 只收 UUID4 Receipt，
+重新核對原始 GET Proof、派生 `synthetic_resources` 及唯讀 ReadAdmission、
+當前 Snapshot Hash／Session Epoch／Key／期限，再按合成 OpenAPI 契約重建精確
+`{cart|order,state_version,state_hash,commit_attempt_id:null}` 的 200 JSON。
+Verifier 逐欄比對 Executor 來源、Session Scope、精確 Body／Envelope Hash，
+拒絕未知 Cart／Order 與版本漂移的冒充 409。Validator 物理 Login 僅新增
+`synthetic_resources SELECT`，不提供 Cart DML；本候選不是客戶端正式 HTTP。
 新增 Synthetic 固定 mutation 真業務拒絕來源：Executor 將已保存
 `rejected` 的結果與 409 固定 Envelope Hash 原子寫入受保護拒絕表，
 獨立 Validator 從 Receipt 重建 JSON `{"code":"..."}`。Verifier 僅在

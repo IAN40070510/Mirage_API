@@ -107,7 +107,8 @@ class FixedExecutorMTLSClient:
                                         "world_generation_id", "state_version", "state_hash"},
             "cart_created": {"kind", "operation", "resource_id", "commit_attempt_id", "status"},
             "cart_read_admitted": {"kind", "operation", "resource_id", "attempt_id",
-                                   "world_generation_id", "state_version", "state_hash"},
+                                   "read_admission_id", "world_generation_id",
+                                   "state_version", "state_hash"},
             "medusa_rejection": {"kind", "operation", "status_code", "template_id",
                                  "contract_revision", "envelope_hash"},
         }
@@ -137,6 +138,43 @@ class FixedExecutorMTLSClient:
                 or not isinstance(result.get("state_hash"), str)
                 or re.fullmatch(r"[0-9a-f]{64}", result["state_hash"]) is None):
             raise ProtectedRpcConfigurationError("fixed_executor_result_binding_mismatch")
+        if result["kind"] == "cart_read_admitted":
+            cart_routes = {
+                "getGuestCart": (b"/synthetic/carts/", b"cart_"),
+                "getSyntheticOrder": (b"/synthetic/orders/", b"order_"),
+                "getCartOperation": (b"/synthetic/carts/", b"cart_"),
+            }
+            route = cart_routes.get(operation_id)
+            valid_resource = (isinstance(result.get("resource_id"), str)
+                              and re.fullmatch(r"(?:cart|order)_[0-9a-f]{32}",
+                                               result["resource_id"]) is not None)
+            expected_path = (route[0] + result["resource_id"].encode("ascii")) if (
+                route is not None and valid_resource) else b""
+            attempt = result.get("attempt_id")
+            if operation_id == "getCartOperation" and isinstance(attempt, str):
+                try:
+                    decoded_attempt = UUID(attempt)
+                except ValueError:
+                    decoded_attempt = None
+                if decoded_attempt is not None and decoded_attempt.version == 4 and str(decoded_attempt) == attempt:
+                    expected_path += b"/operations/" + attempt.encode("ascii")
+                else:
+                    expected_path = b""
+            elif operation_id == "getCartOperation":
+                expected_path = b""
+            elif attempt is not None:
+                expected_path = b""
+            if (not valid_resource or route is None
+                    or not result["resource_id"].startswith(route[1].decode("ascii"))
+                    or raw_body != b"" or raw_path != expected_path
+                    or not all(isinstance(result.get(field), str)
+                               and re.fullmatch(r"[0-9a-f]{32}", result[field]) is not None
+                               for field in ("read_admission_id", "world_generation_id"))
+                    or type(result.get("state_version")) is not int
+                    or result["state_version"] < 1
+                    or not isinstance(result.get("state_hash"), str)
+                    or re.fullmatch(r"[0-9a-f]{64}", result["state_hash"]) is None):
+                raise ProtectedRpcConfigurationError("fixed_executor_result_binding_mismatch")
         return result
 
 
@@ -158,6 +196,93 @@ class FixedNativeValidatorMTLSClient:
             raise ProtectedRpcConfigurationError("native_validator_server_verification_required")
         self._origin = origin.rstrip("/")
         self._tls = context
+
+    async def project_cart_read(
+        self, *, receipt_id: UUID, operation_id: str, resource_id: str,
+        request_fingerprint: str, expected_environment_id: str,
+        expected_deployment_id: str, expected_session_id: str,
+        expected_read_admission_id: str, expected_world_generation_id: str,
+        expected_state_version: int, expected_state_hash: str,
+    ) -> dict[str, object]:
+        """由獨立 Validator 校驗 Cart／Order 200 候選的精確 JSON 與來源。
+
+        只傳 Receipt，固定 Operation 與真實 Executor ReadAdmission 必須匹配；
+        此路徑不提供客戶端 HTTP Send，也不能接受呼叫端提供的 Status／Body。
+        """
+        from jsonschema import Draft202012Validator
+
+        from deception.domains.ecommerce.cart_http import cart_specification
+        from deception.world.transmission import response_hashes
+
+        approved = {
+            "getGuestCart": ("cart", "/carts/{cart_id}"),
+            "getSyntheticOrder": ("order", "/orders/{order_id}"),
+        }
+        selected = approved.get(operation_id)
+        if (selected is None or not isinstance(resource_id, str)
+                or re.fullmatch(selected[0] + r"_[0-9a-f]{32}", resource_id) is None):
+            raise ProtectedRpcConfigurationError("cart_validator_operation_unapproved")
+        async with httpx.AsyncClient(verify=self._tls, trust_env=False, timeout=8.0) as client:
+            response = await client.post(
+                self._origin + "/internal/v1/project-cart-read",
+                json={"receipt_id": str(receipt_id)},
+            )
+        if response.status_code != 200:
+            raise ProtectedRpcConfigurationError("cart_validator_projection_unverifiable")
+        try:
+            result = json.loads(response.content, object_pairs_hook=unique_object,
+                                parse_constant=reject_constant)
+            if not isinstance(result, dict) or set(result) != {
+                    "receipt_id", "operation_id", "scope", "request_fingerprint",
+                    "status_code", "headers", "body_b64", "envelope_hash", "source",
+                    "trusted_send"}:
+                raise ValueError("cart_validator_shape_invalid")
+            body = _canonical_base64(result["body_b64"], max_bytes=1048576)
+            payload = json.loads(body, object_pairs_hook=unique_object,
+                                 parse_constant=reject_constant)
+            source, scope = result["source"], result["scope"]
+            schema = (cart_specification()["paths"][selected[1]]["get"]
+                      ["responses"]["200"]["content"]["application/json"]["schema"])
+            if (not isinstance(payload, dict)
+                    or not Draft202012Validator(schema).is_valid(payload)
+                    or payload[selected[0]]["id"] != resource_id
+                    or payload["commit_attempt_id"] is not None
+                    or payload["state_version"] != expected_state_version
+                    or payload["state_hash"] != expected_state_hash
+                    or not isinstance(source, dict) or set(source) != {
+                        "kind", "read_admission_id", "world_generation_id",
+                        "state_version", "state_hash"}
+                    or source["kind"] != "snapshot"
+                    or source["read_admission_id"] != expected_read_admission_id
+                    or source["world_generation_id"] != expected_world_generation_id
+                    or source["state_version"] != expected_state_version
+                    or source["state_hash"] != expected_state_hash
+                    or not isinstance(scope, dict) or set(scope) != {
+                        "environment_id", "deployment_id", "session_id", "world_generation_id"}
+                    or (scope["environment_id"], scope["deployment_id"], scope["session_id"],
+                        scope["world_generation_id"]) != (
+                        expected_environment_id, expected_deployment_id,
+                        expected_session_id, expected_world_generation_id)
+                    or result["receipt_id"] != str(receipt_id)
+                    or result["operation_id"] != operation_id
+                    or result["request_fingerprint"] != request_fingerprint
+                    or type(result["status_code"]) is not int or result["status_code"] != 200
+                    or result["headers"] != [["content-type", "application/json"]]
+                    or result["trusted_send"] != "disabled"
+                    or body != json.dumps(payload, ensure_ascii=False, sort_keys=True,
+                                          separators=(",", ":")).encode("utf-8")
+                    or result["envelope_hash"] != response_hashes(
+                        200, (("content-type", "application/json"),), body)[0]):
+                raise ValueError("cart_validator_binding_mismatch")
+        except (ValueError, TypeError, KeyError, UnicodeError) as exc:
+            raise ProtectedRpcConfigurationError("cart_validator_binding_mismatch") from exc
+        return {
+            "status_code": 200, "headers": [["content-type", "application/json"]],
+            "body_b64": base64.b64encode(body).decode("ascii"),
+            "body_sha256": response_hashes(200, (("content-type", "application/json"),), body)[1],
+            "envelope_hash": result["envelope_hash"], "source": dict(source),
+            "scope": dict(scope), "delivery": "candidate_only_no_send_authorization",
+        }
 
     async def project_receipt(self, *, receipt_id: UUID, operation_id: str,
                               request_fingerprint: str, expected_status: int,
@@ -585,6 +710,7 @@ def create_native_validator_app(*, projector) -> FastAPI:
 
     @app.post("/internal/v1/project-inventory-snapshot")
     @app.post("/internal/v1/project-inventory-operation")
+    @app.post("/internal/v1/project-cart-read")
     @app.post("/internal/v1/project-synthetic-rejection")
     @app.post("/internal/v1/project-medusa-rejection")
     async def project(request: Request) -> dict[str, object]:
@@ -609,6 +735,8 @@ def create_native_validator_app(*, projector) -> FastAPI:
                 projected = projector.project_inventory_snapshot(UUID(str(call.receipt_id)))
             elif request.scope.get("path") == "/internal/v1/project-inventory-operation":
                 projected = projector.project_inventory_operation(UUID(str(call.receipt_id)))
+            elif request.scope.get("path") == "/internal/v1/project-cart-read":
+                projected = projector.project_cart_read(UUID(str(call.receipt_id)))
             elif request.scope.get("path") == "/internal/v1/project-synthetic-rejection":
                 projected = projector.project_synthetic_rejection(UUID(str(call.receipt_id)))
             else:
@@ -816,6 +944,27 @@ def create_direct_verifier_app(
             except Exception as exc:
                 raise HTTPException(status_code=503,
                                     detail="direct_verifier_operation_projection_unverifiable") from exc
+        elif (isinstance(outcome, dict) and outcome.get("kind") == "cart_read_admitted"
+              and operation.operation_id in {"getGuestCart", "getSyntheticOrder"}):
+            if native_validator_client is None:
+                raise HTTPException(status_code=503,
+                                    detail="direct_verifier_native_validator_not_wired")
+            try:
+                projection = await native_validator_client.project_cart_read(
+                    receipt_id=receipt_id, operation_id=operation.operation_id,
+                    resource_id=outcome["resource_id"],
+                    request_fingerprint=fingerprint_request(normalized),
+                    expected_environment_id=claims.environment_id,
+                    expected_deployment_id=claims.deployment_id,
+                    expected_session_id=claims.session_id,
+                    expected_read_admission_id=outcome["read_admission_id"],
+                    expected_world_generation_id=outcome["world_generation_id"],
+                    expected_state_version=outcome["state_version"],
+                    expected_state_hash=outcome["state_hash"],
+                )
+            except Exception as exc:
+                raise HTTPException(status_code=503,
+                                    detail="direct_verifier_cart_projection_unverifiable") from exc
         elif (isinstance(outcome, dict) and outcome.get("kind") == "world_mutation"
               and outcome.get("status") == "rejected"):
             if native_validator_client is None:
