@@ -253,8 +253,21 @@ class PostgresProtectedNativeProjector(_ProtectedConnection):
                                             committed_result["id"]) is None):
                         raise ProtectedGrantError("protected_cart_operation_entity_invalid")
                     kind = "order" if committed_result["id"].startswith("order_") else "cart"
-                    historical_entity = (SyntheticCarts.public_cart(committed_result)
-                                         if kind == "cart" else committed_result)
+                    if committed_version > version:
+                        raise ProtectedGrantError("protected_cart_operation_future_version")
+                    if kind == "cart":
+                        if committed_result["id"] != resource:
+                            raise ProtectedGrantError("protected_cart_operation_resource_mismatch")
+                        if isinstance(committed_result.get("items"), dict):
+                            historical_entity = SyntheticCarts.public_cart(committed_result)
+                        elif isinstance(committed_result.get("items"), list):
+                            historical_entity = committed_result
+                        else:
+                            raise ProtectedGrantError("protected_cart_operation_items_invalid")
+                    else:
+                        if committed_result.get("cart_id") != resource:
+                            raise ProtectedGrantError("protected_cart_operation_order_lineage_mismatch")
+                        historical_entity = committed_result
                     payload = {kind: historical_entity, "state_version": committed_version,
                                "state_hash": committed_hash, "commit_attempt_id": str(attempt)}
                     path = "/carts/{cart_id}/operations/{attempt}"

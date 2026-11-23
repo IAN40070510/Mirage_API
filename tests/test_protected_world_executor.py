@@ -590,7 +590,7 @@ def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolat
                 "protected_http_operation_bindings,protected_world_read_sources,"
                 "read_admissions,session_heads,session_world_bindings,"
                 "generation_controls,trusted_key_revocations,world_snapshots,"
-                "world_commit_receipts,synthetic_resources TO {}"
+                "world_commit_receipts,protected_world_commit_sources,synthetic_resources TO {}"
             ).format(sql.Identifier(projector_login)))
 
         def cleanup_validator_role():
