@@ -306,3 +306,13 @@ Executor 都可用的真容器端到端正反面、20 條原生 HTTP 200／400�
 自有程式採 Apache-2.0；使用專案既有 FastAPI／Uvicorn／HTTPX、
 psycopg／Pydantic／cryptography、PostgreSQL 和 Docker Compose。
 依賴與第三方授權請參閱 [授權表](licensing.md)。
+
+### C-09 歷史 Cart Operation 唯讀候選（待真 PG CI）
+
+獨立 Validator 的 `project_cart_read` 現包含 `getCartOperation`：
+從 Receipt／原始 GET Proof／派生 Cart 與當前 ReadAdmission 開始，
+交叉驗證同世代 committed WorldOperation、不可變 Protected Commit Source
+及 World Commit Receipt，重算 Result Digest，再依合成 OpenAPI 固定投影
+歷史 Cart／Order 200 JSON。Validator 新增必要 `protected_world_commit_sources SELECT`
+且不得具寫入權。未知或未提交操作固定拒絕，不可由 Runtime 捏造 409。
+此為內部候選，不是客戶端實收 HTTP，也不具 G4 Send Lease 權限。

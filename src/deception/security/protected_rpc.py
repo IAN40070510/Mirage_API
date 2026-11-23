@@ -203,8 +203,9 @@ class FixedNativeValidatorMTLSClient:
         expected_deployment_id: str, expected_session_id: str,
         expected_read_admission_id: str, expected_world_generation_id: str,
         expected_state_version: int, expected_state_hash: str,
+        expected_attempt_id: str | None = None,
     ) -> dict[str, object]:
-        """由獨立 Validator 校驗 Cart／Order 200 候選的精確 JSON 與來源。
+        """由獨立 Validator 校驗 Cart／Order／Operation 200 候選的精確 JSON 與來源。
 
         只傳 Receipt，固定 Operation 與真實 Executor ReadAdmission 必須匹配；
         此路徑不提供客戶端 HTTP Send，也不能接受呼叫端提供的 Status／Body。
@@ -217,11 +218,22 @@ class FixedNativeValidatorMTLSClient:
         approved = {
             "getGuestCart": ("cart", "/carts/{cart_id}"),
             "getSyntheticOrder": ("order", "/orders/{order_id}"),
+            "getCartOperation": ("operation", "/carts/{cart_id}/operations/{attempt}"),
         }
         selected = approved.get(operation_id)
+        prefix = "cart" if operation_id == "getCartOperation" else (selected[0] if selected else "")
         if (selected is None or not isinstance(resource_id, str)
-                or re.fullmatch(selected[0] + r"_[0-9a-f]{32}", resource_id) is None):
+                or re.fullmatch(prefix + r"_[0-9a-f]{32}", resource_id) is None):
             raise ProtectedRpcConfigurationError("cart_validator_operation_unapproved")
+        if operation_id == "getCartOperation":
+            try:
+                decoded_attempt = UUID(expected_attempt_id)
+            except (TypeError, ValueError) as exc:
+                raise ProtectedRpcConfigurationError("cart_validator_attempt_invalid") from exc
+            if decoded_attempt.version != 4 or str(decoded_attempt) != expected_attempt_id:
+                raise ProtectedRpcConfigurationError("cart_validator_attempt_invalid")
+        elif expected_attempt_id is not None:
+            raise ProtectedRpcConfigurationError("cart_validator_unexpected_attempt")
         async with httpx.AsyncClient(verify=self._tls, trust_env=False, timeout=8.0) as client:
             response = await client.post(
                 self._origin + "/internal/v1/project-cart-read",
@@ -243,12 +255,29 @@ class FixedNativeValidatorMTLSClient:
             source, scope = result["source"], result["scope"]
             schema = (cart_specification()["paths"][selected[1]]["get"]
                       ["responses"]["200"]["content"]["application/json"]["schema"])
-            if (not isinstance(payload, dict)
+            if operation_id == "getCartOperation":
+                entity = payload.get("cart", payload.get("order")) if isinstance(payload, dict) else None
+                valid_payload = (
+                    isinstance(entity, dict) and ("cart" in payload) != ("order" in payload)
+                    and isinstance(entity.get("id"), str)
+                    and re.fullmatch(r"(?:cart|order)_[0-9a-f]{32}", entity["id"]) is not None
+                    and payload.get("commit_attempt_id") == expected_attempt_id
+                    and type(payload.get("state_version")) is int
+                    and 1 <= payload["state_version"] <= expected_state_version
+                    and isinstance(payload.get("state_hash"), str)
+                    and re.fullmatch(r"[0-9a-f]{64}", payload["state_hash"]) is not None
+                )
+            else:
+                valid_payload = (
+                    isinstance(payload, dict)
+                    and isinstance(payload.get(selected[0]), dict)
+                    and payload[selected[0]].get("id") == resource_id
+                    and payload.get("commit_attempt_id") is None
+                    and payload.get("state_version") == expected_state_version
+                    and payload.get("state_hash") == expected_state_hash
+                )
+            if (not valid_payload
                     or not Draft202012Validator(schema).is_valid(payload)
-                    or payload[selected[0]]["id"] != resource_id
-                    or payload["commit_attempt_id"] is not None
-                    or payload["state_version"] != expected_state_version
-                    or payload["state_hash"] != expected_state_hash
                     or not isinstance(source, dict) or set(source) != {
                         "kind", "read_admission_id", "world_generation_id",
                         "state_version", "state_hash"}
@@ -945,7 +974,7 @@ def create_direct_verifier_app(
                 raise HTTPException(status_code=503,
                                     detail="direct_verifier_operation_projection_unverifiable") from exc
         elif (isinstance(outcome, dict) and outcome.get("kind") == "cart_read_admitted"
-              and operation.operation_id in {"getGuestCart", "getSyntheticOrder"}):
+              and operation.operation_id in {"getGuestCart", "getSyntheticOrder", "getCartOperation"}):
             if native_validator_client is None:
                 raise HTTPException(status_code=503,
                                     detail="direct_verifier_native_validator_not_wired")
@@ -961,6 +990,7 @@ def create_direct_verifier_app(
                     expected_world_generation_id=outcome["world_generation_id"],
                     expected_state_version=outcome["state_version"],
                     expected_state_hash=outcome["state_hash"],
+                    expected_attempt_id=outcome["attempt_id"],
                 )
             except Exception as exc:
                 raise HTTPException(status_code=503,

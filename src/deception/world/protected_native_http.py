@@ -83,7 +83,7 @@ class PostgresProtectedNativeProjector(_ProtectedConnection):
     """以與 Verifier／Executor 不同的讀取 Login 查核拒絕及固定 HTTP Envelope。"""
 
     def project_cart_read(self, receipt_id: UUID) -> ProtectedNativeProjection:
-        """由獨立唯讀證據重建 C-02／C-07 的 Cart／Order 200 候選。
+        """由獨立唯讀證據重建 C-02／C-07／C-09 的 Cart／Order／Operation 200 候選。
 
         只接受真 GET Proof、同一 Receipt 的 ReadAdmission、未到期的派生資源
         與已驗 Hash 的當前快照；找不到資源、版本漂移或任何 ACL 不明時
@@ -139,11 +139,28 @@ class PostgresProtectedNativeProjector(_ProtectedConnection):
                 choices = {
                     "getGuestCart": ("/synthetic/carts/{cart_id}", "/synthetic/carts/", "cart"),
                     "getSyntheticOrder": ("/synthetic/orders/{order_id}", "/synthetic/orders/", "order"),
+                    "getCartOperation": ("/synthetic/carts/{cart_id}/operations/{attempt}",
+                                         "/synthetic/carts/", "cart"),
                 }
                 selected = choices.get(proof[1]) if proof is not None else None
+                attempt = None
+                if selected is not None and proof[1] == "getCartOperation":
+                    path_match = re.fullmatch(
+                        re.escape(selected[1] + resource) + r"/operations/([0-9a-f-]{36})",
+                        proof[5],
+                    ) if isinstance(proof[5], str) else None
+                    if path_match is not None:
+                        try:
+                            attempt = UUID(path_match[1])
+                        except ValueError:
+                            attempt = None
+                    path_matches = (attempt is not None and attempt.version == 4
+                                    and str(attempt) == path_match[1])
+                else:
+                    path_matches = selected is not None and proof[5] == selected[1] + resource
                 if (selected is None or proof[:3] != ("synthetic-carts", proof[1], "GET")
                         or proof[3:5] != (selected[0], fingerprint)
-                        or proof[5] != selected[1] + resource
+                        or not path_matches
                         or not resource.startswith(selected[2] + "_")
                         or proof[6] != hashlib.sha256(b"").hexdigest()):
                     raise ProtectedGrantError("protected_cart_read_proof_mismatch")
@@ -175,7 +192,7 @@ class PostgresProtectedNativeProjector(_ProtectedConnection):
                     raise ProtectedGrantError("protected_cart_read_snapshot_invalid") from exc
                 if snapshot.version != version or snapshot.state_hash != state_hash:
                     raise ProtectedGrantError("protected_cart_read_snapshot_stale")
-                if proof[1] == "getGuestCart":
+                if proof[1] in {"getGuestCart", "getCartOperation"}:
                     saved_cart = snapshot.state.get("cart")
                     if (not isinstance(saved_cart, dict) or saved_cart.get("id") != resource
                             or set(saved_cart) != {"id", "items", "currency_code", "total", "status"}
@@ -191,8 +208,59 @@ class PostgresProtectedNativeProjector(_ProtectedConnection):
                         raise ProtectedGrantError("protected_cart_read_entity_missing")
                     kind = "order"
                     path = "/orders/{order_id}"
-                payload = {kind: entity, "state_version": version,
-                           "state_hash": state_hash, "commit_attempt_id": None}
+                if proof[1] == "getCartOperation":
+                    # 歷史操作不得由 Client 提交結果；三份獨立持久來源必須指向同世代成功 Commit。
+                    cursor.execute(
+                        """SELECT operation,status,result,state_version,state_hash,
+                                  result_encoding_version,result_digest
+                           FROM world_operations WHERE environment_id=%s AND deployment_id=%s
+                             AND session_id=%s AND world_generation_id=%s AND commit_attempt_id=%s""",
+                        (environment, deployment, session, generation, attempt),
+                    )
+                    stored = cursor.fetchone()
+                    if stored is None:
+                        raise ProtectedGrantError("protected_cart_operation_missing")
+                    action, status, committed_result, committed_version, committed_hash, encoding, digest = stored
+                    if (action not in {"cart.add", "cart.update", "cart.remove", "cart.complete",
+                                       "cart.cancel_order"} or status != "committed"
+                            or encoding != 1 or not isinstance(committed_result, dict)
+                            or type(committed_version) is not int or committed_version < 1
+                            or not isinstance(committed_hash, str)
+                            or re.fullmatch(r"[0-9a-f]{64}", committed_hash) is None
+                            or operation_result_digest(committed_result, committed_version,
+                                                       committed_hash, attempt, status) != digest):
+                        raise ProtectedGrantError("protected_cart_operation_unverifiable")
+                    cursor.execute(
+                        """SELECT c.result_digest,c.state_version,c.state_hash
+                           FROM protected_world_commit_sources c
+                           WHERE c.commit_attempt_id=%s AND c.environment_id=%s
+                             AND c.deployment_id=%s AND c.session_id=%s
+                             AND c.world_generation_id=%s AND c.operation=%s""",
+                        (attempt, environment, deployment, session, generation, action),
+                    )
+                    if cursor.fetchone() != (digest, committed_version, committed_hash):
+                        raise ProtectedGrantError("protected_cart_operation_source_mismatch")
+                    cursor.execute(
+                        """SELECT state_version,state_hash FROM world_commit_receipts
+                           WHERE environment_id=%s AND deployment_id=%s AND session_id=%s
+                             AND world_generation_id=%s AND commit_attempt_id=%s""",
+                        (environment, deployment, session, generation, attempt),
+                    )
+                    if cursor.fetchone() != (committed_version, committed_hash):
+                        raise ProtectedGrantError("protected_cart_operation_receipt_mismatch")
+                    if (not isinstance(committed_result.get("id"), str)
+                            or re.fullmatch(r"(?:cart|order)_[0-9a-f]{32}",
+                                            committed_result["id"]) is None):
+                        raise ProtectedGrantError("protected_cart_operation_entity_invalid")
+                    kind = "order" if committed_result["id"].startswith("order_") else "cart"
+                    historical_entity = (SyntheticCarts.public_cart(committed_result)
+                                         if kind == "cart" else committed_result)
+                    payload = {kind: historical_entity, "state_version": committed_version,
+                               "state_hash": committed_hash, "commit_attempt_id": str(attempt)}
+                    path = "/carts/{cart_id}/operations/{attempt}"
+                else:
+                    payload = {kind: entity, "state_version": version,
+                               "state_hash": state_hash, "commit_attempt_id": None}
                 schema = cart_specification()["paths"][path]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
                 if not Draft202012Validator(schema).is_valid(payload):
                     raise ProtectedGrantError("protected_cart_read_contract_invalid")

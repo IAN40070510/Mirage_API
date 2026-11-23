@@ -732,6 +732,58 @@ def test_cart_http_verified_receipt_drives_real_fixed_world_handler(isolated_tes
                                  (snapshot.scope.world_generation_id,)).fetchone()[0]
         assert len(row) == 1 and next(iter(row.values()))["quantity"] == 2
 
+    # C-09：真 Commit 後的歷史操作 GET，必須重建受保護 Commit Source，
+    # 不能以同一 World 的普通 ReadAdmission 或 Runtime 自填 status 冒充。
+    operation_path = ("/synthetic/carts/" + binding.resource_id
+                      + "/operations/" + str(outcome.commit_attempt_id))
+    operation_request = replace(original_request(path=operation_path, method="GET"), body=b"")
+    operation_proof = derive_verified_operation(operation_request)
+    operation_receipt, operation_jti = uuid4(), uuid4().hex
+    with psycopg.connect(dsn) as connection:
+        connection.execute("INSERT INTO replay_entries VALUES ('gateway','mirage',%s,%s)",
+                           (operation_jti, now + 120))
+        connection.execute(
+            """INSERT INTO ingress_receipts (
+                   receipt_id,issuer,audience,jti,key_id,environment_id,deployment_id,
+                   session_id,session_epoch,request_fingerprint,assessment_digest,
+                   claims_digest,verification_policy_version,token_issued_at,
+                   token_not_before,token_expires_at,access_mode,resource_id)
+               VALUES (%s,'gateway','mirage',%s,'kid',%s,%s,%s,1,%s,%s,%s,
+                       'trusted-session-v1.1',%s,%s,%s,'cart',%s)""",
+            (operation_receipt, operation_jti, binding.environment_id,
+             binding.deployment_id, binding.session_id,
+             operation_proof.request_fingerprint, digest("b"), digest("c"),
+             now - 5, now - 5, now + 90, binding.resource_id),
+        )
+        connection.execute(
+            """INSERT INTO protected_http_operation_bindings (
+                   receipt_id,platform,operation_id,method,path_template,
+                   request_fingerprint,request_body_sha256,request_path,request_content_type)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+            (operation_receipt, operation_proof.platform, operation_proof.operation_id,
+             operation_proof.method, operation_proof.path_template,
+             operation_proof.request_fingerprint, operation_proof.request_body_sha256,
+             operation_proof.request_path, operation_proof.request_content_type),
+        )
+    read, query = executor.read_verified_cart_http(
+        receipt_id=operation_receipt, binding=binding,
+        raw_path=operation_request.raw_path, raw_body=b"", expires_at=now + 30,
+    )
+    assert query.operation == "getCartOperation" and query.attempt_id == outcome.commit_attempt_id
+    projector = PostgresProtectedNativeProjector(dsn, expected_login=_real_login(dsn))
+    projected = projector.project_cart_read(operation_receipt)
+    payload = json.loads(projected.body_bytes)
+    assert projected.status_code == 200 and projected.operation_id == "getCartOperation"
+    assert projected.source.read_admission_id == read.source.read_admission_id
+    assert payload["commit_attempt_id"] == str(outcome.commit_attempt_id)
+    assert payload["state_version"] == outcome.committed_state_version
+    assert payload["state_hash"] == outcome.committed_state_hash
+    assert payload["cart"]["id"] == binding.resource_id
+    assert payload["cart"]["items"][0]["quantity"] == 2
+    # 修改 lookup ID 不能誤配合法操作；不存在的操作不可偽裝成原生 409。
+    with pytest.raises(ProtectedGrantError, match="source_missing"):
+        projector.project_cart_read(uuid4())
+
 
 def test_untrusted_legacy_cart_cannot_enter_verified_http_executor(isolated_test_dsn):
     """即使舊 Cart World 有有效資源映射，缺 Creator 的受保護 Lineage 不得成為 RPC 目標。"""
