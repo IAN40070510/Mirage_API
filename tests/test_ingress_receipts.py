@@ -79,7 +79,7 @@ def _isolated_three_process_service_logins(dsn: str, request):
             "GRANT SELECT ON ingress_receipts,protected_http_operation_bindings,"
             "session_heads,session_world_bindings,generation_controls,trusted_key_revocations,"
             "world_snapshots,world_operations,read_admissions,protected_world_read_sources,"
-            "protected_world_commit_sources TO {}"
+            "protected_world_commit_sources,protected_world_rejection_sources TO {}"
         ).format(executor_role))
         admin.execute(sql.SQL(
             "GRANT UPDATE ON session_heads,session_world_bindings,generation_controls,"
@@ -87,7 +87,8 @@ def _isolated_three_process_service_logins(dsn: str, request):
         ).format(executor_role))
         admin.execute(sql.SQL(
             "GRANT INSERT ON read_admissions,protected_world_read_sources,world_operations,"
-            "world_events,world_commit_receipts,protected_world_commit_sources TO {}"
+            "world_events,world_commit_receipts,protected_world_commit_sources,"
+            "protected_world_rejection_sources TO {}"
         ).format(executor_role))
         admin.execute(sql.SQL(
             "GRANT EXECUTE ON FUNCTION protected_lock_reference(text,jsonb) TO {}"
