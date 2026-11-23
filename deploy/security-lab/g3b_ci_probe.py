@@ -371,7 +371,8 @@ def _gateway() -> None:
         raise RuntimeError("g3b_ci_gateway_network_leak:" + hostname)
     print("G3B_GATEWAY_PASS unsigned_routes=20/20 inventory_commit=1 inventory_read_200=1 "
           "inventory_operation_200=1 inventory_absence_409=1 unknown_operation=503 "
-          "synthetic_409=1 medusa_400=1 medusa_404=1 replay=denied anonymous=denied "
+          "synthetic_409=1 cart_read_200=1 medusa_400=1 medusa_404=1 "
+          "replay=denied anonymous=denied "
           "execution_network=unreachable trusted_send=off")
 
 
@@ -426,7 +427,17 @@ def _audit(root: Path) -> None:
             raise RuntimeError("g3b_ci_medusa_rejection_evidence_missing")
         if admin.execute("SELECT count(*) FROM protected_world_rejection_sources").fetchone()[0] != 1:
             raise RuntimeError("g3b_ci_synthetic_rejection_evidence_missing")
-        if admin.execute("SELECT count(*) FROM protected_http_operation_bindings").fetchone()[0] != 5:
+        proof_counts = dict(admin.execute(
+            """SELECT operation_id,count(*) FROM protected_http_operation_bindings
+               GROUP BY operation_id""",
+        ).fetchall())
+        if proof_counts != {
+                "reserveSyntheticInventory": 2,
+                "getSyntheticInventory": 2,
+                "getSyntheticOperation": 2,
+                "getGuestCart": 1,
+                "PostCartsIdLineItems": 2,
+        }:
             raise RuntimeError("g3b_ci_operation_proof_count_mismatch")
         for role, forbidden in (
                 ("mirage_g3b_ci_verifier", "protected_world_commit_sources"),
