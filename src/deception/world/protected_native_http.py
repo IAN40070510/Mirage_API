@@ -208,6 +208,7 @@ class PostgresProtectedNativeProjector(_ProtectedConnection):
                         raise ProtectedGrantError("protected_cart_read_entity_missing")
                     kind = "order"
                     path = "/orders/{order_id}"
+                missing_operation = False
                 if proof[1] == "getCartOperation":
                     # 歷史操作不得由 Client 提交結果；三份獨立持久來源必須指向同世代成功 Commit。
                     cursor.execute(
@@ -218,63 +219,69 @@ class PostgresProtectedNativeProjector(_ProtectedConnection):
                         (environment, deployment, session, generation, attempt),
                     )
                     stored = cursor.fetchone()
-                    if stored is None:
-                        raise ProtectedGrantError("protected_cart_operation_missing")
-                    action, status, committed_result, committed_version, committed_hash, encoding, digest = stored
-                    if (action not in {"cart.add", "cart.update", "cart.remove", "cart.complete",
-                                       "cart.cancel_order"} or status != "committed"
-                            or encoding != 1 or not isinstance(committed_result, dict)
-                            or type(committed_version) is not int or committed_version < 1
-                            or not isinstance(committed_hash, str)
-                            or re.fullmatch(r"[0-9a-f]{64}", committed_hash) is None
-                            or operation_result_digest(committed_result, committed_version,
-                                                       committed_hash, attempt, status) != digest):
-                        raise ProtectedGrantError("protected_cart_operation_unverifiable")
-                    cursor.execute(
-                        """SELECT c.result_digest,c.state_version,c.state_hash
-                           FROM protected_world_commit_sources c
-                           WHERE c.commit_attempt_id=%s AND c.environment_id=%s
-                             AND c.deployment_id=%s AND c.session_id=%s
-                             AND c.world_generation_id=%s AND c.operation=%s""",
-                        (attempt, environment, deployment, session, generation, action),
-                    )
-                    if cursor.fetchone() != (digest, committed_version, committed_hash):
-                        raise ProtectedGrantError("protected_cart_operation_source_mismatch")
-                    cursor.execute(
-                        """SELECT state_version,state_hash FROM world_commit_receipts
-                           WHERE environment_id=%s AND deployment_id=%s AND session_id=%s
-                             AND world_generation_id=%s AND commit_attempt_id=%s""",
-                        (environment, deployment, session, generation, attempt),
-                    )
-                    if cursor.fetchone() != (committed_version, committed_hash):
-                        raise ProtectedGrantError("protected_cart_operation_receipt_mismatch")
-                    if (not isinstance(committed_result.get("id"), str)
-                            or re.fullmatch(r"(?:cart|order)_[0-9a-f]{32}",
-                                            committed_result["id"]) is None):
-                        raise ProtectedGrantError("protected_cart_operation_entity_invalid")
-                    kind = "order" if committed_result["id"].startswith("order_") else "cart"
-                    if committed_version > version:
-                        raise ProtectedGrantError("protected_cart_operation_future_version")
-                    if kind == "cart":
-                        if committed_result["id"] != resource:
-                            raise ProtectedGrantError("protected_cart_operation_resource_mismatch")
-                        if isinstance(committed_result.get("items"), dict):
-                            historical_entity = SyntheticCarts.public_cart(committed_result)
-                        elif isinstance(committed_result.get("items"), list):
-                            historical_entity = committed_result
+                    missing_operation = stored is None
+                    if not missing_operation:
+                        action, status, committed_result, committed_version, committed_hash, encoding, digest = stored
+                        if (action not in {"cart.add", "cart.update", "cart.remove", "cart.complete",
+                                           "cart.cancel_order"} or status != "committed"
+                                or encoding != 1 or not isinstance(committed_result, dict)
+                                or type(committed_version) is not int or committed_version < 1
+                                or not isinstance(committed_hash, str)
+                                or re.fullmatch(r"[0-9a-f]{64}", committed_hash) is None
+                                or operation_result_digest(committed_result, committed_version,
+                                                           committed_hash, attempt, status) != digest):
+                            raise ProtectedGrantError("protected_cart_operation_unverifiable")
+                        cursor.execute(
+                            """SELECT c.result_digest,c.state_version,c.state_hash
+                               FROM protected_world_commit_sources c
+                               WHERE c.commit_attempt_id=%s AND c.environment_id=%s
+                                 AND c.deployment_id=%s AND c.session_id=%s
+                                 AND c.world_generation_id=%s AND c.operation=%s""",
+                            (attempt, environment, deployment, session, generation, action),
+                        )
+                        if cursor.fetchone() != (digest, committed_version, committed_hash):
+                            raise ProtectedGrantError("protected_cart_operation_source_mismatch")
+                        cursor.execute(
+                            """SELECT state_version,state_hash FROM world_commit_receipts
+                               WHERE environment_id=%s AND deployment_id=%s AND session_id=%s
+                                 AND world_generation_id=%s AND commit_attempt_id=%s""",
+                            (environment, deployment, session, generation, attempt),
+                        )
+                        if cursor.fetchone() != (committed_version, committed_hash):
+                            raise ProtectedGrantError("protected_cart_operation_receipt_mismatch")
+                        if (not isinstance(committed_result.get("id"), str)
+                                or re.fullmatch(r"(?:cart|order)_[0-9a-f]{32}",
+                                                committed_result["id"]) is None):
+                            raise ProtectedGrantError("protected_cart_operation_entity_invalid")
+                        kind = "order" if committed_result["id"].startswith("order_") else "cart"
+                        if committed_version > version:
+                            raise ProtectedGrantError("protected_cart_operation_future_version")
+                        if kind == "cart":
+                            if committed_result["id"] != resource:
+                                raise ProtectedGrantError("protected_cart_operation_resource_mismatch")
+                            if isinstance(committed_result.get("items"), dict):
+                                historical_entity = SyntheticCarts.public_cart(committed_result)
+                            elif isinstance(committed_result.get("items"), list):
+                                historical_entity = committed_result
+                            else:
+                                raise ProtectedGrantError("protected_cart_operation_items_invalid")
                         else:
-                            raise ProtectedGrantError("protected_cart_operation_items_invalid")
-                    else:
-                        if committed_result.get("cart_id") != resource:
-                            raise ProtectedGrantError("protected_cart_operation_order_lineage_mismatch")
-                        historical_entity = committed_result
-                    payload = {kind: historical_entity, "state_version": committed_version,
-                               "state_hash": committed_hash, "commit_attempt_id": str(attempt)}
-                    path = "/carts/{cart_id}/operations/{attempt}"
+                            if committed_result.get("cart_id") != resource:
+                                raise ProtectedGrantError("protected_cart_operation_order_lineage_mismatch")
+                            historical_entity = committed_result
+                        payload = {kind: historical_entity, "state_version": committed_version,
+                                   "state_hash": committed_hash, "commit_attempt_id": str(attempt)}
+                        path = "/carts/{cart_id}/operations/{attempt}"
+                    if missing_operation:
+                        # 只有同世代、已驗證 ReadAdmission 下確定查無 UUID4 才有 409。
+                        payload = {"code": "operation_not_found"}
+                        path = "/carts/{cart_id}/operations/{attempt}"
                 else:
                     payload = {kind: entity, "state_version": version,
                                "state_hash": state_hash, "commit_attempt_id": None}
-                schema = cart_specification()["paths"][path]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+                native_status = 409 if missing_operation else 200
+                schema = cart_specification()["paths"][path]["get"]["responses"][
+                    str(native_status)]["content"]["application/json"]["schema"]
                 if not Draft202012Validator(schema).is_valid(payload):
                     raise ProtectedGrantError("protected_cart_read_contract_invalid")
                 cursor.execute("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
@@ -314,8 +321,8 @@ class PostgresProtectedNativeProjector(_ProtectedConnection):
                           separators=(",", ":")).encode("utf-8")
         return ProtectedNativeProjection(
             receipt_id=receipt_id, scope=scope, operation_id=proof[1],
-            request_fingerprint=fingerprint, status_code=200, headers=headers,
-            body_bytes=body, envelope_hash=response_hashes(200, headers, body)[0],
+            request_fingerprint=fingerprint, status_code=native_status, headers=headers,
+            body_bytes=body, envelope_hash=response_hashes(native_status, headers, body)[0],
             source=SnapshotSource(read_admission_id=read_id, world_generation_id=generation,
                                   state_version=version, state_hash=state_hash),
         )

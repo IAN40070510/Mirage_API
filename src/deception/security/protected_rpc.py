@@ -253,9 +253,18 @@ class FixedNativeValidatorMTLSClient:
             payload = json.loads(body, object_pairs_hook=unique_object,
                                  parse_constant=reject_constant)
             source, scope = result["source"], result["scope"]
+            native_status = result["status_code"]
+            if (type(native_status) is not int or native_status not in {200, 409}
+                    or native_status == 409 and operation_id != "getCartOperation"):
+                raise ValueError("cart_validator_status_unapproved")
             schema = (cart_specification()["paths"][selected[1]]["get"]
-                      ["responses"]["200"]["content"]["application/json"]["schema"])
-            if operation_id == "getCartOperation":
+                      ["responses"][str(native_status)]["content"]["application/json"]["schema"])
+            if native_status == 409:
+                from deception.world.protected_native_http import fixed_synthetic_rejection_bytes
+                _, missing_body = fixed_synthetic_rejection_bytes(
+                    "synthetic-carts", "operation_not_found")
+                valid_payload = payload == {"code": "operation_not_found"} and body == missing_body
+            elif operation_id == "getCartOperation":
                 entity = payload.get("cart", payload.get("order")) if isinstance(payload, dict) else None
                 valid_payload = (
                     isinstance(entity, dict) and ("cart" in payload) != ("order" in payload)
@@ -295,20 +304,20 @@ class FixedNativeValidatorMTLSClient:
                     or result["receipt_id"] != str(receipt_id)
                     or result["operation_id"] != operation_id
                     or result["request_fingerprint"] != request_fingerprint
-                    or type(result["status_code"]) is not int or result["status_code"] != 200
+                    or type(result["status_code"]) is not int or native_status not in {200, 409}
                     or result["headers"] != [["content-type", "application/json"]]
                     or result["trusted_send"] != "disabled"
                     or body != json.dumps(payload, ensure_ascii=False, sort_keys=True,
                                           separators=(",", ":")).encode("utf-8")
                     or result["envelope_hash"] != response_hashes(
-                        200, (("content-type", "application/json"),), body)[0]):
+                        native_status, (("content-type", "application/json"),), body)[0]):
                 raise ValueError("cart_validator_binding_mismatch")
         except (ValueError, TypeError, KeyError, UnicodeError) as exc:
             raise ProtectedRpcConfigurationError("cart_validator_binding_mismatch") from exc
         return {
-            "status_code": 200, "headers": [["content-type", "application/json"]],
+            "status_code": native_status, "headers": [["content-type", "application/json"]],
             "body_b64": base64.b64encode(body).decode("ascii"),
-            "body_sha256": response_hashes(200, (("content-type", "application/json"),), body)[1],
+            "body_sha256": response_hashes(native_status, (("content-type", "application/json"),), body)[1],
             "envelope_hash": result["envelope_hash"], "source": dict(source),
             "scope": dict(scope), "delivery": "candidate_only_no_send_authorization",
         }

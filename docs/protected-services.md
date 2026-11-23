@@ -342,3 +342,13 @@ Commit Attempt UUID4、Result Digest、Version、Hash，所有 Header／Body
 409 JSON。原始 Scope、目前快照 Hash、Epoch、Generation、Key 與期限照常
 重新核對。若記錄存在但為 rejected、來源摘要損壞或 COMMIT 不明，必須
 固定拒絕，不可偽裝成「查無」的 409。這仍是內部候選而非實際客戶端發送。
+
+### C-09 未知歷史 Cart Operation 的 409 候選（待真 PG CI）
+
+有效 Cart 衍生 Session／受保護 GET Receipt／ReadAdmission 下，當
+`world_operations` 依 World Generation 與 UUID4 完全查無記錄時，
+獨立唯讀 Validator 才按固定 Synthetic Cart 規格重建
+`{"code":"operation_not_found"}` 409 JSON；如果有記錄但為 rejected、
+未驗證 Commit 或摘要不一致，不能降級為 operation_not_found。
+原始 GET Fingerprint、Cart Resource、Snapshot、Epoch／Key 與期限都
+仍須一致。未知 Cart ID 不能用任意 Runtime 指令當作業務 409。

@@ -426,8 +426,6 @@ def test_inventory_get_receipt_admits_real_protected_read_without_native_http(
         ).fetchone()[0] == 1
         assert connection.execute("SELECT count(*) FROM world_operations").fetchone()[0] == 0
     if operation == "getSyntheticInventory":
-        from deception.world.protected_native_http import PostgresProtectedNativeProjector
-
         projector = PostgresProtectedNativeProjector(dsn, expected_login=_real_login(dsn))
         if path.endswith("/sku-1"):
             projected = projector.project_inventory_snapshot(receipt)
@@ -1017,6 +1015,48 @@ def test_verified_cart_get_requires_creator_lineage_and_original_receipt(isolate
             "SELECT count(*) FROM protected_world_read_sources WHERE receipt_id=%s",
             (get_receipt,),
         ).fetchone()[0] == 1
+
+    # C-09：有效 Cart 世代內確定沒有該歷史 UUID4，才允許唯讀來源投影 409。
+    missing_path = "/synthetic/carts/" + created.binding.resource_id + "/operations/" + str(uuid4())
+    missing_request = replace(original_request(path=missing_path, method="GET"), body=b"")
+    missing_proof = derive_verified_operation(missing_request)
+    missing_receipt, missing_jti = uuid4(), uuid4().hex
+    with psycopg.connect(dsn) as connection:
+        connection.execute("INSERT INTO replay_entries VALUES ('gateway','mirage',%s,%s)",
+                           (missing_jti, now + 120))
+        connection.execute(
+            """INSERT INTO ingress_receipts (
+                   receipt_id,issuer,audience,jti,key_id,environment_id,deployment_id,
+                   session_id,session_epoch,request_fingerprint,assessment_digest,
+                   claims_digest,verification_policy_version,token_issued_at,
+                   token_not_before,token_expires_at,access_mode,resource_id)
+               VALUES (%s,'gateway','mirage',%s,'kid',%s,%s,%s,1,%s,%s,%s,
+                       'trusted-session-v1.1',%s,%s,%s,'cart',%s)""",
+            (missing_receipt, missing_jti, created.binding.environment_id,
+             created.binding.deployment_id, created.binding.session_id,
+             missing_proof.request_fingerprint, digest("b"), digest("c"),
+             now - 5, now - 5, now + 90, created.binding.resource_id),
+        )
+        connection.execute(
+            """INSERT INTO protected_http_operation_bindings (
+                   receipt_id,platform,operation_id,method,path_template,
+                   request_fingerprint,request_body_sha256,request_path,request_content_type)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+            (missing_receipt, missing_proof.platform, missing_proof.operation_id,
+             missing_proof.method, missing_proof.path_template,
+             missing_proof.request_fingerprint, missing_proof.request_body_sha256,
+             missing_proof.request_path, missing_proof.request_content_type),
+        )
+    unknown_read, unknown_query = executor.read_verified_cart_http(
+        receipt_id=missing_receipt, binding=created.binding,
+        raw_path=missing_request.raw_path, raw_body=b"", expires_at=now + 30,
+    )
+    assert unknown_query.operation == "getCartOperation"
+    missing_projection = PostgresProtectedNativeProjector(
+        dsn, expected_login=_real_login(dsn)).project_cart_read(missing_receipt)
+    assert missing_projection.status_code == 409
+    assert missing_projection.source.read_admission_id == unknown_read.source.read_admission_id
+    assert missing_projection.body_bytes == b'{"code":"operation_not_found"}'
 
 
 def test_protected_cart_creator_receipt_mints_one_derived_scope(isolated_test_dsn):

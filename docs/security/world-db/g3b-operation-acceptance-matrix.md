@@ -156,3 +156,9 @@ GET Receipt／ReadAdmission 已通過，且指定 UUID4 在同世代
 `world_operations` 確實不存在時，才按固定 Synthetic Inventory
 OpenAPI 回傳 `operation_not_found` 409 候選。已有記錄卻不可信不可
 降級成未知操作；對外仍禁止 Send。
+
+**C-09 未知操作 409 候選（待真 PG CI）**：只有受保護 Cart ReadAdmission
+及相同資源、世代、原始 GET Proof 俱全，且 WorldOperation 依 UUID4
+確實不存在時，獨立 Validator 才能產生固定 `operation_not_found`
+409 候選；已有但不可信的結果仍固定拒絕。須再驗證拒絕競態／客戶端
+原生 HTTP，不能在 G5 Fence 前解除 Sender 封鎖。

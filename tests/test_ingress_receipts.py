@@ -404,8 +404,8 @@ def test_direct_verifier_dispatches_inventory_over_real_executor_mtls_once(isola
                     assert operation_body["reservation"]["status"] == "reserved"
                     assert operation_body["reservation"]["sku"] == "sku-1"
                 assert gateway.send(original).status_code == 403
-            # 不存在的操作雖有合法 GET Receipt／ReadAdmission，也沒有真 Commit
-            # 與獨立結果來源；必須是 503，不能由 Runtime 偽造原生 200／409。
+            # I-03 缺少操作由獨立 Validator 經合法 GET ReadAdmission 查真 DB，
+            # 才能得到固定 409 候選；對外仍是 200 內部對帳，不核發 Send。
             missing_id = str(uuid4())
             missing = gateway.build_request(
                 "GET", "/synthetic/operations/" + missing_id,
@@ -418,9 +418,14 @@ def test_direct_verifier_dispatches_inventory_over_real_executor_mtls_once(isola
                 access_mode="inventory",
             )
             denied_missing = gateway.send(missing)
-            assert denied_missing.status_code == 503
-            assert denied_missing.json() == {
-                "detail": "direct_verifier_operation_projection_unverifiable"}
+            assert denied_missing.status_code == 200
+            missing_candidate = denied_missing.json()["native_projection"]
+            assert missing_candidate["status_code"] == 409
+            assert missing_candidate["source"]["kind"] == "snapshot"
+            assert missing_candidate["delivery"] == "candidate_only_no_send_authorization"
+            assert base64.b64decode(missing_candidate["body_b64"], validate=True) == (
+                b'{"code":"operation_not_found"}')
+            assert gateway.send(missing).status_code == 403
             # I-04 的真業務缺 SKU 只能由 ReadAdmission 的獨立 Snapshot 證明。
             absent = gateway.build_request(
                 "GET", "/synthetic/inventory/not-in-world",
