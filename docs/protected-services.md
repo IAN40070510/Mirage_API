@@ -56,11 +56,25 @@ Session 逐欄比對，保留已驗證的 `native_projection.status_code`、
 
 I-04 庫存 GET 新增另一個固定 mTLS 路徑
 `POST /internal/v1/project-inventory-snapshot`；Validator 唯讀重建原始
-`sku` 的 `200` JSON，核對不可變 ReadAdmission 與完整 WorldSnapshot
+`sku` 的 `200` JSON；若同一受保護快照**真正不存在此 SKU**，則新增固定
+`409 {"code":"unknown_synthetic_sku"}` 候選，核對不可變 ReadAdmission 與完整 WorldSnapshot
 版本、狀態雜湊、期限及 Epoch／Key。Verifier 重驗精確 JSON、SnapshotSource、
 Scope／Hash；篡改與過期固定 503，不會回退 Runtime 自填庫存數量。
-這只可認列 I-04 合法成功的**隔離候選子項**，未知 SKU 409、原生 ASGI
-傳輸與正式部署仍 OPEN；G4 只有隔離 primitive，尚無可用的發送服務。
+目前只有 I-04 合法成功的 **200 候選隔離子項**具既有真 CI 證據；
+新增缺 SKU 409 的獨立候選仍待本 SHA 真 CI。快照毀損、過期、世代錯置
+一律 503，不得冒充業務 409。原生 ASGI 傳輸與正式部署仍 OPEN；
+G4 只有隔離 primitive，尚無可用的發送服務。
+
+I-03 `GET /synthetic/operations/{attempt}` 新增固定
+`POST /internal/v1/project-inventory-operation`：不同於 I-04 的庫存數量，
+Validator 還必須從唯讀 `world_operations` 與 `world_commit_receipts` 證明同
+World 世代的真正 `committed` 操作與完整 Result Digest，再以受保護
+ReadAdmission／Snapshot／Epoch／Key 核對當前查詢。結果重建與合成 OpenAPI
+一致的 `200 {commit_attempt_id,state_version,state_hash,reservation}` 候選，
+拒絕由 RPC 選擇 Status 或 Body。若操作不存在、被拒或 Commit 不明，不會
+自行補成 `409`。獨立 Validator 需要新增 `world_commit_receipts` 唯讀權，
+仍不得 INSERT／UPDATE／DELETE；其正式真 PostgreSQL／四服務 CI 待驗。
+**外層仍只回內部對帳 200，不是客戶端原生成功回應。**
 
 候選投影結果可交既有 `PostgresCandidatePromoter` 的來源核對，
 **並沒有新增可對 Client 送出 400／404 的 HTTP endpoint**；正式獨立

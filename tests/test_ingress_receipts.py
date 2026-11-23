@@ -361,7 +361,7 @@ def test_direct_verifier_dispatches_inventory_over_real_executor_mtls_once(isola
             assert accepted.json()["executor_result"]["status"] == "committed"
             assert accepted.json()["executor_result"]["operation"] == "reserveSyntheticInventory"
             assert gateway.send(request).status_code == 403
-            # I-04 從獨立 Validator 取得 200 候選；I-03 仍只有 ReadAdmission。
+            # I-03／I-04 均由獨立 Validator 按不可變 Read／Commit 來源重建 200 候選。
             for index, (read_path, operation) in enumerate((
                     ("/synthetic/inventory/sku-1", "getSyntheticInventory"),
                     ("/synthetic/operations/" + json.loads(body)["commit_attempt_id"],
@@ -391,8 +391,54 @@ def test_direct_verifier_dispatches_inventory_over_real_executor_mtls_once(isola
                     }
                     assert candidate["delivery"] == "candidate_only_no_send_authorization"
                 else:
-                    assert "native_projection" not in read_http.json()
+                    candidate = read_http.json()["native_projection"]
+                    assert candidate["status_code"] == 200
+                    assert candidate["source"]["kind"] == "snapshot"
+                    assert candidate["source"]["read_admission_id"] == internal["read_admission_id"]
+                    assert candidate["scope"]["world_generation_id"] == internal["world_generation_id"]
+                    assert candidate["delivery"] == "candidate_only_no_send_authorization"
+                    operation_body = json.loads(base64.b64decode(
+                        candidate["body_b64"], validate=True))
+                    assert operation_body["commit_attempt_id"] == json.loads(body)["commit_attempt_id"]
+                    assert operation_body["state_version"] == 2
+                    assert operation_body["reservation"]["status"] == "reserved"
+                    assert operation_body["reservation"]["sku"] == "sku-1"
                 assert gateway.send(original).status_code == 403
+            # 不存在的操作雖有合法 GET Receipt／ReadAdmission，也沒有真 Commit
+            # 與獨立結果來源；必須是 503，不能由 Runtime 偽造原生 200／409。
+            missing_id = str(uuid4())
+            missing = gateway.build_request(
+                "GET", "/synthetic/operations/" + missing_id,
+                headers={"x-request-id": "three-process-missing-attempt"},
+            )
+            missing_fingerprint = fingerprint_httpx_request(
+                missing, "three-process-missing-attempt")
+            missing.headers["x-trusted-session"] = signed(
+                key, jti=uuid4().hex, fingerprint=missing_fingerprint,
+                access_mode="inventory",
+            )
+            denied_missing = gateway.send(missing)
+            assert denied_missing.status_code == 503
+            assert denied_missing.json() == {
+                "detail": "direct_verifier_operation_projection_unverifiable"}
+            # I-04 的真業務缺 SKU 只能由 ReadAdmission 的獨立 Snapshot 證明。
+            absent = gateway.build_request(
+                "GET", "/synthetic/inventory/not-in-world",
+                headers={"x-request-id": "three-process-missing-sku"},
+            )
+            absent_fingerprint = fingerprint_httpx_request(absent, "three-process-missing-sku")
+            absent.headers["x-trusted-session"] = signed(
+                key, jti=uuid4().hex, fingerprint=absent_fingerprint,
+                access_mode="inventory",
+            )
+            absent_http = gateway.send(absent)
+            assert absent_http.status_code == 200  # 控制面對帳，尚非原生 Client 409。
+            absent_candidate = absent_http.json()["native_projection"]
+            assert absent_candidate["status_code"] == 409
+            assert absent_candidate["delivery"] == "candidate_only_no_send_authorization"
+            assert base64.b64decode(absent_candidate["body_b64"], validate=True) == (
+                b'{"code":"unknown_synthetic_sku"}')
+            assert absent_candidate["source"]["kind"] == "snapshot"
             # 真實拒絕來源只有被固定 Handler 拒絕後才能由另一程序投影。
             failed_body = json.dumps({"sku": "missing", "quantity": 1,
                                       "expected_version": 2, "idempotency_key": "real-409",
@@ -423,8 +469,8 @@ def test_direct_verifier_dispatches_inventory_over_real_executor_mtls_once(isola
                 (snapshot.scope.world_generation_id,),
             ).fetchone()[0] == "2"
             assert connection.execute("SELECT count(*) FROM protected_world_commit_sources").fetchone()[0] == 1
-            assert connection.execute("SELECT count(*) FROM protected_world_read_sources").fetchone()[0] == 4
-            assert connection.execute("SELECT count(*) FROM ingress_receipts").fetchone()[0] == 4
+            assert connection.execute("SELECT count(*) FROM protected_world_read_sources").fetchone()[0] == 6
+            assert connection.execute("SELECT count(*) FROM ingress_receipts").fetchone()[0] == 6
             assert connection.execute("SELECT count(*) FROM protected_world_rejection_sources").fetchone()[0] == 1
     finally:
         for process in (worker, validator_worker):

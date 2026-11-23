@@ -82,11 +82,171 @@ class ProtectedNativeProjection:
 class PostgresProtectedNativeProjector(_ProtectedConnection):
     """以與 Verifier／Executor 不同的讀取 Login 查核拒絕及固定 HTTP Envelope。"""
 
-    def project_inventory_snapshot(self, receipt_id: UUID) -> ProtectedNativeProjection:
-        """以獨立唯讀 Login 從同一 Receipt 的 ReadAdmission 重建 I-04 200 候選。
+    def project_inventory_operation(self, receipt_id: UUID) -> ProtectedNativeProjection:
+        """由受保護 GET Proof／ReadAdmission／真 Commit 結果重建 I-03 200 候選。
 
-        只接受固定 GET SKU 與空 Body；若世界快照版本已移動、SKU 不存在、
-        簽章過期或 Epoch／Generation／Key 改變，直接拒絕而不合成業務 409。
+        只重建同世代、已提交且有 Commit Receipt 的 reserve/cancel；不存在、
+        rejected、未知 COMMIT 或未通過新鮮度檢查時一律拒絕，不合成 409。
+        此方法沒有任何對外傳輸／Send Lease 權。
+        """
+        if not isinstance(receipt_id, UUID) or receipt_id.version != 4:
+            raise ProtectedGrantError("protected_inventory_operation_receipt_invalid")
+        with self._connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SET LOCAL statement_timeout='5s'")
+                cursor.execute(
+                    """SELECT r.environment_id,r.deployment_id,r.session_id,r.session_epoch,
+                              r.request_fingerprint,r.issuer,r.key_id,r.token_expires_at,
+                              r.access_mode,r.resource_id,
+                              p.read_admission_id,p.world_generation_id,p.state_version,p.state_hash,
+                              a.request_binding_digest,a.state_version,a.state_hash,a.expires_at,
+                              a.environment_id,a.deployment_id,a.session_id,a.world_generation_id
+                       FROM ingress_receipts r
+                       JOIN protected_world_read_sources p ON p.receipt_id=r.receipt_id
+                         AND (p.environment_id,p.deployment_id,p.session_id)
+                             =(r.environment_id,r.deployment_id,r.session_id)
+                       JOIN read_admissions a ON a.read_admission_id=p.read_admission_id
+                         AND (a.environment_id,a.deployment_id,a.session_id,a.world_generation_id)
+                             =(p.environment_id,p.deployment_id,p.session_id,p.world_generation_id)
+                       WHERE r.receipt_id=%s""", (receipt_id,),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    raise ProtectedGrantError("protected_inventory_operation_read_source_missing")
+                (environment, deployment, session, epoch, fingerprint, issuer, key_id,
+                 token_deadline, mode, resource_id, read_id, generation, version, state_hash,
+                 binding_digest, admission_version, admission_hash, read_deadline,
+                 read_environment, read_deployment, read_session, read_generation) = row
+                if (mode != "inventory" or resource_id is not None
+                        or fingerprint != binding_digest
+                        or (version, state_hash) != (admission_version, admission_hash)
+                        or (environment, deployment, session, generation) != (
+                            read_environment, read_deployment, read_session, read_generation)):
+                    raise ProtectedGrantError("protected_inventory_operation_read_source_mismatch")
+                cursor.execute(
+                    """SELECT platform,operation_id,method,path_template,request_fingerprint,
+                              request_path,request_body_sha256
+                       FROM protected_http_operation_bindings WHERE receipt_id=%s""",
+                    (receipt_id,),
+                )
+                proof = cursor.fetchone()
+                matched = re.fullmatch(r"/synthetic/operations/([0-9a-f-]{36})", proof[5]) if (
+                    proof is not None and isinstance(proof[5], str)) else None
+                if (proof is None or proof[:5] != (
+                        "synthetic-inventory", "getSyntheticOperation", "GET",
+                        "/synthetic/operations/{attempt}", fingerprint)
+                        or matched is None or proof[6] != hashlib.sha256(b"").hexdigest()):
+                    raise ProtectedGrantError("protected_inventory_operation_proof_mismatch")
+                try:
+                    attempt = UUID(matched[1])
+                except ValueError as exc:
+                    raise ProtectedGrantError("protected_inventory_operation_attempt_invalid") from exc
+                if attempt.version != 4 or str(attempt) != matched[1]:
+                    raise ProtectedGrantError("protected_inventory_operation_attempt_invalid")
+                scope = WorldScope(environment_id=environment, deployment_id=deployment,
+                                   session_id=session, world_generation_id=generation)
+                cursor.execute(
+                    """SELECT version,state_hash,state,expires_at FROM world_snapshots
+                       WHERE environment_id=%s AND deployment_id=%s AND session_id=%s
+                         AND world_generation_id=%s""",
+                    (environment, deployment, session, generation),
+                )
+                snapshot_row = cursor.fetchone()
+                if snapshot_row is None:
+                    raise ProtectedGrantError("protected_inventory_operation_snapshot_missing")
+                try:
+                    snapshot = WorldSnapshot(scope=scope, version=snapshot_row[0],
+                                             state_hash=snapshot_row[1], state=snapshot_row[2],
+                                             expires_at=snapshot_row[3])
+                except ValueError as exc:
+                    raise ProtectedGrantError("protected_inventory_operation_snapshot_invalid") from exc
+                if snapshot.version != version or snapshot.state_hash != state_hash:
+                    raise ProtectedGrantError("protected_inventory_operation_snapshot_stale")
+                cursor.execute(
+                    """SELECT operation,status,result,state_version,state_hash,
+                              result_encoding_version,result_digest
+                       FROM world_operations WHERE environment_id=%s AND deployment_id=%s
+                         AND session_id=%s AND world_generation_id=%s AND commit_attempt_id=%s""",
+                    (environment, deployment, session, generation, attempt),
+                )
+                operation = cursor.fetchone()
+                if operation is None:
+                    raise ProtectedGrantError("protected_inventory_operation_result_missing")
+                action, status, result, result_version, result_hash, encoding, digest = operation
+                if (action not in {"reserve", "cancel"} or status != "committed"
+                        or encoding != 1 or not isinstance(result, dict)
+                        or set(result) != {"reservation_id", "sku", "quantity", "status"}
+                        or not isinstance(result["reservation_id"], str)
+                        or re.fullmatch(r"[0-9a-f]{32}", result["reservation_id"]) is None
+                        or not isinstance(result["sku"], str)
+                        or not 1 <= len(result["sku"]) <= 128
+                        or type(result["quantity"]) is not int or result["quantity"] < 1
+                        or result["status"] != ("reserved" if action == "reserve" else "cancelled")
+                        or type(result_version) is not int or result_version < 1
+                        or not isinstance(result_hash, str)
+                        or re.fullmatch(r"[0-9a-f]{64}", result_hash) is None
+                        or operation_result_digest(result, result_version, result_hash, attempt, status)
+                        != digest):
+                    raise ProtectedGrantError("protected_inventory_operation_result_unverifiable")
+                cursor.execute(
+                    """SELECT state_version,state_hash FROM world_commit_receipts
+                       WHERE environment_id=%s AND deployment_id=%s AND session_id=%s
+                         AND world_generation_id=%s AND commit_attempt_id=%s""",
+                    (environment, deployment, session, generation, attempt),
+                )
+                if cursor.fetchone() != (result_version, result_hash):
+                    raise ProtectedGrantError("protected_inventory_operation_commit_receipt_mismatch")
+                cursor.execute("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
+                now = cursor.fetchone()[0]
+                if (token_deadline <= now or read_deadline <= now
+                        or snapshot.expires_at is not None and snapshot.expires_at <= now):
+                    raise ProtectedGrantError("protected_inventory_operation_source_expired")
+                cursor.execute(
+                    """SELECT session_epoch FROM session_heads WHERE environment_id=%s
+                       AND deployment_id=%s AND session_id=%s""",
+                    (environment, deployment, session),
+                )
+                if cursor.fetchone() != (epoch,):
+                    raise ProtectedGrantError("protected_inventory_operation_epoch_stale")
+                cursor.execute(
+                    """SELECT world_generation_id FROM session_world_bindings
+                       WHERE environment_id=%s AND deployment_id=%s AND session_id=%s
+                         AND session_epoch=%s""",
+                    (environment, deployment, session, epoch),
+                )
+                if cursor.fetchone() != (generation,):
+                    raise ProtectedGrantError("protected_inventory_operation_generation_mismatch")
+                cursor.execute(
+                    """SELECT sealed,emergency_revision FROM generation_controls
+                       WHERE world_generation_id=%s""", (generation,),
+                )
+                if cursor.fetchone() != (False, None):
+                    raise ProtectedGrantError("protected_inventory_operation_generation_revoked")
+                key_guard = PostgresTrustedKeyRevocations(
+                    self._dsn, environment_id=environment, deployment_id=deployment,
+                )
+                key_guard._lock(cursor, issuer, key_id)
+                if key_guard._select(cursor, issuer, key_id) is not None:
+                    raise ProtectedGrantError("protected_inventory_operation_key_revoked")
+        headers = (("content-type", "application/json"),)
+        body = json.dumps({
+            "commit_attempt_id": str(attempt), "state_version": result_version,
+            "state_hash": result_hash, "reservation": result,
+        }, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return ProtectedNativeProjection(
+            receipt_id=receipt_id, scope=scope, operation_id="getSyntheticOperation",
+            request_fingerprint=fingerprint, status_code=200, headers=headers,
+            body_bytes=body, envelope_hash=response_hashes(200, headers, body)[0],
+            source=SnapshotSource(read_admission_id=read_id, world_generation_id=generation,
+                                  state_version=version, state_hash=state_hash),
+        )
+
+    def project_inventory_snapshot(self, receipt_id: UUID) -> ProtectedNativeProjection:
+        """以獨立唯讀 Login 重建 I-04 Snapshot 的 200 或已證明缺 SKU 的 409。
+
+        只接受固定 GET SKU 與空 Body；真正缺少 SKU 時輸出固定業務 409，
+        但版本已移動、快照損壞、簽章過期或 Epoch／Generation／Key 改變，
+        一律直接拒絕，不能將安全故障包裝成業務 409。
         此函式沒有 Send 權，快照到實際傳輸的競態仍須由 G4/G5 關閉。
         """
         if not isinstance(receipt_id, UUID) or receipt_id.version != 4:
@@ -158,9 +318,13 @@ class PostgresProtectedNativeProjector(_ProtectedConnection):
                 except ValueError as exc:
                     raise ProtectedGrantError("protected_inventory_snapshot_invalid") from exc
                 stock = snapshot.state.get("inventory")
-                available = stock.get(sku) if isinstance(stock, dict) else None
                 if (snapshot.version != version or snapshot.state_hash != state_hash
-                        or type(available) is not int or available < 0):
+                        or not isinstance(stock, dict)
+                        or any(not isinstance(item, str) or type(quantity) is not int
+                               or quantity < 0 for item, quantity in stock.items())):
+                    raise ProtectedGrantError("protected_inventory_snapshot_not_projectable")
+                available = stock.get(sku)
+                if sku in stock and (type(available) is not int or available < 0):
                     raise ProtectedGrantError("protected_inventory_snapshot_not_projectable")
                 cursor.execute("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
                 now = cursor.fetchone()[0]
@@ -194,13 +358,18 @@ class PostgresProtectedNativeProjector(_ProtectedConnection):
                 key_guard._lock(cursor, issuer, key_id)
                 if key_guard._select(cursor, issuer, key_id) is not None:
                     raise ProtectedGrantError("protected_inventory_key_revoked")
-        headers = (("content-type", "application/json"),)
-        body = json.dumps({"sku": sku, "available": available, "state_version": version},
-                          ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        status = 200 if sku in stock else 409
+        if status == 200:
+            headers = (("content-type", "application/json"),)
+            body = json.dumps({"sku": sku, "available": available, "state_version": version},
+                              ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        else:
+            headers, body = fixed_synthetic_rejection_bytes(
+                "synthetic-inventory", "unknown_synthetic_sku")
         return ProtectedNativeProjection(
             receipt_id=receipt_id, scope=scope, operation_id="getSyntheticInventory",
-            request_fingerprint=fingerprint, status_code=200, headers=headers,
-            body_bytes=body, envelope_hash=response_hashes(200, headers, body)[0],
+            request_fingerprint=fingerprint, status_code=status, headers=headers,
+            body_bytes=body, envelope_hash=response_hashes(status, headers, body)[0],
             source=SnapshotSource(read_admission_id=read_id, world_generation_id=generation,
                                   state_version=version, state_hash=state_hash),
         )

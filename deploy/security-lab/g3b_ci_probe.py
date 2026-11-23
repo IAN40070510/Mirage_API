@@ -191,6 +191,63 @@ def _gateway() -> None:
             "validated_native_status": 200, "source": "protected_world_read_sources",
             "native_business_response": False,
         }, sort_keys=True))
+        for label, route, native_status, expected_operation in (
+                ("operation-200", "/synthetic/operations/" + json.loads(body)["commit_attempt_id"],
+                 200, "getSyntheticOperation"),
+                ("missing-sku-409", "/synthetic/inventory/missing-sku", 409,
+                 "getSyntheticInventory")):
+            request_id = "g3b-ci-" + label
+            original = gateway.build_request(
+                "GET", origin + route, headers={"x-request-id": request_id},
+            )
+            original.headers["x-trusted-session"] = _sign(
+                key, fingerprint=fingerprint_httpx_request(original, request_id),
+                session="session", mode="inventory",
+            )
+            result = gateway.send(original)
+            if result.status_code != 200:
+                raise RuntimeError("g3b_ci_inventory_additional_internal_rpc_unverifiable:" + label)
+            internal = result.json().get("executor_result", {})
+            projected = result.json().get("native_projection", {})
+            payload = base64.b64decode(projected.get("body_b64", ""), validate=True)
+            if (internal.get("operation") != expected_operation
+                    or projected.get("status_code") != native_status
+                    or projected.get("source", {}).get("read_admission_id")
+                    != internal.get("read_admission_id")
+                    or projected.get("scope", {}).get("world_generation_id")
+                    != internal.get("world_generation_id")
+                    or projected.get("envelope_hash") != response_hashes(
+                        native_status, read_headers, payload)[0]
+                    or projected.get("delivery") != "candidate_only_no_send_authorization"
+                    or gateway.send(original).status_code != 403):
+                raise RuntimeError("g3b_ci_inventory_additional_source_mismatch:" + label)
+            parsed = json.loads(payload)
+            if label == "operation-200":
+                if (parsed.get("commit_attempt_id") != json.loads(body)["commit_attempt_id"]
+                        or parsed.get("state_version") != 2
+                        or parsed.get("reservation", {}).get("status") != "reserved"
+                        or parsed.get("reservation", {}).get("sku") != "sku-1"):
+                    raise RuntimeError("g3b_ci_operation_result_native_payload_invalid")
+            elif parsed != {"code": "unknown_synthetic_sku"}:
+                raise RuntimeError("g3b_ci_inventory_absence_409_payload_invalid")
+            print("G3B_ROUTE_PROTECTED_INVENTORY_CANDIDATE " + json.dumps({
+                "operation_id": expected_operation, "http_status": result.status_code,
+                "validated_native_status": native_status, "source": "protected_world_read_sources",
+                "native_business_response": False,
+            }, sort_keys=True))
+        missing_attempt_id = "g3b-ci-no-commit"
+        missing_attempt = gateway.build_request(
+            "GET", origin + "/synthetic/operations/" + str(uuid4()),
+            headers={"x-request-id": missing_attempt_id},
+        )
+        missing_attempt.headers["x-trusted-session"] = _sign(
+            key, fingerprint=fingerprint_httpx_request(missing_attempt, missing_attempt_id),
+            session="session", mode="inventory",
+        )
+        unknown = gateway.send(missing_attempt)
+        if (unknown.status_code != 503 or unknown.json().get("detail")
+                != "direct_verifier_operation_projection_unverifiable"):
+            raise RuntimeError("g3b_ci_unbacked_operation_was_projected")
         # 真實四容器與兩組 mTLS CA：已拒絕的 Handler 結果只能由獨立 Validator
         # 還原 409 候選，外層控制面 200 不能冒稱 Client 已收到原生 409。
         rejection_body = json.dumps({
@@ -274,8 +331,10 @@ def _gateway() -> None:
         except socket.gaierror:
             continue
         raise RuntimeError("g3b_ci_gateway_network_leak:" + hostname)
-    print("G3B_GATEWAY_PASS unsigned_routes=20/20 inventory_commit=1 inventory_read_200=1 synthetic_409=1 medusa_400=1 "
-          "medusa_404=1 replay=denied anonymous=denied execution_network=unreachable trusted_send=off")
+    print("G3B_GATEWAY_PASS unsigned_routes=20/20 inventory_commit=1 inventory_read_200=1 "
+          "inventory_operation_200=1 inventory_absence_409=1 unknown_operation=503 "
+          "synthetic_409=1 medusa_400=1 medusa_404=1 replay=denied anonymous=denied "
+          "execution_network=unreachable trusted_send=off")
 
 
 def _docker_json(*args: str):

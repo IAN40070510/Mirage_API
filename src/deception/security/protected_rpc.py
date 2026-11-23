@@ -300,7 +300,7 @@ class FixedNativeValidatorMTLSClient:
         expected_read_admission_id: str, expected_world_generation_id: str,
         expected_state_version: int, expected_state_hash: str,
     ) -> dict[str, object]:
-        """只從唯讀 Validator 的固定 I-04 ReadAdmission 重建 200 候選。
+        """只從唯讀 Validator 的固定 I-04 ReadAdmission 重建 200／409 候選。
 
         Verifier 不傳回應碼、庫存數量、版本或 Body；獨立校驗契約、來源
         ReadAdmission、Scope、Envelope 和精確 JSON bytes，絕不允許直接 Send。
@@ -331,12 +331,22 @@ class FixedNativeValidatorMTLSClient:
                                      parse_constant=reject_constant)
             source = result["source"]
             scope = result["scope"]
-            if (not isinstance(parsed_body, dict)
-                    or set(parsed_body) != {"sku", "available", "state_version"}
-                    or parsed_body["sku"] != resource_id
-                    or type(parsed_body["available"]) is not int or parsed_body["available"] < 0
-                    or type(parsed_body["state_version"]) is not int
-                    or parsed_body["state_version"] < 1
+            status = result["status_code"]
+            valid_body = False
+            if type(status) is int and status == 200 and isinstance(parsed_body, dict):
+                valid_body = (set(parsed_body) == {"sku", "available", "state_version"}
+                              and parsed_body["sku"] == resource_id
+                              and type(parsed_body["available"]) is int
+                              and parsed_body["available"] >= 0
+                              and type(parsed_body["state_version"]) is int
+                              and parsed_body["state_version"] >= 1)
+            elif type(status) is int and status == 409:
+                from deception.world.protected_native_http import fixed_synthetic_rejection_bytes
+                _, expected_body = fixed_synthetic_rejection_bytes(
+                    "synthetic-inventory", "unknown_synthetic_sku")
+                valid_body = (parsed_body == {"code": "unknown_synthetic_sku"}
+                              and body == expected_body)
+            if (not valid_body
                     or not isinstance(source, dict) or set(source) != {
                         "kind", "read_admission_id", "world_generation_id",
                         "state_version", "state_hash"}
@@ -344,7 +354,8 @@ class FixedNativeValidatorMTLSClient:
                     or not isinstance(source["read_admission_id"], str)
                     or re.fullmatch(r"[0-9a-f]{32}", source["read_admission_id"]) is None
                     or source["read_admission_id"] != expected_read_admission_id
-                    or source["state_version"] != parsed_body["state_version"]
+                    or (status == 200
+                        and source["state_version"] != parsed_body["state_version"])
                     or source["state_version"] != expected_state_version
                     or not isinstance(source["state_hash"], str)
                     or re.fullmatch(r"[0-9a-f]{64}", source["state_hash"]) is None
@@ -363,20 +374,112 @@ class FixedNativeValidatorMTLSClient:
                     or result["receipt_id"] != str(receipt_id)
                     or result["operation_id"] != operation_id
                     or result["request_fingerprint"] != request_fingerprint
-                    or type(result["status_code"]) is not int or result["status_code"] != 200
+                    or type(result["status_code"]) is not int or status not in {200, 409}
                     or result["headers"] != [["content-type", "application/json"]]
                     or result["trusted_send"] != "disabled"
                     or result["envelope_hash"] != response_hashes(
-                        200, (("content-type", "application/json"),), body)[0]):
+                        status, (("content-type", "application/json"),), body)[0]):
                 raise ValueError("inventory_validator_binding_mismatch")
         except (ValueError, TypeError, KeyError, UnicodeError) as exc:
             raise ProtectedRpcConfigurationError("inventory_validator_binding_mismatch") from exc
         return {
+            "status_code": status, "headers": [["content-type", "application/json"]],
+            "body_b64": base64.b64encode(body).decode("ascii"),
+            "body_sha256": response_hashes(status, (("content-type", "application/json"),), body)[1],
+            "envelope_hash": result["envelope_hash"], "source": dict(source),
+            "scope": dict(scope), "delivery": "candidate_only_no_send_authorization",
+        }
+
+    async def project_inventory_operation(
+        self, *, receipt_id: UUID, operation_id: str, resource_id: str,
+        request_fingerprint: str, expected_environment_id: str,
+        expected_deployment_id: str, expected_session_id: str,
+        expected_read_admission_id: str, expected_world_generation_id: str,
+        expected_state_version: int, expected_state_hash: str,
+    ) -> dict[str, object]:
+        """以獨立 Validator 的 I-03 真 Commit/Read 證據取得固定成功候選。
+
+        Verifier 無權提供 Status、Body 或回應操作結果；歷史 Commit 的版本
+        可小於當前 ReadAdmission 的快照版本，不能偷換成當前版本。
+        """
+        from deception.world.transmission import response_hashes
+
+        if operation_id != "getSyntheticOperation" or not isinstance(resource_id, str):
+            raise ProtectedRpcConfigurationError("inventory_operation_validator_unapproved")
+        try:
+            attempt = UUID(resource_id)
+        except ValueError as exc:
+            raise ProtectedRpcConfigurationError("inventory_operation_validator_unapproved") from exc
+        if attempt.version != 4 or str(attempt) != resource_id:
+            raise ProtectedRpcConfigurationError("inventory_operation_validator_unapproved")
+        async with httpx.AsyncClient(verify=self._tls, trust_env=False, timeout=8.0) as client:
+            response = await client.post(
+                self._origin + "/internal/v1/project-inventory-operation",
+                json={"receipt_id": str(receipt_id)},
+            )
+        if response.status_code != 200:
+            raise ProtectedRpcConfigurationError("inventory_operation_projection_unverifiable")
+        try:
+            result = json.loads(response.content, object_pairs_hook=unique_object,
+                                parse_constant=reject_constant)
+            if not isinstance(result, dict) or set(result) != {
+                    "receipt_id", "operation_id", "scope", "request_fingerprint",
+                    "status_code", "headers", "body_b64", "envelope_hash", "source",
+                    "trusted_send"}:
+                raise ValueError("inventory_operation_shape_invalid")
+            body = _canonical_base64(result["body_b64"], max_bytes=4096)
+            parsed = json.loads(body, object_pairs_hook=unique_object,
+                                parse_constant=reject_constant)
+            source, scope = result["source"], result["scope"]
+            reservation = parsed.get("reservation") if isinstance(parsed, dict) else None
+            if (not isinstance(parsed, dict) or set(parsed) != {
+                    "commit_attempt_id", "state_version", "state_hash", "reservation"}
+                    or parsed["commit_attempt_id"] != resource_id
+                    or type(parsed["state_version"]) is not int
+                    or not 1 <= parsed["state_version"] <= expected_state_version
+                    or not isinstance(parsed["state_hash"], str)
+                    or re.fullmatch(r"[0-9a-f]{64}", parsed["state_hash"]) is None
+                    or not isinstance(reservation, dict)
+                    or set(reservation) != {"reservation_id", "sku", "quantity", "status"}
+                    or not isinstance(reservation["reservation_id"], str)
+                    or re.fullmatch(r"[0-9a-f]{32}", reservation["reservation_id"]) is None
+                    or not isinstance(reservation["sku"], str)
+                    or not 1 <= len(reservation["sku"]) <= 128
+                    or type(reservation["quantity"]) is not int or reservation["quantity"] < 1
+                    or reservation["status"] not in {"reserved", "cancelled"}
+                    or not isinstance(source, dict) or set(source) != {
+                        "kind", "read_admission_id", "world_generation_id",
+                        "state_version", "state_hash"}
+                    or source["kind"] != "snapshot"
+                    or source["read_admission_id"] != expected_read_admission_id
+                    or source["state_version"] != expected_state_version
+                    or source["state_hash"] != expected_state_hash
+                    or source["world_generation_id"] != expected_world_generation_id
+                    or not isinstance(scope, dict) or set(scope) != {
+                        "environment_id", "deployment_id", "session_id", "world_generation_id"}
+                    or (scope["environment_id"], scope["deployment_id"], scope["session_id"],
+                        scope["world_generation_id"]) != (
+                            expected_environment_id, expected_deployment_id, expected_session_id,
+                            expected_world_generation_id)
+                    or result["receipt_id"] != str(receipt_id)
+                    or result["operation_id"] != operation_id
+                    or result["request_fingerprint"] != request_fingerprint
+                    or type(result["status_code"]) is not int or result["status_code"] != 200
+                    or result["headers"] != [["content-type", "application/json"]]
+                    or result["trusted_send"] != "disabled"
+                    or body != json.dumps(parsed, ensure_ascii=False, sort_keys=True,
+                                          separators=(",", ":")).encode("utf-8")
+                    or result["envelope_hash"] != response_hashes(
+                        200, (("content-type", "application/json"),), body)[0]):
+                raise ValueError("inventory_operation_binding_mismatch")
+        except (ValueError, TypeError, KeyError, UnicodeError) as exc:
+            raise ProtectedRpcConfigurationError("inventory_operation_binding_mismatch") from exc
+        return {
             "status_code": 200, "headers": [["content-type", "application/json"]],
             "body_b64": base64.b64encode(body).decode("ascii"),
             "body_sha256": response_hashes(200, (("content-type", "application/json"),), body)[1],
-            "envelope_hash": result["envelope_hash"], "source": dict(source),
-            "scope": dict(scope), "delivery": "candidate_only_no_send_authorization",
+            "envelope_hash": result["envelope_hash"], "scope": dict(scope),
+            "source": dict(source), "delivery": "candidate_only_no_send_authorization",
         }
 
 
@@ -481,6 +584,7 @@ def create_native_validator_app(*, projector) -> FastAPI:
         return {"control_plane": "native-validator-candidate-only", "trusted_send": "disabled"}
 
     @app.post("/internal/v1/project-inventory-snapshot")
+    @app.post("/internal/v1/project-inventory-operation")
     @app.post("/internal/v1/project-synthetic-rejection")
     @app.post("/internal/v1/project-medusa-rejection")
     async def project(request: Request) -> dict[str, object]:
@@ -503,6 +607,8 @@ def create_native_validator_app(*, projector) -> FastAPI:
         try:
             if request.scope.get("path") == "/internal/v1/project-inventory-snapshot":
                 projected = projector.project_inventory_snapshot(UUID(str(call.receipt_id)))
+            elif request.scope.get("path") == "/internal/v1/project-inventory-operation":
+                projected = projector.project_inventory_operation(UUID(str(call.receipt_id)))
             elif request.scope.get("path") == "/internal/v1/project-synthetic-rejection":
                 projected = projector.project_synthetic_rejection(UUID(str(call.receipt_id)))
             else:
@@ -689,6 +795,27 @@ def create_direct_verifier_app(
             except Exception as exc:
                 raise HTTPException(status_code=503,
                                     detail="direct_verifier_inventory_projection_unverifiable") from exc
+        elif (isinstance(outcome, dict) and outcome.get("kind") == "inventory_read_admitted"
+              and operation.operation_id == "getSyntheticOperation"):
+            if native_validator_client is None:
+                raise HTTPException(status_code=503,
+                                    detail="direct_verifier_native_validator_not_wired")
+            try:
+                projection = await native_validator_client.project_inventory_operation(
+                    receipt_id=receipt_id, operation_id=operation.operation_id,
+                    resource_id=outcome["resource_id"],
+                    request_fingerprint=fingerprint_request(normalized),
+                    expected_environment_id=claims.environment_id,
+                    expected_deployment_id=claims.deployment_id,
+                    expected_session_id=claims.session_id,
+                    expected_read_admission_id=outcome["read_admission_id"],
+                    expected_world_generation_id=outcome["world_generation_id"],
+                    expected_state_version=outcome["state_version"],
+                    expected_state_hash=outcome["state_hash"],
+                )
+            except Exception as exc:
+                raise HTTPException(status_code=503,
+                                    detail="direct_verifier_operation_projection_unverifiable") from exc
         elif (isinstance(outcome, dict) and outcome.get("kind") == "world_mutation"
               and outcome.get("status") == "rejected"):
             if native_validator_client is None:

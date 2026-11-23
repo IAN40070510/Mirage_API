@@ -79,7 +79,14 @@ Snapshot 重建精確 `200 {sku,available,state_version}` 候選；Verifier 逐�
 Scope、Fingerprint、SnapshotSource、Body 與 Hash，**仍只回內部 200**。
 此外 Validator 的來源 ID／Generation／Version／State Hash 必須與先前已驗證的
 Executor ReadAdmission Metadata 完全一致；任何兩服務來源分歧固定 503。
-I-03 尚未產生可信查詢 Payload，I-04 未知 SKU 的業務 409 也尚無獨立來源。
+I-03 原先只有 ReadAdmission 而沒有可信查詢 Payload；I-04 未知 SKU 的
+業務 409 新增由獨立 WorldSnapshot 驗證「確實缺 SKU」的固定拒絕候選，
+仍待真 PG／四容器 CI，外層仍只回內部對帳 200。
+I-03 已增加另一條**待真 PG CI 的獨立候選**投影路徑：
+`project-inventory-operation` 只接受 Receipt，核對同世代 `committed` 的
+WorldOperation＋Commit Receipt＋ReadAdmission，重建固定 `200` 操作結果。
+目前仍缺正式客戶端 HTTP、未知操作的可信 409 與完整 G4/G5，
+不能因這項候選而把 I-03 當成正式完成。
 包含百分比編碼 SKU 的 URI 相容測試仍
 未解決；ReadAdmission 子切面已在固定 SHA `49fc6ed8` 的
 [真 PostgreSQL CI](https://github.com/IAN40070510/Mirage_API/actions/runs/45185402530)

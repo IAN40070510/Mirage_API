@@ -57,7 +57,7 @@ Runtime DML、實際 mTLS、可信 Inventory 一次 Commit、Medusa M-03 的
 | Medusa M-03 特定 400／404 的原生 JSON 從獨立 Rejection Source 重建 | 真 PG、唯讀 Validator 來源投影、第二 mTLS CA PASS | 實驗室子項 PASS；正式 Client HTTP 回應與全操作兼容 OPEN |
 | Medusa M-03 Validator→Verifier 完整候選 Status／Headers／Body 交接 | 固定 400／404 bytes／Scope 綁定及篡改拒絕；真四容器 CI [45211431898](https://github.com/IAN40070510/Mirage_API/actions/runs/45211431898) PASS | **候選交接隔離 PASS**；外層仍為內部 HTTP 200、正式 Client 400／404 OPEN |
 | Synthetic 固定 mutation Handler rejected→可信 409 來源→獨立 Validator | I-01／I-02、C-03～C-06、C-08 固定 409 候選能力；隔離四服務實測 I-01 `unknown_synthetic_sku` 409 來源、Body 與重播拒絕 PASS | **I-01 指定拒絕候選 PASS**；其餘 Handler 情境／CAS conflict／原生 HTTP 仍 OPEN |
-| Inventory I-04 GET ReadAdmission→唯讀 WorldSnapshot→獨立 Validator 200 | 獨立 Validator 按 Receipt 重建精確 JSON／Scope／Hash，與 Executor ReadAdmission ID／Generation／Version／State Hash 逐欄相符；真 PG [45211445525](https://github.com/IAN40070510/Mirage_API/actions/runs/45211445525) `121 passed`、mTLS `4 passed`、四容器 [45211431898](https://github.com/IAN40070510/Mirage_API/actions/runs/45211431898) PASS | **既有 SKU 200 候選隔離 PASS**；未知 SKU 409、客戶端原生 200 與 G4 Send OPEN |
+| Inventory I-04 GET ReadAdmission→唯讀 WorldSnapshot→獨立 Validator 200／409 | 獨立 Validator 按 Receipt 重建精確 JSON／Scope／Hash，與 Executor ReadAdmission ID／Generation／Version／State Hash 逐欄相符；既有 SKU 200 真 PG [45211445525](https://github.com/IAN40070510/Mirage_API/actions/runs/45211445525) `121 passed`；缺 SKU 固定 409 候選新增待真 CI | **既有 SKU 200 候選隔離 PASS**；新增缺 SKU 409 待 CI、客戶端原生 HTTP 與 G4 Send OPEN |
 | 正式獨立服務部署、Secret Mount／網路來源、無共享憑證可見性 | 一次性 Docker CI 真容器角色隔離 PASS | 隔離環境 PASS；staging／production 正式部署 OPEN |
 | 20 條正式原生 2xx／4xx Payload 與獨立來源／Validator | 20 條均未具全套證據 | OPEN |
 | G3b 整體解封並移交 G4 Sender | 前述兩項未完成 | **NO-GO** |
@@ -66,8 +66,8 @@ Runtime DML、實際 mTLS、可信 Inventory 一次 Commit、Medusa M-03 的
 | --- | --- | --- | --- | --- |
 | I-01 | POST `/synthetic/inventory/reservations` | 隔離 PASS | 受保護 reserve；單一 Receipt Commit；真 Handler `unknown_synthetic_sku` 409 候選四服務 PASS | OPEN：200、CAS conflict／其他 409、原生 HTTP |
 | I-02 | POST `/synthetic/inventory/reservations/{reservation_id}/cancel` | 隔離 PASS | 受保護 cancel；409 候選能力已有固定 Handler，個別情境未真容器逐條實測 | OPEN：200、CAS conflict／其他 409、原生 HTTP |
-| I-03 | GET `/synthetic/operations/{attempt}` | 隔離 PASS | 固定 UUID4／空 Body Proof → Executor 受保護 ReadAdmission；真 PG [45185402530](https://github.com/IAN40070510/Mirage_API/actions/runs/45185402530) PASS | OPEN：查詢結果、可信 200／409、獨立 Validator／外部 HTTP |
-| I-04 | GET `/synthetic/inventory/{sku}` | 隔離 PASS | 固定 SKU／空 Body Proof → Executor 受保護 ReadAdmission → 獨立 Validator 200 成功候選四服務 PASS，雙來源 ID／Version／Hash 比對 | OPEN：缺 SKU 409、URI 編碼、客戶端原生 200／409、G4 Send |
+| I-03 | GET `/synthetic/operations/{attempt}` | 隔離 PASS | 固定 UUID4／空 Body Proof → ReadAdmission；新增唯讀 Validator 按同 Receipt 核對 WorldOperation 的 Commit Result Digest、真 Commit Receipt、當前 Snapshot／Epoch／Key，再重建歷史操作 `200` JSON 候選，待真 PG CI | OPEN：獨立 200 候選尚待固定 SHA 真 CI、業務 409、客戶端原生 HTTP |
+| I-04 | GET `/synthetic/inventory/{sku}` | 隔離 PASS | 固定 SKU／空 Body Proof → Executor ReadAdmission → 獨立 Validator 200 成功候選四服務 PASS；缺 SKU 新增唯讀 Snapshot 409 固定拒絕候選，待真 PG CI | OPEN：缺 SKU 409 候選 CI、URI 編碼、客戶端原生 200／409、G4 Send |
 | C-01 | POST `/synthetic/carts` | 隔離 PASS | 受保護 Creator→衍生 Cart | OPEN：200／409、原始成功封套 |
 | C-02 | GET `/synthetic/carts/{cart_id}` | 隔離 PASS | 受保護讀取 Admission | OPEN：完整 cart JSON／錯誤 |
 | C-03 | POST `/synthetic/carts/{cart_id}/line-items` | 隔離 PASS | 受保護 add；409 候選固定 Handler 存在，個別情境尚待真容器測試 | OPEN：200、其餘 409、原生 HTTP |
@@ -104,6 +104,15 @@ Runtime DML、實際 mTLS、可信 Inventory 一次 Commit、Medusa M-03 的
 
 G3b 整體狀態 `OPEN`。`MIR-SEC-WORLD-001=OPEN`、`MSDSS P2=NO-GO`；
 正式 Trusted Send `OFF`，不合併 main、不部署 staging 或 production。
+
+**I-03 增量（待真 PG／四服務 CI）**：新增 `/internal/v1/project-inventory-operation`
+只接受 UUIDv4 Receipt，不提供 Handler／狀態／回應碼選擇。獨立只讀 Validator
+驗證原始 `GET /synthetic/operations/{attempt}` Proof、ReadAdmission、完整 Scope、
+WorldSnapshot、一致的 `committed` WorldOperation 及 Commit Receipt、原始 Result Digest、
+Session Epoch／Generation／Key／到期時間，從真實結果重建固定 `200` JSON。
+Verifier 再以 Executor ReadAdmission 元資料、已驗簽 Session、精確 Body／Hash、
+UUID 與範本比對。未知／rejected／不確定操作不偽造 `409`；外層仍為內部對帳
+`200`，沒有 Authorized Send 權，G3b 整體仍 OPEN。
 
 **I-03／I-04 ReadAdmission 增量（固定 SHA `49fc6ed8`，真 PG `114 passed`、mTLS `4 passed`）**：
 `decode_verified_inventory_read()` 要求 Executor 自行查回 Verifier 寫入的

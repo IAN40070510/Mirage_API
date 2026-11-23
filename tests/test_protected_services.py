@@ -342,6 +342,8 @@ def test_g3b_native_validator_only_accepts_https_receipt_uuid4():
                              json={"receipt_id": receipt}).status_code == 503
         assert insecure.post("/internal/v1/project-synthetic-rejection",
                              json={"receipt_id": receipt}).status_code == 503
+        assert insecure.post("/internal/v1/project-inventory-operation",
+                             json={"receipt_id": receipt}).status_code == 503
     with TestClient(app, base_url="https://validator.test") as secure:
         assert secure.post("/internal/v1/project-medusa-rejection",
                            json={"receipt_id": receipt, "status_code": 200}).status_code == 400
@@ -361,6 +363,10 @@ def test_g3b_native_validator_only_accepts_https_receipt_uuid4():
         assert secure.post("/internal/v1/project-inventory-snapshot",
                            json={"receipt_id": receipt, "sku": "caller-selected"}).status_code == 400
         assert secure.post("/internal/v1/project-inventory-snapshot",
+                           json={"receipt_id": receipt}).status_code == 503
+        assert secure.post("/internal/v1/project-inventory-operation",
+                           json={"receipt_id": receipt, "status_code": 200}).status_code == 400
+        assert secure.post("/internal/v1/project-inventory-operation",
                            json={"receipt_id": receipt}).status_code == 503
 
 
@@ -463,6 +469,105 @@ def test_g3b_inventory_200_validator_handoff_rejects_modified_world_bytes(monkey
         projected.update(deepcopy(baseline))
         with pytest.raises(ProtectedRpcConfigurationError, match="inventory_validator_binding_mismatch"):
             asyncio.run(client.project_inventory_snapshot(**{**kwargs, **mismatch}))
+    # 409 必須由同一 Snapshot 的「缺 SKU」形成固定 JSON，不能自選任意錯誤。
+    denial_body = b'{"code":"unknown_synthetic_sku"}'
+    denial = deepcopy(baseline)
+    denial.update(status_code=409, body_b64=base64.b64encode(denial_body).decode("ascii"),
+                  envelope_hash=response_hashes(409, headers, denial_body)[0])
+    projected.clear()
+    projected.update(deepcopy(denial))
+    accepted_denial = asyncio.run(client.project_inventory_snapshot(**kwargs))
+    assert accepted_denial["status_code"] == 409
+    assert accepted_denial["delivery"] == "candidate_only_no_send_authorization"
+    assert base64.b64decode(accepted_denial["body_b64"], validate=True) == denial_body
+    for bad_body in (b'{"code":"version_conflict"}',
+                     b'{"code":"unknown_synthetic_sku","extra":true}'):
+        projected.clear()
+        projected.update(deepcopy(denial))
+        projected["body_b64"] = base64.b64encode(bad_body).decode("ascii")
+        projected["envelope_hash"] = response_hashes(409, headers, bad_body)[0]
+        with pytest.raises(ProtectedRpcConfigurationError, match="inventory_validator_binding_mismatch"):
+            asyncio.run(client.project_inventory_snapshot(**kwargs))
+
+
+def test_g3b_inventory_operation_200_validator_rejects_forged_history(monkeypatch):
+    """I-03 原生操作結果須具獨立的 Receipt／Commit／Read 證據，不能改寫歷史 Body。"""
+    from deception.security import protected_rpc
+
+    receipt, attempt = uuid4(), uuid4()
+    reservation = {"reservation_id": uuid4().hex, "sku": "sku-1",
+                   "quantity": 2, "status": "reserved"}
+    payload = {"commit_attempt_id": str(attempt), "state_version": 2,
+               "state_hash": "c" * 64, "reservation": reservation}
+    body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    envelope, body_hash, _ = response_hashes(200, (("content-type", "application/json"),), body)
+    baseline = {
+        "receipt_id": str(receipt), "operation_id": "getSyntheticOperation",
+        "scope": {"environment_id": "env", "deployment_id": "deploy",
+                  "session_id": "session", "world_generation_id": "world"},
+        "request_fingerprint": "a" * 64, "status_code": 200,
+        "headers": [["content-type", "application/json"]],
+        "body_b64": base64.b64encode(body).decode("ascii"),
+        "envelope_hash": envelope,
+        "source": {"kind": "snapshot", "read_admission_id": uuid4().hex,
+                   "world_generation_id": "world", "state_version": 3,
+                   "state_hash": "b" * 64}, "trusted_send": "disabled",
+    }
+    projected = deepcopy(baseline)
+
+    class MockValidator:
+        """替換 mTLS 傳輸結果，保留生產的獨立候選解析與逐欄驗證。"""
+
+        def __init__(self, **kwargs):
+            """禁止使用環境 Proxy 取代專屬 mTLS。"""
+            assert kwargs["trust_env"] is False
+
+        async def __aenter__(self):
+            """開啟受控的 HTTPX 測試 context。"""
+            return self
+
+        async def __aexit__(self, *_):
+            """離開測試 context。"""
+            return False
+
+        async def post(self, url, *, json):
+            """驗證 RPC 僅傳 Receipt，絕不從 Verifier 帶入 Body／Status。"""
+            assert url == "https://validator.invalid:8445/internal/v1/project-inventory-operation"
+            assert json == {"receipt_id": str(receipt)}
+            return httpx.Response(200, json=projected)
+
+    monkeypatch.setattr(protected_rpc.httpx, "AsyncClient", MockValidator)
+    client = object.__new__(FixedNativeValidatorMTLSClient)
+    client._origin, client._tls = "https://validator.invalid:8445", object()
+    kwargs = dict(receipt_id=receipt, operation_id="getSyntheticOperation",
+                  resource_id=str(attempt), request_fingerprint="a" * 64,
+                  expected_environment_id="env", expected_deployment_id="deploy",
+                  expected_session_id="session",
+                  expected_read_admission_id=baseline["source"]["read_admission_id"],
+                  expected_world_generation_id="world", expected_state_version=3,
+                  expected_state_hash="b" * 64)
+    accepted = asyncio.run(client.project_inventory_operation(**kwargs))
+    assert accepted["body_sha256"] == body_hash
+    assert accepted["delivery"] == "candidate_only_no_send_authorization"
+    for change in (
+            {"receipt_id": str(uuid4())}, {"operation_id": "getSyntheticInventory"},
+            {"status_code": 409}, {"headers": [["x-extra", "value"]]},
+            {"trusted_send": "enabled"}, {"envelope_hash": "0" * 64},
+            {"body_b64": base64.b64encode(body + b" ").decode("ascii")},
+            {"body_b64": base64.b64encode(json.dumps({**payload,
+                "reservation": {**reservation, "quantity": True}}, sort_keys=True,
+                separators=(",", ":")).encode()).decode()},
+            {"source": {**baseline["source"], "read_admission_id": uuid4().hex}},
+            {"scope": {**baseline["scope"], "session_id": "another"}},
+            {"unexpected": "untrusted"},
+    ):
+        projected.clear()
+        projected.update(deepcopy(baseline))
+        projected.update(change)
+        with pytest.raises(ProtectedRpcConfigurationError, match="inventory_operation_binding_mismatch"):
+            asyncio.run(client.project_inventory_operation(**kwargs))
+    with pytest.raises(ProtectedRpcConfigurationError, match="operation_validator_unapproved"):
+        asyncio.run(client.project_inventory_operation(**{**kwargs, "resource_id": "not-uuid4"}))
 
 
 @pytest.mark.parametrize("platform,operation,code", [
