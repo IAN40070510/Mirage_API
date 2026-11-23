@@ -168,6 +168,9 @@ StartSend、不建立 Lease、不輸出 HTTP Payload**。既有
 `PostgresProtectedSender.start_send()` 增加必填 UUIDv4 Receipt，對照
 Authorized Snapshot／Grant Binding 的同一 Receipt，阻止只有 Admission ID 的
 交叉起送；`ProtectedLeaseTransmission` 在 ASGI 起送前也核對 Lease 的 Receipt。
+傳輸物件在**呼叫 StartSend 之前**即標記「已嘗試」，即使 PostgreSQL COMMIT ACK
+遺失、來源拒絕或 Lease 回傳錯配，也不可在同一物件再次起送；需要獨立對帳，
+不允許把網路故障當成安全的自動重試。
 獨立部署候選 `deploy/security-lab/g4-sender-sealed-compose.yaml` 只掛
 `g4_sender_delivery`、`g3b_database` 兩個外部網路，沒有公開 Host Port、沒有
 G3b Gateway／Executor 網路，使用獨立非 root UID 及四個專用 Secret；絕不改動

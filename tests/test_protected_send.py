@@ -123,11 +123,14 @@ def test_asgi_emits_nothing_without_valid_sender_lease(candidate_and_gate):
             """控制本次測試提供相符或故意錯誤的已授權封套。"""
             self.corrupt = False
             self.wrong_receipt = False
+            self.transport_failure = False
 
         def start_send(self, *, admission_id, receipt_id, owner, request_fingerprint,
                        expected_envelope):
             """只有精確封套存在才發放一次性測試 Lease，起送呼叫留下順序證據。"""
             events.append("lease")
+            if self.transport_failure:
+                raise ConnectionError("simulated COMMIT ACK loss")
             return ProtectedSendLease(
                 lease_id=uuid4(), admission_id=admission_id, send_owner=owner,
                 receipt_id=uuid4() if self.wrong_receipt else receipt_id,
@@ -187,6 +190,9 @@ def test_asgi_emits_nothing_without_valid_sender_lease(candidate_and_gate):
     with pytest.raises(TransmissionError, match="lease_refused"):
         asyncio.run(response2(scope, receive, send))
     assert events == ["lease"]
+    with pytest.raises(TransmissionError, match="not_prepared_or_reused"):
+        response2._transmission.start()
+    assert events == ["lease"]
     response3 = ResponseRenderer(gate, transmission_factory=factory).render(
         pipeline_result(candidate, gate, request), request,
     )
@@ -195,4 +201,15 @@ def test_asgi_emits_nothing_without_valid_sender_lease(candidate_and_gate):
     events.clear()
     with pytest.raises(TransmissionError, match="lease_refused"):
         asyncio.run(response3(scope, receive, send))
+    assert events == ["lease"]
+    response4 = ResponseRenderer(gate, transmission_factory=factory).render(
+        pipeline_result(candidate, gate, request), request,
+    )
+    sender.wrong_receipt = False
+    sender.transport_failure = True
+    events.clear()
+    with pytest.raises(ConnectionError, match="COMMIT ACK loss"):
+        asyncio.run(response4(scope, receive, send))
+    with pytest.raises(TransmissionError, match="not_prepared_or_reused"):
+        response4._transmission.start()
     assert events == ["lease"]

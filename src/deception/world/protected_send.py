@@ -176,12 +176,14 @@ class ProtectedLeaseTransmission:
     _expected_envelope: bytes | None = field(default=None, init=False)
     _fingerprint: str | None = field(default=None, init=False)
     _lease: ProtectedSendLease | None = field(default=None, init=False)
+    _start_attempted: bool = field(default=False, init=False)
 
     def prepare(self, candidate, request) -> None:
         """ASGI 起送前比對原始 Request 與精確 Payload，之後不可再改 Candidate。"""
         if not isinstance(self.receipt_id, UUID) or self.receipt_id.version != 4:
             raise TransmissionError("protected_send_receipt_invalid")
-        if self._expected_envelope is not None or self._lease is not None:
+        if (self._expected_envelope is not None or self._lease is not None
+                or self._start_attempted):
             raise TransmissionError("protected_send_already_prepared")
         fingerprint = fingerprint_request(request)
         expected = response_hashes(candidate.status_code, candidate.headers, candidate.body_bytes)
@@ -196,8 +198,12 @@ class ProtectedLeaseTransmission:
 
     def start(self) -> None:
         """首個 ASGI 訊息前單次提交 DB Lease，且只放行 Pin 確認的相同 bytes。"""
-        if self._expected_envelope is None or self._fingerprint is None or self._lease is not None:
+        if (self._expected_envelope is None or self._fingerprint is None
+                or self._lease is not None or self._start_attempted):
             raise TransmissionError("protected_send_not_prepared_or_reused")
+        # PG COMMIT ACK 遺失時不能知道 Lease 是否已被消費；在呼叫 DB 前即毒化
+        # 此 Transmission 實例，連 NULL/503/網路失敗均不得再次送 StartSend。
+        self._start_attempted = True
         lease = self.sender.start_send(
             admission_id=self.admission.admission_id, receipt_id=self.receipt_id,
             owner=self.owner,
