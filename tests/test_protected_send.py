@@ -40,9 +40,10 @@ def test_single_send_lease_claims_exact_snapshot_and_never_rearms(isolated_test_
 
     admission, owner, envelope, seeded = _authorized_pin(isolated_test_dsn)
     sender = PostgresProtectedSender(isolated_test_dsn, expected_login=_login(isolated_test_dsn))
-    args = dict(admission_id=admission.admission_id, owner=owner,
+    args = dict(admission_id=admission.admission_id, receipt_id=seeded[3], owner=owner,
                 request_fingerprint=admission.request_binding_digest, expected_envelope=envelope)
     assert sender.start_send(**{**args, "owner": "not-owner"}) is None
+    assert sender.start_send(**{**args, "receipt_id": uuid4()}) is None
     assert sender.start_send(**{**args, "request_fingerprint": "b" * 64}) is None
     assert sender.start_send(**{**args, "expected_envelope": envelope + b"evil"}) is None
     with psycopg.connect(isolated_test_dsn) as connection:
@@ -75,7 +76,7 @@ def test_send_lease_insert_error_rolls_back_send_started(isolated_test_dsn):
     """單次 Lease 寫入失敗時，SEND_STARTED 和 send_started audit 均不可留下。"""
     import psycopg
 
-    admission, owner, envelope, _ = _authorized_pin(isolated_test_dsn)
+    admission, owner, envelope, seeded = _authorized_pin(isolated_test_dsn)
     sender = PostgresProtectedSender(isolated_test_dsn, expected_login=_login(isolated_test_dsn))
     with psycopg.connect(isolated_test_dsn) as connection:
         connection.execute(
@@ -83,7 +84,8 @@ def test_send_lease_insert_error_rolls_back_send_started(isolated_test_dsn):
                FOR EACH ROW EXECUTE FUNCTION reject_protected_mutation()""",
         )
     with pytest.raises(psycopg.errors.InsufficientPrivilege):
-        sender.start_send(admission_id=admission.admission_id, owner=owner,
+        sender.start_send(admission_id=admission.admission_id, receipt_id=seeded[3],
+                          owner=owner,
                           request_fingerprint=admission.request_binding_digest,
                           expected_envelope=envelope)
     with psycopg.connect(isolated_test_dsn) as connection:
@@ -97,9 +99,9 @@ def test_concurrent_send_starts_only_one_lease(isolated_test_dsn):
     """兩個獨立 PostgreSQL 連線同時起送時，Row Lock＋唯一鍵只核准一方。"""
     import psycopg
 
-    admission, owner, envelope, _ = _authorized_pin(isolated_test_dsn)
+    admission, owner, envelope, seeded = _authorized_pin(isolated_test_dsn)
     sender = PostgresProtectedSender(isolated_test_dsn, expected_login=_login(isolated_test_dsn))
-    args = dict(admission_id=admission.admission_id, owner=owner,
+    args = dict(admission_id=admission.admission_id, receipt_id=seeded[3], owner=owner,
                 request_fingerprint=admission.request_binding_digest, expected_envelope=envelope)
     with ThreadPoolExecutor(max_workers=2) as pool:
         outcomes = list(pool.map(lambda _: sender.start_send(**args), range(2)))
@@ -120,13 +122,16 @@ def test_asgi_emits_nothing_without_valid_sender_lease(candidate_and_gate):
         def __init__(self):
             """控制本次測試提供相符或故意錯誤的已授權封套。"""
             self.corrupt = False
+            self.wrong_receipt = False
 
-        def start_send(self, *, admission_id, owner, request_fingerprint, expected_envelope):
+        def start_send(self, *, admission_id, receipt_id, owner, request_fingerprint,
+                       expected_envelope):
             """只有精確封套存在才發放一次性測試 Lease，起送呼叫留下順序證據。"""
             events.append("lease")
             return ProtectedSendLease(
                 lease_id=uuid4(), admission_id=admission_id, send_owner=owner,
-                receipt_id=uuid4(), request_fingerprint=request_fingerprint,
+                receipt_id=uuid4() if self.wrong_receipt else receipt_id,
+                request_fingerprint=request_fingerprint,
                 candidate_hash=admission.candidate_hash,
                 envelope_bytes=(expected_envelope + b"attacker" if self.corrupt else expected_envelope),
                 transmission_deadline=admission.transmission_deadline,
@@ -138,6 +143,7 @@ def test_asgi_emits_nothing_without_valid_sender_lease(candidate_and_gate):
             return AdmissionOperationResult.SUCCESS
 
     sender = RecordingSender()
+    receipt = uuid4()
 
     def factory(final, normalized):
         """以最終 Candidate 精確 bytes 建立要求原始 Request Fingerprint 的測試 Lease。"""
@@ -148,7 +154,8 @@ def test_asgi_emits_nothing_without_valid_sender_lease(candidate_and_gate):
                                     candidate_hash=hashes[0], immutable_body_hash=hashes[1],
                                     semantic_headers_hash=hashes[2],
                                     transmission_deadline=int(time.time()) + 30)
-        return ProtectedLeaseTransmission(sender=sender, admission=admission, owner="sender-1")
+        return ProtectedLeaseTransmission(sender=sender, admission=admission,
+                                          receipt_id=receipt, owner="sender-1")
 
     admission = None
     response = ResponseRenderer(gate, transmission_factory=factory).render(
@@ -179,4 +186,13 @@ def test_asgi_emits_nothing_without_valid_sender_lease(candidate_and_gate):
     events.clear()
     with pytest.raises(TransmissionError, match="lease_refused"):
         asyncio.run(response2(scope, receive, send))
+    assert events == ["lease"]
+    response3 = ResponseRenderer(gate, transmission_factory=factory).render(
+        pipeline_result(candidate, gate, request), request,
+    )
+    sender.corrupt = False
+    sender.wrong_receipt = True
+    events.clear()
+    with pytest.raises(TransmissionError, match="lease_refused"):
+        asyncio.run(response3(scope, receive, send))
     assert events == ["lease"]

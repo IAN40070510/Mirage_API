@@ -34,7 +34,7 @@ class PostgresProtectedSender(_ProtectedConnection):
     """由獨立實體 Sender Login 消費已 Authorize 的 Snapshot，不重新判定政策。"""
 
     def start_send(
-        self, *, admission_id: str, owner: str, request_fingerprint: str,
+        self, *, admission_id: str, receipt_id: UUID, owner: str, request_fingerprint: str,
         expected_envelope: bytes,
     ) -> ProtectedSendLease | None:
         """鎖定 Admission、比對不可變 Pin、原子寫入一次性 Lease 與 SEND_STARTED。
@@ -47,6 +47,7 @@ class PostgresProtectedSender(_ProtectedConnection):
         未對外啟用的 primitive，絕不可讓 Runtime 憑此直接發送。
         """
         if (not isinstance(admission_id, str) or not admission_id or len(admission_id) > 128
+                or not isinstance(receipt_id, UUID) or receipt_id.version != 4
                 or not isinstance(owner, str) or not 1 <= len(owner) <= 128
                 or not isinstance(request_fingerprint, str) or len(request_fingerprint) != 64
                 or not isinstance(expected_envelope, bytes)):
@@ -67,13 +68,15 @@ class PostgresProtectedSender(_ProtectedConnection):
                          ON s.admission_id=a.admission_id
                        JOIN protected_grant_bindings b
                          ON b.admission_id=a.admission_id AND b.receipt_id=s.receipt_id
-                       WHERE a.admission_id=%s FOR UPDATE OF a""",
-                    (admission_id,),
+                       WHERE a.admission_id=%s AND s.receipt_id=%s
+                         AND b.receipt_id=%s FOR UPDATE OF a""",
+                    (admission_id, receipt_id, receipt_id),
                 )
                 row = cursor.fetchone()
                 if (row is None or row[0] != AdmissionState.SEND_AUTHORIZED.value
                         or row[1] != owner or row[8] != owner
-                        or row[2] != row[9] or row[5] != request_fingerprint):
+                        or row[2] != row[9] or row[4] != receipt_id
+                        or row[5] != request_fingerprint):
                     return None
                 pinned = bytes(row[7])
                 admission = ResponseAdmission.model_validate(row[3])
@@ -167,6 +170,7 @@ class ProtectedLeaseTransmission:
 
     sender: PostgresProtectedSender
     admission: ResponseAdmission
+    receipt_id: UUID
     owner: str
     clock: Callable[[], int] = current_time
     _expected_envelope: bytes | None = field(default=None, init=False)
@@ -175,6 +179,8 @@ class ProtectedLeaseTransmission:
 
     def prepare(self, candidate, request) -> None:
         """ASGI 起送前比對原始 Request 與精確 Payload，之後不可再改 Candidate。"""
+        if not isinstance(self.receipt_id, UUID) or self.receipt_id.version != 4:
+            raise TransmissionError("protected_send_receipt_invalid")
         if self._expected_envelope is not None or self._lease is not None:
             raise TransmissionError("protected_send_already_prepared")
         fingerprint = fingerprint_request(request)
@@ -193,11 +199,13 @@ class ProtectedLeaseTransmission:
         if self._expected_envelope is None or self._fingerprint is None or self._lease is not None:
             raise TransmissionError("protected_send_not_prepared_or_reused")
         lease = self.sender.start_send(
-            admission_id=self.admission.admission_id, owner=self.owner,
+            admission_id=self.admission.admission_id, receipt_id=self.receipt_id,
+            owner=self.owner,
             request_fingerprint=self._fingerprint,
             expected_envelope=self._expected_envelope,
         )
         if (lease is None or lease.admission_id != self.admission.admission_id
+                or lease.receipt_id != self.receipt_id
                 or lease.send_owner != self.owner
                 or lease.request_fingerprint != self._fingerprint
                 or lease.candidate_hash != self.admission.candidate_hash

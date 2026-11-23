@@ -12,8 +12,9 @@ import pytest
 
 from deception.security.protected_rpc import (
     ProtectedRpcConfigurationError, create_direct_verifier_app, create_fixed_executor_app,
-    create_sealed_app, require_mtls_files, serve_direct_verifier_mtls,
-    serve_fixed_executor_mtls, serve_sealed_mtls,
+    create_fixed_sender_app, create_sealed_app, require_mtls_files,
+    serve_direct_verifier_mtls, serve_fixed_executor_mtls, serve_fixed_sender_mtls,
+    serve_sealed_mtls,
 )
 
 
@@ -97,6 +98,61 @@ def test_protected_rpc_real_mtls_rejects_missing_client_identity(tmp_path):
         with httpx.Client(verify=anonymous_context, trust_env=False, timeout=2.0) as anonymous:
             with pytest.raises(httpx.TransportError):
                 anonymous.get(f"https://127.0.0.1:{port}/internal/ready")
+    finally:
+        worker.terminate()
+        worker.join(timeout=5)
+        if worker.is_alive():
+            worker.kill()
+            worker.join(timeout=5)
+
+
+def test_g4_sender_real_mtls_is_credential_isolated_and_never_starts_send(tmp_path):
+    """真 TLS Client Auth 拒絕無證書連線；即使持證亦固定 503 且無起送動作。"""
+    from deception.world.protected_send import PostgresProtectedSender
+
+    ca, server_cert, server_key, client_cert, client_key = _issue_mtls_certificates(tmp_path)
+    app = create_fixed_sender_app(sender=PostgresProtectedSender(
+        "postgresql://unused.invalid/g4", expected_login="sender_only"))
+    port = _unused_local_port()
+    worker = multiprocessing.Process(target=serve_fixed_sender_mtls, kwargs={
+        "app": app, "host": "127.0.0.1", "port": port,
+        "server_cert": server_cert, "server_key": server_key,
+        "sender_client_ca": ca,
+    })
+    worker.start()
+    try:
+        context = ssl.create_default_context(cafile=str(ca))
+        context.load_cert_chain(str(client_cert), str(client_key))
+        with httpx.Client(verify=context, trust_env=False, timeout=2.0) as trusted:
+            for _ in range(50):
+                try:
+                    result = trusted.get(f"https://127.0.0.1:{port}/internal/ready")
+                    break
+                except httpx.ConnectError:
+                    if not worker.is_alive():
+                        pytest.fail("Sender mTLS server terminated during startup")
+                    time.sleep(0.1)
+            else:
+                pytest.fail("Sender mTLS listener failed to start")
+            assert result.json() == {
+                "control_plane": "sender-sealed-until-restore-fence", "trusted_send": "disabled"}
+            for json_body in ({}, {"lease_id": "forged", "send": True}):
+                result = trusted.post(f"https://127.0.0.1:{port}/internal/v1/send",
+                                      json=json_body)
+                assert result.status_code == 503
+                assert result.json() == {"detail": "fixed_sender_restore_fence_required"}
+        anonymous_context = ssl.create_default_context(cafile=str(ca))
+        with httpx.Client(verify=anonymous_context, trust_env=False, timeout=2.0) as anonymous:
+            with pytest.raises(httpx.TransportError):
+                anonymous.post(f"https://127.0.0.1:{port}/internal/v1/send", json={})
+        unrelated_dir = tmp_path / "unrelated-ca"
+        unrelated_dir.mkdir()
+        _, _, _, unrelated_cert, unrelated_key = _issue_mtls_certificates(unrelated_dir)
+        wrong_identity = ssl.create_default_context(cafile=str(ca))
+        wrong_identity.load_cert_chain(str(unrelated_cert), str(unrelated_key))
+        with httpx.Client(verify=wrong_identity, trust_env=False, timeout=2.0) as stranger:
+            with pytest.raises(httpx.TransportError):
+                stranger.post(f"https://127.0.0.1:{port}/internal/v1/send", json={})
     finally:
         worker.terminate()
         worker.join(timeout=5)

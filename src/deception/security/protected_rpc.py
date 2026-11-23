@@ -524,6 +524,32 @@ def create_native_validator_app(*, projector) -> FastAPI:
     return app
 
 
+def create_fixed_sender_app(*, sender) -> FastAPI:
+    """建立獨立 Sender 的封閉 mTLS API；G5 Fence 前絕不觸發一次性 Lease。
+
+    即使已經配置專用資料庫 Login，HTTP Caller 也不能提供 Admission、Receipt、
+    Snapshot 或啟用旗標來要求 StartSend。此 API 僅供 G4 服務隔離驗收。
+    """
+    from deception.world.protected_send import PostgresProtectedSender
+
+    if not isinstance(sender, PostgresProtectedSender):
+        raise ProtectedRpcConfigurationError("fixed_sender_requires_protected_sender")
+    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+
+    @app.get("/internal/ready")
+    async def ready() -> dict[str, str]:
+        """只回報 Sender mTLS 服務存活，不聲稱可起送或完成 G5。"""
+        return {"control_plane": "sender-sealed-until-restore-fence",
+                "trusted_send": "disabled"}
+
+    @app.post("/internal/v1/send")
+    async def send() -> None:
+        """任何起送或偽造 Payload 嘗試都固定封閉，且不呼叫 Sender。"""
+        raise HTTPException(status_code=503, detail="fixed_sender_restore_fence_required")
+
+    return app
+
+
 def create_direct_verifier_app(
     *, verifier, postgres_dsn: str, environment_id: str, deployment_id: str,
     expected_issuer: str, expected_audience: str,
@@ -822,6 +848,29 @@ def serve_native_validator_mtls(
     )
     if config.ssl_cert_reqs is not ssl.CERT_REQUIRED:
         raise ProtectedRpcConfigurationError("native_validator_mtls_not_required")
+    uvicorn.Server(config).run()
+
+
+def serve_fixed_sender_mtls(
+    *, app: FastAPI, host: str, port: int, server_cert: Path,
+    server_key: Path, sender_client_ca: Path,
+) -> None:
+    """用獨立 Sender Server 身分與專用 Caller CA 啟動封閉起送服務。"""
+    if not isinstance(app, FastAPI):
+        raise ProtectedRpcConfigurationError("fixed_sender_app_required")
+    require_mtls_files(server_cert=server_cert, server_key=server_key,
+                       client_ca=sender_client_ca)
+    if not isinstance(host, str) or not host or type(port) is not int or not 1 <= port <= 65535:
+        raise ProtectedRpcConfigurationError("fixed_sender_bind_invalid")
+    config = uvicorn.Config(
+        app, host=host, port=port,
+        ssl_certfile=str(server_cert), ssl_keyfile=str(server_key),
+        ssl_ca_certs=str(sender_client_ca), ssl_cert_reqs=ssl.CERT_REQUIRED,
+        ssl_version=ssl.PROTOCOL_TLS_SERVER, http="h11", log_level="warning",
+        proxy_headers=False, access_log=False,
+    )
+    if config.ssl_cert_reqs is not ssl.CERT_REQUIRED:
+        raise ProtectedRpcConfigurationError("fixed_sender_mtls_not_required")
     uvicorn.Server(config).run()
 
 

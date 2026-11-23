@@ -21,8 +21,9 @@ Verifier 只從實際 HTTPS ASGI 的 URL、Method、Headers、Body 與 JWS／Rec
 給 Runtime。Verifier 與 Executor 的 mTLS Client CA 不同於 Gateway CA；只有
 受保護的網路可到達這些內部入口。
 
-**本階段已接獨立原生候選 Validator mTLS，尚未建立可信的客戶端原生 HTTP 回應，
-更未啟用 G4 Sender。** Verifier 的 200 JSON 是控制面對帳資料，不得當作
+**本階段已接獨立原生候選 Validator mTLS，尚未建立可信的客戶端原生 HTTP 回應；
+G4 Sender 只新增封閉的 mTLS 啟動骨架，未啟用任何 Send Lease HTTP 操作。**
+Verifier 的 200 JSON 是控制面對帳資料，不得當作
 Inventory／Cart／Medusa 的最終 HTTP 200。`GET /internal/ready` 只證明服務
 存活；所有原生 2xx／4xx 仍須獨立來源、封套與規格驗證。舊
 `trusted_http.from_environment()` 的 Release Fuse 仍硬拒絕啟動。
@@ -59,7 +60,7 @@ I-04 庫存 GET 新增另一個固定 mTLS 路徑
 版本、狀態雜湊、期限及 Epoch／Key。Verifier 重驗精確 JSON、SnapshotSource、
 Scope／Hash；篡改與過期固定 503，不會回退 Runtime 自填庫存數量。
 這只可認列 I-04 合法成功的**隔離候選子項**，未知 SKU 409、原生 ASGI
-傳輸與正式部署仍 OPEN，不提供 Sender 或 G4 Send Lease。
+傳輸與正式部署仍 OPEN；G4 只有隔離 primitive，尚無可用的發送服務。
 
 候選投影結果可交既有 `PostgresCandidatePromoter` 的來源核對，
 **並沒有新增可對 Client 送出 400／404 的 HTTP endpoint**；正式獨立
@@ -105,7 +106,7 @@ python -m deception.security.protected_services
 
 | 設定 | 用途 |
 | --- | --- |
-| `MIRAGE_G3B_SERVICE_ROLE` | 只允許 `verifier`、`executor` 或 `validator` |
+| `MIRAGE_G3B_SERVICE_ROLE` | `verifier`、`executor`、`validator`；`sender` 僅啟動封閉的 G4 入口 |
 | `MIRAGE_G3B_BIND_HOST`、`MIRAGE_G3B_BIND_PORT` | 明確的 Listener 位址與 TCP 埠，不提供公開 HTTP fallback |
 | `MIRAGE_G3B_WORLD_SCHEMA` | 與 PG 連線 `current_schema()` 必須精確一致，避免查詢同名假表 |
 | `MIRAGE_TRUSTED_SEND_ENABLE` | 若存在，只能是 `false`；所有正式發送依舊不可用 |
@@ -145,6 +146,35 @@ Native Validator 專用：
 | `MIRAGE_G3B_VALIDATOR_DSN_FILE`／`MIRAGE_G3B_VALIDATOR_LOGIN` | 專屬唯讀 PostgreSQL SCRAM Login，不使用 Verifier／Executor 密碼 |
 | `MIRAGE_G3B_VALIDATOR_SERVER_CERT_FILE`／`MIRAGE_G3B_VALIDATOR_SERVER_KEY_FILE` | Validator mTLS Server 身份 |
 | `MIRAGE_G3B_VALIDATOR_CLIENT_CA_FILE` | 只接受 Verifier→Validator 專用 Client CA |
+
+G4 Sender（只准隔離部署；不屬於 G3b 四容器拓樸）專用：
+
+| 設定 | 用途 |
+| --- | --- |
+| `MIRAGE_G4_SENDER_DSN_FILE`／`MIRAGE_G4_SENDER_LOGIN` | 獨立 Sender 物理 SCRAM 身分；嚴禁與 Runtime／Verifier／Executor／Validator 共用 |
+| `MIRAGE_G4_SENDER_SERVER_CERT_FILE`／`MIRAGE_G4_SENDER_SERVER_KEY_FILE` | 封閉 Sender mTLS Server 憑證及私鑰 |
+| `MIRAGE_G4_SENDER_CLIENT_CA_FILE` | Sender 專屬 Caller Client CA，禁止與既有三組 CA 共用 |
+
+Sender 啟動前檢查物理 Login、`NOINHERIT`、無 Role 成員資格、固定 Schema、
+無 Schema CREATE，另檢查三個授權／快照資料表 SELECT、單次 Lease INSERT／SELECT、
+稽核 INSERT；`response_admissions` 只允許 `state` 欄位 UPDATE，不可取得
+整表 UPDATE、其他 Admission 欄 UPDATE、World 變更、Receipt／Proof／Promotion
+建立或改寫快照權。多個角色的 DSN 同時出現時直接拒絕啟動。這些是**啟動時
+權限檢查合約**，不是已驗證的正式 ACL 授權清單。
+
+`GET /internal/ready` 僅回報 `sender-sealed-until-restore-fence`，
+`POST /internal/v1/send` 不論輸入或 mTLS Caller 身分一律 503，**不呼叫
+StartSend、不建立 Lease、不輸出 HTTP Payload**。既有
+`PostgresProtectedSender.start_send()` 增加必填 UUIDv4 Receipt，對照
+Authorized Snapshot／Grant Binding 的同一 Receipt，阻止只有 Admission ID 的
+交叉起送；`ProtectedLeaseTransmission` 在 ASGI 起送前也核對 Lease 的 Receipt。
+獨立部署候選 `deploy/security-lab/g4-sender-sealed-compose.yaml` 只掛
+`g4_sender_delivery`、`g3b_database` 兩個外部網路，沒有公開 Host Port、沒有
+G3b Gateway／Executor 網路，使用獨立非 root UID 及四個專用 Secret；絕不改動
+既有四容器 CI 拓樸。這份 Compose 只有結構性測試，**尚未做第五容器真實
+部署的 Network／Secret／PG ACL 驗收**。正式 Sender 客戶端互通、
+DB Commit 不明對帳及 G5 獨立 Restore Fence 均尚未完成。`Trusted Send=OFF`，
+G4 不能簽核。
 
 DSN／Key／Cart State 都由私有檔案讀入，拒絕不存在、空值、超上限、重複
 JSON Key 及異常數值。Runtime 與 Verifier 不應看到 Executor 的 DSN；

@@ -8,6 +8,19 @@ TLS 握手；它不採信 HTTP header 所宣稱的「已驗證身分」。正式
 **僅供該內部 RPC Caller 使用的 CA／信任集**，不可把一般 Gateway 或公共
 服務用戶端 CA 混入。
 
+### G4 提前施工：封閉獨立 Sender（未放行）
+
+`create_fixed_sender_app()`／`serve_fixed_sender_mtls()` 讓 Sender 使用另一組
+Server Certificate 和專屬 Caller Client CA，Uvicorn 嚴格要求 Client Cert，
+不採用 Proxy Header、不允許 HTTP fallback。由 `protected_services` 的
+`MIRAGE_G3B_SERVICE_ROLE=sender` 組裝，實際 SCRAM Login 必須經過獨立
+物理身分與最小 ACL 預檢。`GET /internal/ready` 僅代表封閉入口已啟動；
+`POST /internal/v1/send` 永遠 503，不因 Payload、Admission、Receipt、
+任何 Caller Header 或環境旗標開啟一次性 Send Lease。獨立 Restore Fence
+與跨 DB Restore／Purge／Send 競態未過關前不接真實起送路徑。
+真實 mTLS 握手／匿名 Client 拒絕的測試只驗傳輸，不等於部署級 ACL 簽核，
+也不影響原先四容器 G3b 正式服務拓樸。
+
 ### G3b Direct Verifier HTTP 入口（隔離增量）
 
 `create_direct_verifier_app()` 與 `serve_direct_verifier_mtls()` 為獨立 Verifier

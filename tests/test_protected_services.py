@@ -14,11 +14,11 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from deception.security.protected_rpc import (
     FixedExecutorMTLSClient, FixedNativeValidatorMTLSClient,
-    ProtectedRpcConfigurationError, create_native_validator_app,
+    ProtectedRpcConfigurationError, create_fixed_sender_app, create_native_validator_app,
 )
 from deception.security.protected_services import (
     _json_secret, _login_preflight, _verifier_key_registry, create_executor_service,
-    create_native_validator_service,
+    create_native_validator_service, create_sender_service,
     create_verifier_service, from_environment,
 )
 from deception.world.protected_grant import ProtectedGrantError
@@ -94,6 +94,117 @@ def test_g3b_service_bootstrap_rejects_missing_role_and_unsafe_sender(monkeypatc
         from_environment()
 
 
+def test_g4_sender_dedicated_secret_and_lease_are_sealed(tmp_path, monkeypatch):
+    """G4 專用 Sender 即使有 DB 身分也不能透過 HTTP 申請 Lease 或起送。"""
+    from fastapi.testclient import TestClient
+    from deception.world.protected_send import PostgresProtectedSender
+
+    dsn = tmp_path / "sender.dsn"
+    dsn.write_text("postgresql://sender-only.invalid/g4", encoding="ascii")
+    seen = []
+
+    def preflight(*args, **kwargs):
+        """確認建置流程僅使用專用 Sender 實體 Login 預檢。"""
+        seen.append((args, kwargs))
+
+    monkeypatch.setattr("deception.security.protected_services._login_preflight", preflight)
+    config = {"MIRAGE_G4_SENDER_DSN_FILE": str(dsn),
+              "MIRAGE_G4_SENDER_LOGIN": "sender_only",
+              "MIRAGE_G3B_WORLD_SCHEMA": "public"}
+    app = create_sender_service(config)
+    assert seen == [(('postgresql://sender-only.invalid/g4', 'sender_only'),
+                     {'role': 'sender', 'schema': 'public'})]
+    assert app.openapi_url is None
+
+    def forbidden_send(*_args, **_kwargs):
+        """若 HTTP 竟觸發 Sender 原始方法，測試必須直接失敗。"""
+        raise AssertionError("sealed Sender must not touch the lease database")
+
+    monkeypatch.setattr(PostgresProtectedSender, "start_send", forbidden_send)
+    with TestClient(app, base_url="https://sender.test") as caller:
+        assert caller.get("/internal/ready").json() == {
+            "control_plane": "sender-sealed-until-restore-fence",
+            "trusted_send": "disabled"}
+        for payload in ({}, {"trusted_send": "enabled", "force": True},
+                        {"receipt_id": str(uuid4()), "payload": "forged"}):
+            reply = caller.post("/internal/v1/send", json=payload)
+            assert reply.status_code == 503
+            assert reply.json() == {"detail": "fixed_sender_restore_fence_required"}
+        assert caller.post("/internal/v1/execute", json={}).status_code == 404
+    with pytest.raises(ProtectedRpcConfigurationError, match="requires_protected_sender"):
+        create_fixed_sender_app(sender=object())
+
+    for key in ("MIRAGE_POSTGRES_DSN", "MIRAGE_G3B_VERIFIER_DSN_FILE",
+                "MIRAGE_G3B_EXECUTOR_DSN_FILE", "MIRAGE_G3B_VALIDATOR_DSN_FILE"):
+        with pytest.raises(ProtectedRpcConfigurationError, match="cross_role_secret_denied"):
+            create_sender_service({**config, key: "not-a-sender-secret"})
+    with pytest.raises(ProtectedRpcConfigurationError, match="unsafe_runtime_configuration"):
+        create_sender_service({**config, "MIRAGE_TRUSTED_SEND_ENABLE": "true"})
+
+
+def test_g4_sender_preflight_requires_column_only_state_update(monkeypatch):
+    """Sender 無權修改 Admission 任意欄位，也不能寫 Proof、Snapshot 與業務表。"""
+    import psycopg
+
+    class FakeConnection:
+        """模擬獨立物理 Login、唯狀態欄可更新的最小必要 ACL。"""
+
+        def __enter__(self):
+            """支援預檢 context。"""
+            return self
+
+        def __exit__(self, *_):
+            """結束測試連線。"""
+            return False
+
+        def execute(self, query, params=()):
+            """用明確 deny-by-default ACL 回應，避免任何隱藏的權限通過。"""
+            statement = str(query)
+            if "SELECT session_user,current_user" in statement:
+                self.value = ("sender_login", "sender_login", False, False, False,
+                              False, False, False)
+            elif "SELECT current_schema()" in statement:
+                self.value = ("public",)
+            elif "has_schema_privilege" in statement:
+                self.value = (False,)
+            elif "FROM pg_auth_members" in statement:
+                self.value = (0,)
+            elif "has_table_privilege" in statement:
+                allowed = {("response_admissions", "SELECT"),
+                           ("protected_authorized_http_snapshots", "SELECT"),
+                           ("protected_grant_bindings", "SELECT"),
+                           ("protected_send_leases", "INSERT"),
+                           ("protected_send_leases", "SELECT"),
+                           ("response_audit", "INSERT")}
+                self.value = (params in allowed,)
+            elif "has_column_privilege" in statement:
+                table, column = params
+                self.value = (table == "response_admissions" and column == "state",)
+            else:
+                raise AssertionError("unexpected Sender ACL query: " + statement)
+            return self
+
+        def fetchone(self):
+            """取得最後一次 PG ACL 檢查結果。"""
+            return self.value
+
+    fake = FakeConnection()
+    monkeypatch.setattr(psycopg, "connect", lambda *_args, **_kwargs: fake)
+    _login_preflight("postgresql://unused", "sender_login", role="sender", schema="public")
+    original_execute = FakeConnection.execute
+
+    def overly_privileged(self, query, params=()):
+        """任意欄位被多授 UPDATE 權即刻要求啟動失敗。"""
+        result = original_execute(self, query, params)
+        if "has_column_privilege" in str(query) and params[1] == "admission":
+            self.value = (True,)
+        return result
+
+    monkeypatch.setattr(FakeConnection, "execute", overly_privileged)
+    with pytest.raises(ProtectedRpcConfigurationError, match="excessive_acl_detected"):
+        _login_preflight("postgresql://unused", "sender_login", role="sender", schema="public")
+
+
 def test_g3b_secret_parser_rejects_duplicates_and_unapproved_public_keys(tmp_path):
     """重複 JSON Key、超大 Secret、無法核對的 Ed25519 公鑰均不可進入 Verifier。"""
     path = tmp_path / "keys.json"
@@ -163,6 +274,32 @@ def test_g3b_isolated_compose_does_not_publish_executor_or_share_dsn():
         services["cart-executor"]["secrets"])
     assert services["verifier"]["environment"]["MIRAGE_G3B_NATIVE_VALIDATOR_ORIGIN"] == (
         "https://native-validator:8445")
+
+
+def test_g4_sender_compose_is_separate_sealed_network_and_secret_boundary():
+    """G4 Sender 的候選部署不進四服務 Gateway/Executor 網，無 Host 埠及跨角色秘密。"""
+    root = Path(__file__).resolve().parents[1]
+    compose = yaml.safe_load((root / "deploy/security-lab/g4-sender-sealed-compose.yaml")
+                             .read_text(encoding="utf-8"))
+    assert set(compose["services"]) == {"sender"}
+    service = compose["services"]["sender"]
+    assert service["profiles"] == ["g4-sender-sealed"]
+    assert service["networks"] == ["g4_sender_delivery", "g3b_database"]
+    assert "ports" not in service
+    assert "ALL" in service["cap_drop"]
+    assert service["read_only"] is True
+    assert service["security_opt"] == ["no-new-privileges:true"]
+    assert service["environment"]["MIRAGE_G3B_SERVICE_ROLE"] == "sender"
+    assert service["environment"]["MIRAGE_TRUSTED_SEND_ENABLE"] == "false"
+    assert set(service["secrets"]) == {
+        "g4_sender_dsn", "g4_sender_server_cert", "g4_sender_server_key",
+        "g4_sender_client_ca"}
+    assert "MIRAGE_POSTGRES_DSN" not in service["environment"]
+    assert "MIRAGE_POSTGRES_DSN" not in service["secrets"]
+    assert "g3b_gateway" not in compose["networks"]
+    assert "g3b_execution" not in compose["networks"]
+    assert compose["networks"]["g4_sender_delivery"]["name"] == (
+        "mirage-g4-sender-delivery-net")
 
 
 def test_g3b_ci_waits_for_final_postgres_tcp_listener_not_initdb_socket():
