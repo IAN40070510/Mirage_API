@@ -497,6 +497,20 @@ def test_direct_verifier_medusa_400_over_real_executor_mtls(isolated_test_dsn, t
             assert accepted.json()["native_projection"]["status_code"] == 400
             assert (accepted.json()["native_projection"]["envelope_hash"]
                     == accepted.json()["executor_result"]["envelope_hash"])
+            from deception.world.protected_native_http import fixed_medusa_rejection_bytes
+
+            headers, expected_body = fixed_medusa_rejection_bytes(400, "native-cart-invalid")
+            projected = accepted.json()["native_projection"]
+            assert projected["headers"] == [list(header) for header in headers]
+            assert base64.b64decode(projected["body_b64"], validate=True) == expected_body
+            assert projected["scope"]["session_id"] == created.binding.session_id
+            assert projected["source"] == {
+                "kind": "security_error", "template_id": "native-cart-invalid",
+                "contract_revision": "medusa-cart-1",
+            }
+            assert projected["delivery"] == "candidate_only_no_send_authorization"
+            # 目前仍是內部對帳 200，不能以本測試冒稱客戶端原生 400。
+            assert accepted.headers["content-type"] == "application/json"
             assert gateway.send(request).status_code == 403
         with psycopg.connect(dsn) as connection:
             assert connection.execute("SELECT status_code,reason_code FROM protected_medusa_rejection_sources"

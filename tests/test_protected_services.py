@@ -1,14 +1,19 @@
 """G3b 正式角色組裝只接受專用 Secret／固定路由，不允許共用 Runtime 權限。"""
 
+import asyncio
 import base64
+from copy import deepcopy
 import json
 from pathlib import Path
+from uuid import uuid4
 
+import httpx
 import pytest
 import yaml
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from deception.security.protected_rpc import (
+    FixedExecutorMTLSClient, FixedNativeValidatorMTLSClient,
     ProtectedRpcConfigurationError, create_native_validator_app,
 )
 from deception.security.protected_services import (
@@ -20,6 +25,7 @@ from deception.world.protected_grant import ProtectedGrantError
 from deception.world.protected_native_http import (
     PostgresProtectedNativeProjector, fixed_medusa_rejection_bytes,
 )
+from deception.world.transmission import response_hashes
 
 
 def test_g3b_cart_executor_requires_medusa_insert_but_inventory_denies_it(monkeypatch):
@@ -199,6 +205,154 @@ def test_g3b_native_validator_only_accepts_https_receipt_uuid4():
                            content=b"x" * 1025).status_code == 413
         assert secure.post("/internal/v1/project-medusa-rejection",
                            json={"receipt_id": receipt}).status_code == 503
+
+
+@pytest.mark.parametrize("status,template", [
+    (400, "native-cart-invalid"), (404, "native-cart-rejected"),
+])
+def test_g3b_validator_handoff_preserves_native_status_headers_and_body(
+        monkeypatch, status, template):
+    """驗證 Validator 的真實 bytes／Scope 後完整交給 Verifier，但不鑄造發送權。"""
+    from deception.security import protected_rpc
+
+    receipt = uuid4()
+    headers, body = fixed_medusa_rejection_bytes(status, template)
+    envelope = response_hashes(status, headers, body)[0]
+    projected = {
+        "receipt_id": str(receipt), "operation_id": "PostCartsIdLineItems",
+        "scope": {"environment_id": "env", "deployment_id": "deploy",
+                  "session_id": "session", "world_generation_id": "world"},
+        "request_fingerprint": "a" * 64, "status_code": status,
+        "headers": [["content-type", "application/json"]],
+        "body_b64": base64.b64encode(body).decode("ascii"),
+        "envelope_hash": envelope,
+        "source": {"kind": "security_error", "template_id": template,
+                   "contract_revision": "medusa-cart-1"},
+        "trusted_send": "disabled",
+    }
+
+    class StubAsyncClient:
+        """用已知 HTTPS 來源模擬回應，隔離測試完整 Validator RPC 解碼。"""
+
+        def __init__(self, **kwargs):
+            """保留已選的合法或遭竄改投影，不建立外部網路連線。"""
+            assert kwargs["trust_env"] is False
+
+        async def __aenter__(self):
+            """模擬 HTTPX async context 進入。"""
+            return self
+
+        async def __aexit__(self, *_):
+            """模擬 HTTPX async context 關閉。"""
+            return False
+
+        async def post(self, url, *, json):
+            """核對 RPC 只傳 Receipt，不容許自選 Template 或 Scope。"""
+            assert url == "https://validator.invalid:8445/internal/v1/project-medusa-rejection"
+            assert json == {"receipt_id": str(receipt)}
+            return httpx.Response(200, json=projected)
+
+    monkeypatch.setattr(protected_rpc.httpx, "AsyncClient", StubAsyncClient)
+    client = object.__new__(FixedNativeValidatorMTLSClient)
+    client._origin, client._tls = "https://validator.invalid:8445", object()
+    args = dict(receipt_id=receipt, operation_id="PostCartsIdLineItems",
+                request_fingerprint="a" * 64, expected_status=status,
+                expected_envelope_hash=envelope, expected_environment_id="env",
+                expected_deployment_id="deploy", expected_session_id="session")
+    candidate = asyncio.run(client.project_receipt(**args))
+    assert candidate["status_code"] == status
+    assert candidate["headers"] == [["content-type", "application/json"]]
+    assert base64.b64decode(candidate["body_b64"], validate=True) == body
+    assert candidate["body_sha256"] == response_hashes(status, headers, body)[1]
+    assert candidate["scope"] == projected["scope"]
+    assert candidate["source"] == projected["source"]
+    assert candidate["delivery"] == "candidate_only_no_send_authorization"
+
+    for mutation in ("session", "environment", "deployment", "fingerprint", "status", "body",
+                     "source", "headers", "delivery", "extra", "base64"):
+        negative = deepcopy(projected)
+        if mutation == "session":
+            negative["scope"]["session_id"] = "another-session"
+        elif mutation == "environment":
+            negative["scope"]["environment_id"] = "another-env"
+        elif mutation == "deployment":
+            negative["scope"]["deployment_id"] = "another-deploy"
+        elif mutation == "fingerprint":
+            negative["request_fingerprint"] = "b" * 64
+        elif mutation == "status":
+            negative["status_code"] = 200
+        elif mutation == "body":
+            negative["body_b64"] = base64.b64encode(body + b"forgery").decode("ascii")
+        elif mutation == "source":
+            negative["source"]["template_id"] = "runtime-custom-error"
+        elif mutation == "headers":
+            negative["headers"].append(["x-fake", "true"])
+        elif mutation == "delivery":
+            negative["trusted_send"] = "enabled"
+        elif mutation == "extra":
+            negative["handler"] = "arbitrary"
+        elif mutation == "base64":
+            negative["body_b64"] = negative["body_b64"].rstrip("=")
+        projected.clear()
+        projected.update(negative)
+        with pytest.raises(ProtectedRpcConfigurationError,
+                           match="native_validator_projection_binding_mismatch"):
+            asyncio.run(client.project_receipt(**args))
+        projected.clear()
+        projected.update({
+            "receipt_id": str(receipt), "operation_id": "PostCartsIdLineItems",
+            "scope": {"environment_id": "env", "deployment_id": "deploy",
+                      "session_id": "session", "world_generation_id": "world"},
+            "request_fingerprint": "a" * 64, "status_code": status,
+            "headers": [["content-type", "application/json"]],
+            "body_b64": base64.b64encode(body).decode("ascii"),
+            "envelope_hash": envelope,
+            "source": {"kind": "security_error", "template_id": template,
+                       "contract_revision": "medusa-cart-1"},
+            "trusted_send": "disabled",
+        })
+
+
+def test_g3b_executor_rpc_refuses_ambiguous_result_json(monkeypatch):
+    """Executor 的內部 200 不等於可信資料；重複 Key／NaN 不得傳給 Verifier。"""
+    from deception.security import protected_rpc
+
+    body = (b'{"kind":"world_mutation","operation":"reserveSyntheticInventory",'
+            b'"commit_attempt_id":"attempt","status":"committed",'
+            b'"state_version":1,"state_hash":"hash","result_digest":"digest"}')
+
+    class StubAsyncClient:
+        """注入真 HTTPX Response parser 邊界的重複欄位與非有限常數。"""
+
+        def __init__(self, **kwargs):
+            """確認 Proxy 不得由部署環境隱式啟用。"""
+            assert kwargs["trust_env"] is False
+
+        async def __aenter__(self):
+            """建立內部測試用單次連線。"""
+            return self
+
+        async def __aexit__(self, *_):
+            """關閉內部測試用單次連線。"""
+            return False
+
+        async def post(self, url, *, json):
+            """固定 Receipt 與 Bytes，不讓 RPC 呼叫者選 Handler。"""
+            assert url == "https://executor.invalid:8444/internal/v1/execute"
+            assert set(json) == {"receipt_id", "raw_path_b64", "raw_body_b64"}
+            return httpx.Response(200, content=body)
+
+    monkeypatch.setattr(protected_rpc.httpx, "AsyncClient", StubAsyncClient)
+    client = object.__new__(FixedExecutorMTLSClient)
+    client._origin, client._tls = "https://executor.invalid:8444", object()
+    args = dict(receipt_id=uuid4(), operation_id="reserveSyntheticInventory",
+                raw_path=b"/synthetic/inventory/reservations", raw_body=b"{}")
+    assert asyncio.run(client.execute_receipt(**args))["status"] == "committed"
+    for forged in (body[:-1] + b',"status":"rejected"}',
+                   body.replace(b'"state_version":1', b'"state_version":NaN')):
+        body = forged
+        with pytest.raises(ProtectedRpcConfigurationError, match="fixed_executor_result_invalid"):
+            asyncio.run(client.execute_receipt(**args))
 
 
 def test_g3b_real_container_ci_has_explicit_isolation_and_no_sender():

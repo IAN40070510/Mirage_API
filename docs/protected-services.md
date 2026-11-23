@@ -44,14 +44,27 @@ Ingress Receipt、不可變 Operation Proof、受保護 Read Source／Admission�
 `POST /internal/v1/project-medusa-rejection`；只接受 Receipt UUIDv4，
 在獨立唯讀 PostgreSQL Login 上重建候選原生 400／404 bytes、Scope 與 Hash。
 Verifier 會在比對 Executor 的 status／envelope hash／Operation／Fingerprint 後，
-只輸出 `native_projection` 對帳摘要；來源缺漏時關閉並回 503。這不是原生
-400／404 Client Response，不接受由 Runtime 自選的 Body、Status 或 Template。
+再將 Validator 的完整 Scope 與本次**已驗簽** JWS 的 Environment／Deployment／
+Session 逐欄比對，保留已驗證的 `native_projection.status_code`、
+`headers`、`body_b64`、`envelope_hash`、`body_sha256`、`source` 和 `scope`。
+`delivery=candidate_only_no_send_authorization` 明確表示這仍是**內部候選**；
+來源、Scope、Body 或非正規 Base64 錯配均固定拒絕 503。外層 Verifier HTTP
+仍為**內部對帳 `200`**，不是原生 `400／404` Client Response，也不接受
+由 Runtime 自選 Body、Status 或 Template。不得把 `body_b64` 直接交給 Gateway
+發送，須先建立合法 Promotion／Authorized Snapshot／獨立 Sender Lease 與 G5 Fence。
 
 候選投影結果可交既有 `PostgresCandidatePromoter` 的來源核對，
 **並沒有新增可對 Client 送出 400／404 的 HTTP endpoint**；正式獨立
 全 20 操作的原生 2xx／4xx、Contract Gate 和 G4 Sender
 仍是 OPEN。投影使用 Read Committed 的當前資料庫檢查，尚不能取代
 G5 Restore Fence 及 Send 前重新驗證。
+
+本輪新增 `tests/test_protected_services.py` 的 400／404 精確候選交接正反測試：
+包含錯 Session／Environment、Fingerprint、Status、Body、固定模板、Headers、
+額外 Handler、Base64 與偽造的 Sender 啟用旗標。Verifier 的 Executor RPC
+結果亦改用禁止重複 JSON Key／NaN 的嚴格解析，避免對帳欄位解析歧義；
+`tests/test_ingress_receipts.py` 的真 PostgreSQL／mTLS 路徑也增加 bytes／Scope
+比對（本地未配置 PG 時仍會 SKIP，不能算正式客戶端 HTTP PASS）。
 
 ## 輸入、輸出與設定
 

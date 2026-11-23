@@ -95,7 +95,8 @@ class FixedExecutorMTLSClient:
         if response.status_code != 200:
             raise ProtectedRpcConfigurationError("fixed_executor_result_unverifiable")
         try:
-            result = response.json()
+            result = json.loads(response.content, object_pairs_hook=unique_object,
+                                parse_constant=reject_constant)
         except ValueError as exc:
             raise ProtectedRpcConfigurationError("fixed_executor_result_invalid") from exc
         fields = {
@@ -142,8 +143,14 @@ class FixedNativeValidatorMTLSClient:
 
     async def project_receipt(self, *, receipt_id: UUID, operation_id: str,
                               request_fingerprint: str, expected_status: int,
-                              expected_envelope_hash: str) -> dict[str, object]:
-        """只用受保護 Executor 結果綁定獨立投影，拒絕任何封套替換或非正規 Base64。"""
+                              expected_envelope_hash: str,
+                              expected_environment_id: str, expected_deployment_id: str,
+                              expected_session_id: str) -> dict[str, object]:
+        """綁定受保護來源與已驗簽的 Session Scope，保留精確原生候選 bytes。
+
+        此結果仍是內部候選，不得作為已授權的 HTTP Send；只有後續獨立
+        Authorizer／Sender 對精確 Snapshot 完成 Lease 才能交給客戶端。
+        """
         from deception.world.transmission import response_hashes
 
         async with httpx.AsyncClient(verify=self._tls, trust_env=False, timeout=8.0) as client:
@@ -180,15 +187,25 @@ class FixedNativeValidatorMTLSClient:
                     or not isinstance(result["scope"], dict)
                     or set(result["scope"]) != {
                         "environment_id", "deployment_id", "session_id", "world_generation_id"}
-                    or any(not isinstance(value, str) or not value for value in result["scope"].values())
+                    or result["scope"].get("environment_id") != expected_environment_id
+                    or result["scope"].get("deployment_id") != expected_deployment_id
+                    or result["scope"].get("session_id") != expected_session_id
+                    or not isinstance(result["scope"].get("world_generation_id"), str)
+                    or not result["scope"]["world_generation_id"]
                     or response_hashes(expected_status, (("content-type", "application/json"),), body)[0]
                     != expected_envelope_hash):
                 raise ValueError("native_validator_projection_binding_mismatch")
         except (ValueError, KeyError, TypeError) as exc:
             raise ProtectedRpcConfigurationError("native_validator_projection_binding_mismatch") from exc
-        return {"status_code": expected_status,
-                "envelope_hash": expected_envelope_hash,
-                "body_sha256": response_hashes(expected_status, (("content-type", "application/json"),), body)[1]}
+        return {
+            "status_code": expected_status,
+            "headers": [["content-type", "application/json"]],
+            "body_b64": base64.b64encode(body).decode("ascii"),
+            "envelope_hash": expected_envelope_hash,
+            "body_sha256": response_hashes(expected_status, (("content-type", "application/json"),), body)[1],
+            "scope": dict(result["scope"]), "source": dict(result["source"]),
+            "delivery": "candidate_only_no_send_authorization",
+        }
 
 
 def _canonical_base64(raw: str, *, max_bytes: int) -> bytes:
@@ -406,7 +423,7 @@ def create_direct_verifier_app(
                 postgres_dsn, environment_id=environment_id,
                 deployment_id=deployment_id, verified_request=normalized,
             )
-            _, receipt_id = verifier.verify_with_receipt(
+            claims, receipt_id = verifier.verify_with_receipt(
                 tokens[0], expected_issuer=expected_issuer,
                 expected_audience=expected_audience,
                 request_fingerprint=fingerprint_request(normalized),
@@ -439,6 +456,9 @@ def create_direct_verifier_app(
                     request_fingerprint=fingerprint_request(normalized),
                     expected_status=outcome["status_code"],
                     expected_envelope_hash=outcome["envelope_hash"],
+                    expected_environment_id=claims.environment_id,
+                    expected_deployment_id=claims.deployment_id,
+                    expected_session_id=claims.session_id,
                 )
             except Exception as exc:
                 raise HTTPException(status_code=503,
