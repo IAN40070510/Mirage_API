@@ -55,27 +55,27 @@ Runtime DML、實際 mTLS、可信 Inventory 一次 Commit、Medusa M-03 的
 | 20 路由 Method／Path Template／Operation ID 與三份固定規格集合同步 | 靜態 Mapping PASS，真容器 HTTPS 入口缺 JWS 的 20/20 逐路由 403 PASS | 隔離入口拒絕子項 PASS；每條合法 JWS、原生 2xx／業務 4xx 仍 OPEN |
 | 可配置的隔離 Verifier／雙 Executor／Native Validator、專用 DSN Secret、Role／Schema／ACL 啟動檢查 | 真四容器啟動／實體角色／mTLS／密鑰用途 PASS | 隔離部署子項 PASS；正式環境另驗 |
 | Medusa M-03 特定 400／404 的原生 JSON 從獨立 Rejection Source 重建 | 真 PG、唯讀 Validator 來源投影、第二 mTLS CA PASS | 實驗室子項 PASS；正式 Client HTTP 回應與全操作兼容 OPEN |
-| Medusa M-03 Validator→Verifier 完整候選 Status／Headers／Body 交接 | 新增固定 400／404 bytes／Scope 綁定與篡改拒絕的本地測試；尚未取得本次真 PG CI | 候選交接局部 PASS；外層仍為內部 HTTP 200、正式 Client 400／404 OPEN |
-| Synthetic 固定 mutation Handler rejected→可信 409 來源→獨立 Validator | I-01／I-02、C-03～C-06、C-08 的受保護 409 候選接線與負面測試待固定 SHA CI | 候選子項待驗；CAS conflict／其他 409、外層原生 HTTP 仍 OPEN |
-| Inventory I-04 GET ReadAdmission→唯讀 WorldSnapshot→獨立 Validator 200 | 新增精確 JSON／Source／Scope／Version／Hash 與 mTLS 接線、偽造拒絕測試，待本次固定 SHA 真 CI | 成功候選子項待驗；未知 SKU 409、客戶端原生 200 與 G4 Send OPEN |
+| Medusa M-03 Validator→Verifier 完整候選 Status／Headers／Body 交接 | 固定 400／404 bytes／Scope 綁定及篡改拒絕；真四容器 CI [45211431898](https://github.com/IAN40070510/Mirage_API/actions/runs/45211431898) PASS | **候選交接隔離 PASS**；外層仍為內部 HTTP 200、正式 Client 400／404 OPEN |
+| Synthetic 固定 mutation Handler rejected→可信 409 來源→獨立 Validator | I-01／I-02、C-03～C-06、C-08 固定 409 候選能力；隔離四服務實測 I-01 `unknown_synthetic_sku` 409 來源、Body 與重播拒絕 PASS | **I-01 指定拒絕候選 PASS**；其餘 Handler 情境／CAS conflict／原生 HTTP 仍 OPEN |
+| Inventory I-04 GET ReadAdmission→唯讀 WorldSnapshot→獨立 Validator 200 | 獨立 Validator 按 Receipt 重建精確 JSON／Scope／Hash，與 Executor ReadAdmission ID／Generation／Version／State Hash 逐欄相符；真 PG [45211445525](https://github.com/IAN40070510/Mirage_API/actions/runs/45211445525) `121 passed`、mTLS `4 passed`、四容器 [45211431898](https://github.com/IAN40070510/Mirage_API/actions/runs/45211431898) PASS | **既有 SKU 200 候選隔離 PASS**；未知 SKU 409、客戶端原生 200 與 G4 Send OPEN |
 | 正式獨立服務部署、Secret Mount／網路來源、無共享憑證可見性 | 一次性 Docker CI 真容器角色隔離 PASS | 隔離環境 PASS；staging／production 正式部署 OPEN |
 | 20 條正式原生 2xx／4xx Payload 與獨立來源／Validator | 20 條均未具全套證據 | OPEN |
 | G3b 整體解封並移交 G4 Sender | 前述兩項未完成 | **NO-GO** |
 
 | 編號 | 實際方法／路由 | 來源 Proof | 固定 Executor | 2xx／4xx 完整相容簽收 |
 | --- | --- | --- | --- | --- |
-| I-01 | POST `/synthetic/inventory/reservations` | 隔離 PASS | 受保護 reserve；單一 Receipt Commit；真 Handler 409 候選待真 PG CI | OPEN：200、CAS conflict／其他 409、原生 HTTP |
-| I-02 | POST `/synthetic/inventory/reservations/{reservation_id}/cancel` | 隔離 PASS | 受保護 cancel；真 Handler 409 候選待真 PG CI | OPEN：200、CAS conflict／其他 409、原生 HTTP |
+| I-01 | POST `/synthetic/inventory/reservations` | 隔離 PASS | 受保護 reserve；單一 Receipt Commit；真 Handler `unknown_synthetic_sku` 409 候選四服務 PASS | OPEN：200、CAS conflict／其他 409、原生 HTTP |
+| I-02 | POST `/synthetic/inventory/reservations/{reservation_id}/cancel` | 隔離 PASS | 受保護 cancel；409 候選能力已有固定 Handler，個別情境未真容器逐條實測 | OPEN：200、CAS conflict／其他 409、原生 HTTP |
 | I-03 | GET `/synthetic/operations/{attempt}` | 隔離 PASS | 固定 UUID4／空 Body Proof → Executor 受保護 ReadAdmission；真 PG [45185402530](https://github.com/IAN40070510/Mirage_API/actions/runs/45185402530) PASS | OPEN：查詢結果、可信 200／409、獨立 Validator／外部 HTTP |
-| I-04 | GET `/synthetic/inventory/{sku}` | 隔離 PASS | 固定 SKU／空 Body Proof → Executor 受保護 ReadAdmission；新唯讀 Validator 200 候選待固定 SHA CI | OPEN：缺 SKU 409、URI 編碼、客戶端原生 200／409、G4 Send |
+| I-04 | GET `/synthetic/inventory/{sku}` | 隔離 PASS | 固定 SKU／空 Body Proof → Executor 受保護 ReadAdmission → 獨立 Validator 200 成功候選四服務 PASS，雙來源 ID／Version／Hash 比對 | OPEN：缺 SKU 409、URI 編碼、客戶端原生 200／409、G4 Send |
 | C-01 | POST `/synthetic/carts` | 隔離 PASS | 受保護 Creator→衍生 Cart | OPEN：200／409、原始成功封套 |
 | C-02 | GET `/synthetic/carts/{cart_id}` | 隔離 PASS | 受保護讀取 Admission | OPEN：完整 cart JSON／錯誤 |
-| C-03 | POST `/synthetic/carts/{cart_id}/line-items` | 隔離 PASS | 受保護 add；真 Handler 409 候選待真 PG CI | OPEN：200、其餘 409、原生 HTTP |
-| C-04 | POST `/synthetic/carts/{cart_id}/line-items/{item_id}` | 隔離 PASS | 受保護 update；真 Handler 409 候選待真 PG CI | OPEN：200、其餘 409、原生 HTTP |
-| C-05 | DELETE `/synthetic/carts/{cart_id}/line-items/{item_id}` | 隔離 PASS | 受保護 remove；真 Handler 409 候選待真 PG CI | OPEN：200、其餘 409、原生 HTTP |
-| C-06 | POST `/synthetic/carts/{cart_id}/complete` | 隔離 PASS | 受保護 complete；真 Handler 409 候選待真 PG CI | OPEN：200、其餘 409、原生 HTTP |
+| C-03 | POST `/synthetic/carts/{cart_id}/line-items` | 隔離 PASS | 受保護 add；409 候選固定 Handler 存在，個別情境尚待真容器測試 | OPEN：200、其餘 409、原生 HTTP |
+| C-04 | POST `/synthetic/carts/{cart_id}/line-items/{item_id}` | 隔離 PASS | 受保護 update；409 候選固定 Handler 存在，個別情境尚待真容器測試 | OPEN：200、其餘 409、原生 HTTP |
+| C-05 | DELETE `/synthetic/carts/{cart_id}/line-items/{item_id}` | 隔離 PASS | 受保護 remove；409 候選固定 Handler 存在，個別情境尚待真容器測試 | OPEN：200、其餘 409、原生 HTTP |
+| C-06 | POST `/synthetic/carts/{cart_id}/complete` | 隔離 PASS | 受保護 complete；409 候選固定 Handler 存在，個別情境尚待真容器測試 | OPEN：200、其餘 409、原生 HTTP |
 | C-07 | GET `/synthetic/orders/{order_id}` | 隔離 PASS | 受保護讀取 Admission | OPEN：200／409 原生封套 |
-| C-08 | POST `/synthetic/orders/{order_id}/cancel` | 隔離 PASS | 受保護 cancel_order；真 Handler 409 候選待真 PG CI | OPEN：200、其餘 409、原生 HTTP |
+| C-08 | POST `/synthetic/orders/{order_id}/cancel` | 隔離 PASS | 受保護 cancel_order；409 候選固定 Handler 存在，個別情境尚待真容器測試 | OPEN：200、其餘 409、原生 HTTP |
 | C-09 | GET `/synthetic/carts/{cart_id}/operations/{attempt}` | 隔離 PASS | 受保護讀取 Admission | OPEN：200／409 原生封套 |
 | M-01 | POST `/store/carts` | 隔離 PASS | 尚未執行 Native 建立 | OPEN：200／400／404／409 |
 | M-02 | GET `/store/carts/{id}` | 隔離 PASS | 尚未執行 Native 讀取 | OPEN：200／400／404／409 |
@@ -110,10 +110,11 @@ G3b 整體狀態 `OPEN`。`MIR-SEC-WORLD-001=OPEN`、`MSDSS P2=NO-GO`；
 不可變 Proof，核對完整原始 GET Path／空 Body／Operation ID／UUID4，再以
 Receipt 身分／Epoch／Key／Generation 建立 `protected_world_read_sources`。
 固定 Executor RPC 對這兩個 GET 僅回傳 `inventory_read_admitted` 內部
-Metadata，並拒絕額外 HTTP Status／Headers／Body 欄位；**沒有可信業務
-Response，也沒有客戶端原生 200／409**。新增 I-04 唯讀 Validator
-可投影已存在 SKU 的 200 候選，但不改變 Executor 的純 Metadata 與
-外部 HTTP 現狀。SKU 在字元路徑中可能使用 URL
+Metadata，並拒絕額外 HTTP Status／Headers／Body 欄位。I-03 仍無業務
+Response；I-04 新增唯讀 Validator 可從獨立來源投影既有 SKU 的 200 候選，
+且必須與 Executor ReadAdmission 四欄 metadata 完全一致；固定 SHA `faac8f5f`
+隔離四服務及真 PostgreSQL CI PASS。**這不改變 Executor 的純 Metadata、
+客戶端仍未收到原生 200／409**。SKU 在字元路徑中可能使用 URL
 百分比編碼，而現行 Verifier 會拒絕所有百分比編碼路徑；因此完整 SKU
 URI 相容性與原生回應仍須獨立驗收，不能因 ReadAdmission 通過而勾選完成。
 

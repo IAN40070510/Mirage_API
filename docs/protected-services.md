@@ -191,7 +191,9 @@ ready 後停止。限時 50 次、每次一秒，逾時明確紅燈，避免把�
 最新 Gateway Probe 另覆蓋一筆合法 JWS／固定 Inventory Handler 的
 `unknown_synthetic_sku` **409 候選**：來源表寫入、獨立 Validator mTLS
 重建 Status／Headers／Body、重播拒絕和 Runtime 無 INSERT 權限均逐項檢查。
-此增量須待本次固定 SHA 真容器 CI 才可簽收，**仍不是客戶端原生 409**。
+此指定 409 候選在固定 SHA `faac8f5f` 的
+[真四服務 CI 45211431898](https://github.com/IAN40070510/Mirage_API/actions/runs/45211431898)
+獲得隔離 PASS，**仍不是客戶端原生 409**；其他業務拒絕情境尚未逐條簽收。
 
 `g3b_ci_probe.py` 的 Gateway 模式只加入 `g3b_gateway` 網路：
 
