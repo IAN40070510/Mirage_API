@@ -274,9 +274,21 @@ def _gateway() -> None:
             session="session", mode="inventory",
         )
         unknown = gateway.send(missing_attempt)
-        if (unknown.status_code != 503 or unknown.json().get("detail")
-                != "direct_verifier_operation_projection_unverifiable"):
-            raise RuntimeError("g3b_ci_unbacked_operation_was_projected")
+        if unknown.status_code != 200:
+            raise RuntimeError("g3b_ci_missing_operation_read_source_unverifiable")
+        missing_candidate = unknown.json().get("native_projection", {})
+        if (missing_candidate.get("status_code") != 409
+                or missing_candidate.get("source", {}).get("kind") != "snapshot"
+                or missing_candidate.get("delivery") != "candidate_only_no_send_authorization"
+                or missing_candidate.get("headers") != [["content-type", "application/json"]]
+                or base64.b64decode(missing_candidate.get("body_b64", ""), validate=True)
+                    != b'{"code":"operation_not_found"}'
+                or gateway.send(missing_attempt).status_code != 403):
+            raise RuntimeError("g3b_ci_missing_operation_409_not_attested")
+        print("G3B_ROUTE_PROTECTED_INVENTORY_MISSING_OPERATION " + json.dumps({
+            "native_business_response": False, "outer_http_status": unknown.status_code,
+            "validated_native_status": 409, "source": "protected_world_read_sources",
+        }, sort_keys=True))
         # 真實四容器與兩組 mTLS CA：已拒絕的 Handler 結果只能由獨立 Validator
         # 還原 409 候選，外層控制面 200 不能冒稱 Client 已收到原生 409。
         rejection_body = json.dumps({
