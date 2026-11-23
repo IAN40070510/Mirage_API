@@ -184,6 +184,10 @@ Verifier→Native Validator。臨時原始檔保存在 0700 工作目錄，覆�
 Secret 列表；不替使用者準備正式環境密碼，不呼叫 staging／production DB。
 基礎映像的展示 `/healthz:8000` 不適用於專用 mTLS Listener；Compose
 關閉該內建 healthcheck，真實 readiness 由 Gateway mTLS probe 檢查。
+CI 建庫階段的 `pg_isready` 必須指定 `-h 127.0.0.1`，等待正式 TCP
+Listener；PostgreSQL `initdb` 首次啟動的暫時 Unix socket 可能短暫回報
+ready 後停止。限時 50 次、每次一秒，逾時明確紅燈，避免把初始化競態
+誤判為應用程式 ACL／mTLS 失敗。
 最新 Gateway Probe 另覆蓋一筆合法 JWS／固定 Inventory Handler 的
 `unknown_synthetic_sku` **409 候選**：來源表寫入、獨立 Validator mTLS
 重建 Status／Headers／Body、重播拒絕和 Runtime 無 INSERT 權限均逐項檢查。

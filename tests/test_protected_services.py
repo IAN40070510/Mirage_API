@@ -165,6 +165,15 @@ def test_g3b_isolated_compose_does_not_publish_executor_or_share_dsn():
         "https://native-validator:8445")
 
 
+def test_g3b_ci_waits_for_final_postgres_tcp_listener_not_initdb_socket():
+    """隔離四服務 CI 不得把 initdb 的暫時 Unix socket ready 誤當正式 DB 啟動。"""
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/"
+                "g3b-four-service-isolated.yml").read_text(encoding="utf-8")
+    assert "database_ready=false" in workflow
+    assert "pg_isready -h 127.0.0.1 -U mirage_ci_owner -d mirage_g3b_ci" in workflow
+    assert "G3B_POSTGRES_TCP_READINESS_TIMEOUT" in workflow
+
+
 def test_medusa_native_rejection_bytes_are_fixed_and_never_caller_defined():
     """只有受保護 400／404 模板能產生固定原生 JSON，403／409／200 必須拒絕。"""
     for status, template, expected in (

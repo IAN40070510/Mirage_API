@@ -52,13 +52,21 @@ jobs:
             --env POSTGRES_PASSWORD=mirage_ci_only \
             --env POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256 \
             postgres:17.6-alpine
+          # initdb 暫存 Postgres 僅在 Unix socket 回報 ready，隨即關機重啟；
+          # 必須等正式 TCP Listener 可用，否則下一步可能撞上短暫的 no response。
+          database_ready=false
           for attempt in $(seq 1 50); do
-            if docker exec mirage-g3b-ci-db pg_isready -U mirage_ci_owner -d mirage_g3b_ci; then
+            if docker exec mirage-g3b-ci-db pg_isready -h 127.0.0.1 -U mirage_ci_owner -d mirage_g3b_ci; then
+              database_ready=true
               break
             fi
             sleep 1
           done
-          docker exec mirage-g3b-ci-db pg_isready -U mirage_ci_owner -d mirage_g3b_ci
+          if [ "$database_ready" != true ]; then
+            echo 'G3B_POSTGRES_TCP_READINESS_TIMEOUT' >&2
+            exit 1
+          fi
+          docker exec mirage-g3b-ci-db pg_isready -h 127.0.0.1 -U mirage_ci_owner -d mirage_g3b_ci
 
       - name: Generate ephemeral physical logins and role-specific TLS secrets
         run: |
