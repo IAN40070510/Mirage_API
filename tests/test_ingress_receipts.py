@@ -841,11 +841,10 @@ def test_three_process_gateway_verifier_executor_distinct_mtls_roots(isolated_te
             )
             assert gateway.send(tampered).status_code == 403
             accepted = gateway.send(outbound)
-            assert accepted.status_code == 200, accepted.text
-            result = accepted.json()
-            assert result["operation_id"] == "reserveSyntheticInventory"
-            assert result["executor_result"]["status"] == "committed"
-            assert result["executor_result"]["operation"] == result["operation_id"]
+            # 三程序測試刻意不配置獨立 Validator；World Commit 可持久化，
+            # 但不能把未驗過的 Executor Metadata 當成原生 200 候選。
+            assert accepted.status_code == 503, accepted.text
+            assert accepted.json()["detail"] == "direct_verifier_native_validator_not_wired"
             assert gateway.send(outbound).status_code == 403
         with httpx.Client(verify=ssl.create_default_context(cafile=str(gateway_ca)),
                           trust_env=False, timeout=2.0) as anonymous:

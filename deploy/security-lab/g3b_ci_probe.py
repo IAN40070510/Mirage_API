@@ -158,6 +158,35 @@ def _gateway() -> None:
             "executor_kind": inventory_result["executor_result"]["kind"],
             "source": "protected_world_commit_sources", "native_business_response": False,
         }, sort_keys=True))
+        # I-01 成功 200 候選也必須由獨立 Validator 的不可變 Commit Source 重建。
+        # 注意外層仍是內部對帳 HTTP 200，沒有 G4 授權，不能視為 Client Native 200。
+        committed = inventory_result.get("executor_result", {})
+        native = inventory_result.get("native_projection", {})
+        native_body = base64.b64decode(native.get("body_b64", ""), validate=True)
+        if (native.get("status_code") != 200
+                or native.get("headers") != [["content-type", "application/json"]]
+                or native.get("source", {}).get("kind") != "committed_operation"
+                or native["source"].get("operation_result_digest") != committed.get("result_digest")
+                or native["source"].get("committed_state_version") != committed.get("state_version")
+                or native["source"].get("committed_state_hash") != committed.get("state_hash")
+                or native.get("scope", {}).get("session_id") != "session"
+                or native.get("delivery") != "candidate_only_no_send_authorization"
+                or native.get("envelope_hash") != response_hashes(
+                    200, (("content-type", "application/json"),), native_body)[0]):
+            raise RuntimeError("g3b_ci_inventory_success_candidate_unverifiable")
+        native_json = json.loads(native_body)
+        if (native_json.get("commit_attempt_id") != committed.get("commit_attempt_id")
+                or native_json.get("state_version") != committed.get("state_version")
+                or native_json.get("state_hash") != committed.get("state_hash")
+                or native_json.get("reservation", {}).get("sku") != "sku-1"
+                or native_json.get("reservation", {}).get("quantity") != 2
+                or native_json.get("reservation", {}).get("status") != "reserved"):
+            raise RuntimeError("g3b_ci_inventory_success_payload_mismatch")
+        print("G3B_ROUTE_PROTECTED_INVENTORY_MUTATION_200 " + json.dumps({
+            "operation_id": "reserveSyntheticInventory", "outer_http_status": accepted.status_code,
+            "validated_native_status": 200, "source": "protected_world_commit_sources",
+            "native_business_response": False,
+        }, sort_keys=True))
         if gateway.send(request).status_code != 403:
             raise RuntimeError("g3b_ci_replay_accepted")
         # I-04 的 200 唯讀庫存資料須從獨立 Validator 查實際 Snapshot 版本，
