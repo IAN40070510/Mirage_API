@@ -186,6 +186,22 @@ def test_inventory_http_proof_selects_handler_and_rejects_rpc_substitution(isola
         assert connection.execute("SELECT state->'inventory'->>'sku-1' FROM world_snapshots WHERE world_generation_id=%s",
                                   (snapshot.scope.world_generation_id,)).fetchone()[0] == "2"
 
+    # I-01：可信 Executor 的 Commit 只由獨立唯讀 Validator 重新投影精確 200。
+    projected = PostgresProtectedNativeProjector(dsn, expected_login=_real_login(dsn)).project_synthetic_success(
+        receipt_id)
+    assert projected.operation_id == "reserveSyntheticInventory"
+    assert projected.status_code == 200
+    assert projected.source.operation_result_digest == outcome["result_digest"]
+    assert projected.source.committed_state_version == outcome["state_version"]
+    assert projected.body_bytes == json.dumps({
+        "commit_attempt_id": outcome["commit_attempt_id"],
+        "state_version": outcome["state_version"],
+        "state_hash": outcome["state_hash"],
+        "reservation": json.loads(projected.body_bytes)["reservation"],
+    }, sort_keys=True, separators=(",", ":")).encode()
+    with pytest.raises(ProtectedGrantError, match="source_missing"):
+        PostgresProtectedNativeProjector(dsn, expected_login=_real_login(dsn)).project_synthetic_success(uuid4())
+
 
 def test_inventory_http_legacy_receipt_cannot_select_operation(isolated_test_dsn):
     """舊 Receipt 即使持有有效 Inventory Scope，缺原始 Operation Proof 就不能執行。"""
@@ -731,6 +747,17 @@ def test_cart_http_verified_receipt_drives_real_fixed_world_handler(isolated_tes
         row = connection.execute("SELECT state->'cart'->'items' FROM world_snapshots WHERE world_generation_id=%s",
                                  (snapshot.scope.world_generation_id,)).fetchone()[0]
         assert len(row) == 1 and next(iter(row.values()))["quantity"] == 2
+
+    # C-03：只讀 Validator 經 Commit Source、WorldOperation、ReadAdmission 建立原生 200。
+    cart_success = PostgresProtectedNativeProjector(dsn, expected_login=_real_login(dsn)).project_synthetic_success(
+        receipt)
+    assert cart_success.operation_id == "addGuestCartItem" and cart_success.status_code == 200
+    assert cart_success.source.operation_result_digest == outcome.result_digest
+    assert cart_success.source.committed_state_hash == outcome.committed_state_hash
+    cart_payload = json.loads(cart_success.body_bytes)
+    assert cart_payload["cart"]["id"] == binding.resource_id
+    assert cart_payload["cart"]["items"][0]["quantity"] == 2
+    assert cart_payload["commit_attempt_id"] == str(outcome.commit_attempt_id)
 
     # C-09：真 Commit 後的歷史操作 GET，必須重建受保護 Commit Source，
     # 不能以同一 World 的普通 ReadAdmission 或 Runtime 自填 status 冒充。

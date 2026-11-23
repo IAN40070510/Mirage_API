@@ -11,7 +11,7 @@ from uuid import UUID
 from deception.security.key_revocation import PostgresTrustedKeyRevocations
 from deception.world.commit import operation_result_digest
 
-from .models import ResponseSource, SecurityErrorSource, SnapshotSource, WorldScope, WorldSnapshot
+from .models import CommitSource, ResponseSource, SecurityErrorSource, SnapshotSource, WorldScope, WorldSnapshot
 from .protected_grant import _ProtectedConnection, ProtectedGrantError
 from .transmission import response_hashes
 
@@ -740,6 +740,189 @@ class PostgresProtectedNativeProjector(_ProtectedConnection):
             operation_id=proof[1], request_fingerprint=fingerprint, status_code=409,
             headers=headers, body_bytes=body, envelope_hash=envelope,
             source=SecurityErrorSource(template_id=code, contract_revision=revision),
+        )
+
+    def project_synthetic_success(self, receipt_id: UUID) -> ProtectedNativeProjection:
+        """以唯讀 Login 核對同 Receipt 成功 Commit、原始 HTTP 與目前 World，再重建固定 200 候選。
+
+        此方法只讀取可信 Executor 同一交易寫出的 Protected Commit Source，
+        對照已提交業務結果、Commit Receipt、ReadAdmission、Epoch、Key，
+        並驗證合成 OpenAPI。世界移動、來源缺失或操作不符時一律失敗；
+        不回傳已授權 Send，也不以未知 COMMIT 猜測成功。
+        """
+        from jsonschema import Draft202012Validator
+        from deception.domains.ecommerce.cart_http import cart_specification
+        from deception.domains.ecommerce.carts import SyntheticCarts
+        from deception.domains.ecommerce.inventory_http import inventory_specification
+
+        if not isinstance(receipt_id, UUID) or receipt_id.version != 4:
+            raise ProtectedGrantError("protected_synthetic_success_receipt_invalid")
+        with self._connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SET LOCAL statement_timeout='5s'")
+                cursor.execute(
+                    """SELECT c.environment_id,c.deployment_id,c.session_id,c.world_generation_id,
+                              c.request_fingerprint,c.operation,c.commit_attempt_id,c.result_digest,
+                              c.state_version,c.state_hash,
+                              o.status,o.operation,o.result,o.state_version,o.state_hash,
+                              o.result_encoding_version,o.result_digest,
+                              r.session_epoch,r.issuer,r.key_id,r.token_expires_at,
+                              r.access_mode,r.resource_id,
+                              p.operation_id,p.platform,p.method,p.path_template,
+                              p.request_path,p.request_content_type,p.request_fingerprint
+                       FROM protected_world_commit_sources c
+                       JOIN world_operations o ON o.commit_attempt_id=c.commit_attempt_id
+                         AND (o.environment_id,o.deployment_id,o.session_id,o.world_generation_id)
+                             =(c.environment_id,c.deployment_id,c.session_id,c.world_generation_id)
+                       JOIN ingress_receipts r ON r.receipt_id=c.receipt_id
+                         AND (r.environment_id,r.deployment_id,r.session_id)
+                             =(c.environment_id,c.deployment_id,c.session_id)
+                       JOIN protected_http_operation_bindings p ON p.receipt_id=c.receipt_id
+                       WHERE c.receipt_id=%s""", (receipt_id,),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    raise ProtectedGrantError("protected_synthetic_success_source_missing")
+                (environment, deployment, session, generation, fingerprint, action, attempt,
+                 saved_digest, saved_version, saved_hash, status, actual_action, result,
+                 actual_version, actual_hash, encoding, actual_digest, epoch, issuer,
+                 key_id, token_deadline, mode, resource, operation_id, platform, method,
+                 template, raw_path, content_type, proof_fingerprint) = row
+                selected = _SYNTHETIC_MUTATION_HANDLERS.get(operation_id)
+                path_pattern = _SYNTHETIC_MUTATION_PATHS.get(operation_id)
+                match = re.fullmatch(path_pattern, raw_path) if (
+                    path_pattern is not None and isinstance(raw_path, str)) else None
+                if (selected is None or match is None
+                        or (platform, method, template, action) != selected
+                        or fingerprint != proof_fingerprint
+                        or (status, actual_action, encoding) != ("committed", action, 1)
+                        or (saved_version, saved_hash, saved_digest)
+                            != (actual_version, actual_hash, actual_digest)
+                        or not isinstance(result, dict)
+                        or operation_result_digest(result, actual_version, actual_hash, attempt, status)
+                            != saved_digest
+                        or not isinstance(content_type, str)
+                        or content_type.split(";", 1)[0].strip().lower() != "application/json"
+                        or (platform == "synthetic-inventory" and (mode, resource) != ("inventory", None))
+                        or (platform == "synthetic-carts" and (
+                            mode != "cart" or not resource or match[1] != resource))):
+                    raise ProtectedGrantError("protected_synthetic_success_proof_mismatch")
+                cursor.execute(
+                    """SELECT state_version,state_hash FROM world_commit_receipts
+                       WHERE environment_id=%s AND deployment_id=%s AND session_id=%s
+                         AND world_generation_id=%s AND commit_attempt_id=%s""",
+                    (environment, deployment, session, generation, attempt),
+                )
+                if cursor.fetchone() != (saved_version, saved_hash):
+                    raise ProtectedGrantError("protected_synthetic_success_commit_receipt_mismatch")
+                cursor.execute(
+                    """SELECT a.request_binding_digest,p.state_version,p.state_hash,
+                              a.state_version,a.state_hash,a.expires_at,
+                              p.environment_id,p.deployment_id,p.session_id,p.world_generation_id
+                       FROM protected_world_read_sources p
+                       JOIN read_admissions a ON a.read_admission_id=p.read_admission_id
+                         AND (a.environment_id,a.deployment_id,a.session_id,a.world_generation_id)
+                             =(p.environment_id,p.deployment_id,p.session_id,p.world_generation_id)
+                       WHERE p.receipt_id=%s""", (receipt_id,),
+                )
+                read = cursor.fetchone()
+                if (read is None or read[0] != fingerprint
+                        or read[1:3] != read[3:5]
+                        or read[6:] != (environment, deployment, session, generation)):
+                    raise ProtectedGrantError("protected_synthetic_success_read_source_mismatch")
+                cursor.execute(
+                    """SELECT version,state_hash,state,expires_at FROM world_snapshots
+                       WHERE environment_id=%s AND deployment_id=%s AND session_id=%s
+                         AND world_generation_id=%s""",
+                    (environment, deployment, session, generation),
+                )
+                snapshot_row = cursor.fetchone()
+                if snapshot_row is None:
+                    raise ProtectedGrantError("protected_synthetic_success_snapshot_missing")
+                scope = WorldScope(environment_id=environment, deployment_id=deployment,
+                                   session_id=session, world_generation_id=generation)
+                try:
+                    snapshot = WorldSnapshot(scope=scope, version=snapshot_row[0],
+                                             state_hash=snapshot_row[1], state=snapshot_row[2],
+                                             expires_at=snapshot_row[3])
+                except ValueError as exc:
+                    raise ProtectedGrantError("protected_synthetic_success_snapshot_invalid") from exc
+                if (snapshot.version, snapshot.state_hash) != (saved_version, saved_hash):
+                    raise ProtectedGrantError("protected_synthetic_success_snapshot_stale")
+                if platform == "synthetic-inventory":
+                    if (not isinstance(result.get("reservation_id"), str)
+                            or not re.fullmatch(r"[0-9a-f]{32}", result["reservation_id"])
+                            or not isinstance(result.get("sku"), str)
+                            or type(result.get("quantity")) is not int
+                            or result["quantity"] < 1
+                            or result.get("status") != ("reserved" if action == "reserve" else "cancelled")):
+                        raise ProtectedGrantError("protected_synthetic_success_inventory_invalid")
+                    payload = {"commit_attempt_id": str(attempt), "state_version": saved_version,
+                               "state_hash": saved_hash, "reservation": result}
+                    spec = inventory_specification()
+                else:
+                    kind = "order" if action in {"cart.complete", "cart.cancel_order"} else "cart"
+                    if kind == "cart":
+                        if result.get("id") != resource:
+                            raise ProtectedGrantError("protected_synthetic_success_cart_identity_denied")
+                        if isinstance(result.get("items"), dict):
+                            entity = SyntheticCarts.public_cart(result)
+                        elif isinstance(result.get("items"), list):
+                            entity = result
+                        else:
+                            raise ProtectedGrantError("protected_synthetic_success_cart_items_denied")
+                    else:
+                        if result.get("cart_id") != resource or not isinstance(result.get("items"), list):
+                            raise ProtectedGrantError("protected_synthetic_success_order_identity_denied")
+                        entity = result
+                    payload = {kind: entity, "state_version": saved_version,
+                               "state_hash": saved_hash, "commit_attempt_id": str(attempt)}
+                    spec = cart_specification()
+                schema = spec["paths"][template.removeprefix("/synthetic")][method.lower()][
+                    "responses"]["200"]["content"]["application/json"]["schema"]
+                if not Draft202012Validator(schema).is_valid(payload):
+                    raise ProtectedGrantError("protected_synthetic_success_contract_invalid")
+                cursor.execute("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
+                now = cursor.fetchone()[0]
+                if (token_deadline <= now or read[5] <= now
+                        or snapshot.expires_at is not None and snapshot.expires_at <= now):
+                    raise ProtectedGrantError("protected_synthetic_success_expired")
+                cursor.execute(
+                    """SELECT session_epoch FROM session_heads WHERE environment_id=%s
+                       AND deployment_id=%s AND session_id=%s""",
+                    (environment, deployment, session),
+                )
+                if cursor.fetchone() != (epoch,):
+                    raise ProtectedGrantError("protected_synthetic_success_epoch_stale")
+                cursor.execute(
+                    """SELECT world_generation_id FROM session_world_bindings
+                       WHERE environment_id=%s AND deployment_id=%s AND session_id=%s
+                         AND session_epoch=%s""",
+                    (environment, deployment, session, epoch),
+                )
+                if cursor.fetchone() != (generation,):
+                    raise ProtectedGrantError("protected_synthetic_success_generation_stale")
+                cursor.execute("SELECT sealed,emergency_revision FROM generation_controls WHERE world_generation_id=%s",
+                               (generation,))
+                if cursor.fetchone() != (False, None):
+                    raise ProtectedGrantError("protected_synthetic_success_generation_revoked")
+                guard = PostgresTrustedKeyRevocations(
+                    self._dsn, environment_id=environment, deployment_id=deployment,
+                )
+                guard._lock(cursor, issuer, key_id)
+                if guard._select(cursor, issuer, key_id) is not None:
+                    raise ProtectedGrantError("protected_synthetic_success_key_revoked")
+        headers = (("content-type", "application/json"),)
+        body = json.dumps(payload, ensure_ascii=False, sort_keys=True,
+                          separators=(",", ":")).encode("utf-8")
+        return ProtectedNativeProjection(
+            receipt_id=receipt_id, scope=scope, operation_id=operation_id,
+            request_fingerprint=fingerprint, status_code=200, headers=headers,
+            body_bytes=body, envelope_hash=response_hashes(200, headers, body)[0],
+            source=CommitSource(world_generation_id=generation,
+                                operation_result_digest=saved_digest,
+                                committed_state_version=saved_version,
+                                committed_state_hash=saved_hash),
         )
 
     def project_medusa_rejection(self, receipt_id: UUID) -> ProtectedNativeProjection:

@@ -316,3 +316,20 @@ psycopg／Pydantic／cryptography、PostgreSQL 和 Docker Compose。
 歷史 Cart／Order 200 JSON。Validator 新增必要 `protected_world_commit_sources SELECT`
 且不得具寫入權。未知或未提交操作固定拒絕，不可由 Runtime 捏造 409。
 此為內部候選，不是客戶端實收 HTTP，也不具 G4 Send Lease 權限。
+
+### I-01／I-02、C-03～C-06、C-08 成功 Mutation 候選（待真 PG CI）
+
+獨立 Validator 的 `POST /internal/v1/project-synthetic-success` 只接受
+受保護 Receipt UUID4，依固定 Synthetic Inventory／Cart Operation 映射，
+交叉核對 Verifier 原始 HTTP Proof、Executor 同交易提交的
+`protected_world_commit_sources`、`world_operations`、
+`world_commit_receipts`、當次 ReadAdmission、目前 WorldSnapshot
+以及 Session Epoch／Generation／Key Revocation／期限。只有真正
+`committed`、摘要一致且當前快照仍處於相同版本時才從可信結果投影
+OpenAPI 規定的成功 200 JSON。Verifier 另核對 Executor 所回報的
+Commit Attempt UUID4、Result Digest、Version、Hash，所有 Header／Body
+經獨立 Validator 重算；不接受 Runtime 自填 Handler、狀態或候選資料。
+缺來源、漂移、錯誤 scope 或重送結果不明均拒絕，不提供 200 fallback。
+
+這僅是內部 `native_projection`，不是公開客戶端的成功回應，
+也不核發 Send Lease；不得以本功能替代 G4／G5 安全控制。

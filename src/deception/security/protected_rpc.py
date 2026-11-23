@@ -447,6 +447,99 @@ class FixedNativeValidatorMTLSClient:
             "delivery": "candidate_only_no_send_authorization",
         }
 
+    async def project_synthetic_success(
+        self, *, receipt_id: UUID, operation_id: str, platform: str,
+        request_fingerprint: str, expected_environment_id: str,
+        expected_deployment_id: str, expected_session_id: str,
+        expected_commit_attempt_id: str, expected_result_digest: str,
+        expected_state_version: int, expected_state_hash: str,
+    ) -> dict[str, object]:
+        """獨立 Validator 重新查驗成功 Commit 與完整合成 HTTP 200 候選。
+
+        mTLS 的固定來源只有 Receipt；其餘參數均是本次已驗證 Executor/JWS
+        的預期值，不能讓 RPC 以任意 Header、Body 或 Status 補造成功。
+        """
+        from jsonschema import Draft202012Validator
+        from deception.domains.ecommerce.cart_http import cart_specification
+        from deception.domains.ecommerce.inventory_http import inventory_specification
+        from deception.world.protected_native_http import _SYNTHETIC_MUTATION_HANDLERS
+        from deception.world.transmission import response_hashes
+
+        expected = _SYNTHETIC_MUTATION_HANDLERS.get(operation_id)
+        if expected is None or expected[0] != platform:
+            raise ProtectedRpcConfigurationError("synthetic_success_operation_unapproved")
+        try:
+            attempt = UUID(expected_commit_attempt_id)
+        except (ValueError, TypeError) as exc:
+            raise ProtectedRpcConfigurationError("synthetic_success_attempt_invalid") from exc
+        if attempt.version != 4 or str(attempt) != expected_commit_attempt_id:
+            raise ProtectedRpcConfigurationError("synthetic_success_attempt_invalid")
+        async with httpx.AsyncClient(verify=self._tls, trust_env=False, timeout=8.0) as client:
+            response = await client.post(
+                self._origin + "/internal/v1/project-synthetic-success",
+                json={"receipt_id": str(receipt_id)},
+            )
+        if response.status_code != 200:
+            raise ProtectedRpcConfigurationError("synthetic_success_projection_unverifiable")
+        try:
+            result = json.loads(response.content, object_pairs_hook=unique_object,
+                                parse_constant=reject_constant)
+            if not isinstance(result, dict) or set(result) != {
+                    "receipt_id", "operation_id", "scope", "request_fingerprint",
+                    "status_code", "headers", "body_b64", "envelope_hash", "source",
+                    "trusted_send"}:
+                raise ValueError("synthetic_success_shape_invalid")
+            body = _canonical_base64(result["body_b64"], max_bytes=1048576)
+            payload = json.loads(body, object_pairs_hook=unique_object,
+                                 parse_constant=reject_constant)
+            spec = inventory_specification() if platform == "synthetic-inventory" else cart_specification()
+            schema = spec["paths"][expected[2].removeprefix("/synthetic")][expected[1].lower()][
+                "responses"]["200"]["content"]["application/json"]["schema"]
+            source = result["source"]
+            scope = result["scope"]
+            if (not isinstance(payload, dict)
+                    or not Draft202012Validator(schema).is_valid(payload)
+                    or payload.get("commit_attempt_id") != expected_commit_attempt_id
+                    or payload.get("state_version") != expected_state_version
+                    or payload.get("state_hash") != expected_state_hash
+                    or not isinstance(source, dict)
+                    or source != {
+                        "kind": "committed_operation",
+                        "world_generation_id": source.get("world_generation_id"),
+                        "operation_result_digest": expected_result_digest,
+                        "committed_state_version": expected_state_version,
+                        "committed_state_hash": expected_state_hash,
+                    }
+                    or not isinstance(source.get("world_generation_id"), str)
+                    or not source["world_generation_id"]
+                    or not isinstance(scope, dict)
+                    or set(scope) != {
+                        "environment_id", "deployment_id", "session_id", "world_generation_id"}
+                    or (scope["environment_id"], scope["deployment_id"], scope["session_id"],
+                        scope["world_generation_id"]) != (
+                        expected_environment_id, expected_deployment_id,
+                        expected_session_id, source["world_generation_id"])
+                    or result["receipt_id"] != str(receipt_id)
+                    or result["operation_id"] != operation_id
+                    or result["request_fingerprint"] != request_fingerprint
+                    or type(result["status_code"]) is not int or result["status_code"] != 200
+                    or result["headers"] != [["content-type", "application/json"]]
+                    or result["trusted_send"] != "disabled"
+                    or body != json.dumps(payload, ensure_ascii=False, sort_keys=True,
+                                          separators=(",", ":")).encode("utf-8")
+                    or result["envelope_hash"] != response_hashes(
+                        200, (("content-type", "application/json"),), body)[0]):
+                raise ValueError("synthetic_success_source_mismatch")
+        except (ValueError, KeyError, TypeError, UnicodeError) as exc:
+            raise ProtectedRpcConfigurationError("synthetic_success_source_mismatch") from exc
+        return {
+            "status_code": 200, "headers": [["content-type", "application/json"]],
+            "body_b64": base64.b64encode(body).decode("ascii"),
+            "body_sha256": response_hashes(200, (("content-type", "application/json"),), body)[1],
+            "envelope_hash": result["envelope_hash"], "source": dict(source), "scope": dict(scope),
+            "delivery": "candidate_only_no_send_authorization",
+        }
+
     async def project_inventory_snapshot(
         self, *, receipt_id: UUID, operation_id: str, resource_id: str,
         request_fingerprint: str, expected_environment_id: str,
@@ -740,6 +833,7 @@ def create_native_validator_app(*, projector) -> FastAPI:
     @app.post("/internal/v1/project-inventory-snapshot")
     @app.post("/internal/v1/project-inventory-operation")
     @app.post("/internal/v1/project-cart-read")
+    @app.post("/internal/v1/project-synthetic-success")
     @app.post("/internal/v1/project-synthetic-rejection")
     @app.post("/internal/v1/project-medusa-rejection")
     async def project(request: Request) -> dict[str, object]:
@@ -766,6 +860,8 @@ def create_native_validator_app(*, projector) -> FastAPI:
                 projected = projector.project_inventory_operation(UUID(str(call.receipt_id)))
             elif request.scope.get("path") == "/internal/v1/project-cart-read":
                 projected = projector.project_cart_read(UUID(str(call.receipt_id)))
+            elif request.scope.get("path") == "/internal/v1/project-synthetic-success":
+                projected = projector.project_synthetic_success(UUID(str(call.receipt_id)))
             elif request.scope.get("path") == "/internal/v1/project-synthetic-rejection":
                 projected = projector.project_synthetic_rejection(UUID(str(call.receipt_id)))
             else:
@@ -995,6 +1091,27 @@ def create_direct_verifier_app(
             except Exception as exc:
                 raise HTTPException(status_code=503,
                                     detail="direct_verifier_cart_projection_unverifiable") from exc
+        elif (isinstance(outcome, dict) and outcome.get("kind") == "world_mutation"
+              and outcome.get("status") in {"committed", "already_committed"}):
+            if native_validator_client is None:
+                raise HTTPException(status_code=503,
+                                    detail="direct_verifier_native_validator_not_wired")
+            try:
+                projection = await native_validator_client.project_synthetic_success(
+                    receipt_id=receipt_id, operation_id=operation.operation_id,
+                    platform=operation.platform,
+                    request_fingerprint=fingerprint_request(normalized),
+                    expected_environment_id=claims.environment_id,
+                    expected_deployment_id=claims.deployment_id,
+                    expected_session_id=claims.session_id,
+                    expected_commit_attempt_id=outcome["commit_attempt_id"],
+                    expected_result_digest=outcome["result_digest"],
+                    expected_state_version=outcome["state_version"],
+                    expected_state_hash=outcome["state_hash"],
+                )
+            except Exception as exc:
+                raise HTTPException(status_code=503,
+                                    detail="direct_verifier_synthetic_success_unverifiable") from exc
         elif (isinstance(outcome, dict) and outcome.get("kind") == "world_mutation"
               and outcome.get("status") == "rejected"):
             if native_validator_client is None:

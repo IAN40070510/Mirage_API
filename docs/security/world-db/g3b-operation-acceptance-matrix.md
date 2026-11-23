@@ -140,3 +140,13 @@ URI 相容性與原生回應仍須獨立驗收，不能因 ReadAdmission 通過�
 技術來源：[受保護 RPC](../../protected-rpc.md)、[固定 Operation](../../ingress-receipt.md)、
 [實作 CI 證據](grant-binding-implementation-status.md)、
 [完整業務保護裁決](full-business-protected-executor-decision.md)。
+
+**2026-11-24 Synthetic Mutation 200 候選增量（待真 PG CI）**：
+新增專用 `project-synthetic-success` mTLS 入口，供 I-01／I-02、
+C-03～C-06／C-08 七條已核准的 Synthetic Mutation 使用。
+由獨立 Validator 唯讀核對相同 Receipt 的原始 HTTP、ReadAdmission、
+真正 Commit Source、WorldOperation Result Digest、Commit Receipt、
+最新快照與有效 Session／Key，驗證 OpenAPI 200 JSON Schema
+及精確 Envelope。此路徑要求完整成功來源，不接受補造未知操作、
+失敗結果或 Runtime 自稱成功；目前所有七條仍須個別真 PG
+成功／業務拒絕／故障情境驗收，對外原生 HTTP 與 G4 Sender 保持封閉。
