@@ -36,7 +36,7 @@ def test_package_contains_only_explicit_safe_files(tmp_path):
 
 
 def test_migration_checksum_is_idempotent_and_rejects_drift(isolated_test_dsn, tmp_path):
-    """完整 migration 重複執行無副作用，既有版本改動時停止且不改資料庫版本紀錄。"""
+    """隔離 fixture 首次登錄全部版本後，重入無副作用且 checksum 漂移必須拒絕。"""
     import psycopg
     from deception.world.migrations import apply_migrations
 
@@ -44,11 +44,13 @@ def test_migration_checksum_is_idempotent_and_rejects_drift(isolated_test_dsn, t
     directory = tmp_path / "migrations"
     shutil.copytree(original, directory)
     first = apply_migrations(isolated_test_dsn, directory)
-    assert len(first) == len(list(directory.glob("*.sql")))
+    assert first == ()  # isolated_test_dsn 已用正式 runner 完成初始 migration
     assert apply_migrations(isolated_test_dsn, directory) == ()
     changed = sorted(directory.glob("*.sql"))[0]
     changed.write_text(changed.read_text(encoding="utf-8") + "\n-- changed test checksum\n", encoding="utf-8")
     with pytest.raises(ValueError, match="checksum changed"):
         apply_migrations(isolated_test_dsn, directory)
     with psycopg.connect(isolated_test_dsn) as observer:
-        assert observer.execute("SELECT count(*) FROM mirage_schema_migrations").fetchone() == (len(first),)
+        assert observer.execute("SELECT count(*) FROM mirage_schema_migrations").fetchone() == (
+            len(list(directory.glob("*.sql"))),
+        )

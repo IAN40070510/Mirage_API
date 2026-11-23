@@ -72,13 +72,23 @@ def postgres_dsn() -> str:
 
 
 def apply_schema(dsn: str) -> None:
-    """在測試資料庫套用版本化 World Runtime migration。"""
-    import psycopg
+    """以正式 checksum／交易鎖 migration runner 重入測試 Schema，不重建不可變表。"""
+    from deception.world.migrations import apply_migrations
 
     migrations = Path(__file__).parents[1] / "migrations"
-    with psycopg.connect(dsn) as connection:
-        for migration in sorted(migrations.glob("[0-9]*.sql")):
-            connection.execute(migration.read_text(encoding="utf-8"))
+    apply_migrations(dsn, migrations)
+
+
+def test_conformance_schema_bootstrap_is_idempotent(isolated_test_dsn):
+    """重複啟動 Schema 必須比對 checksum 並跳過既有 protected Cart 等不可變表。"""
+    import psycopg
+
+    apply_schema(isolated_test_dsn)
+    apply_schema(isolated_test_dsn)
+    with psycopg.connect(isolated_test_dsn) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM mirage_schema_migrations"
+        ).fetchone()[0] == len(list((Path(__file__).parents[1] / "migrations").glob("*.sql")))
 
 
 def scope(suffix: str) -> WorldScope:
