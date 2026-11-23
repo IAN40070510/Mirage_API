@@ -203,6 +203,90 @@ def test_inventory_http_legacy_receipt_cannot_select_operation(isolated_test_dsn
         )
 
 
+@pytest.mark.parametrize("path,operation", [
+    ("/synthetic/inventory/sku-1", "getSyntheticInventory"),
+    ("/synthetic/operations/" + str(uuid4()), "getSyntheticOperation"),
+])
+def test_inventory_get_receipt_admits_real_protected_read_without_native_http(
+        isolated_test_dsn, path, operation):
+    """真 PostgreSQL I-03／I-04 經固定 RPC 建讀取來源，拒絕偽造 Bytes／跨 Session。
+
+    只證明 ReadAdmission 存在，並未宣稱原生 200／409 或 Sender 可用。
+    """
+    import base64
+    import psycopg
+    from fastapi.testclient import TestClient
+    from deception.security.protected_rpc import create_fixed_executor_app
+
+    dsn, now = isolated_test_dsn, int(time.time())
+    binding = SessionBinding(environment_id="inventory-get-http", deployment_id="isolated",
+                             session_id=uuid4().hex, session_epoch=1, access_mode="inventory")
+    store = SyntheticInventory(dsn)
+    snapshot = store.resolve(binding, {"inventory": {"sku-1": 4}, "reservations": {}},
+                             now=now, ttl=120)
+    request = replace(original_request(path=path, method="GET"), body=b"")
+    proof = derive_verified_operation(request)
+    receipt, jti = uuid4(), uuid4().hex
+    with psycopg.connect(dsn) as connection:
+        connection.execute("INSERT INTO replay_entries VALUES ('gateway','mirage',%s,%s)",
+                           (jti, now + 120))
+        connection.execute(
+            """INSERT INTO ingress_receipts (
+                   receipt_id,issuer,audience,jti,key_id,environment_id,deployment_id,
+                   session_id,session_epoch,request_fingerprint,assessment_digest,
+                   claims_digest,verification_policy_version,token_issued_at,
+                   token_not_before,token_expires_at,access_mode)
+               VALUES (%s,'gateway','mirage',%s,'kid',%s,%s,%s,1,%s,%s,%s,
+                       'trusted-session-v1.1',%s,%s,%s,'inventory')""",
+            (receipt, jti, binding.environment_id, binding.deployment_id,
+             binding.session_id, proof.request_fingerprint, digest("b"), digest("c"),
+             now - 5, now - 5, now + 90),
+        )
+        connection.execute(
+            """INSERT INTO protected_http_operation_bindings (
+                   receipt_id,platform,operation_id,method,path_template,
+                   request_fingerprint,request_body_sha256,request_path,request_content_type)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+            (receipt, proof.platform, proof.operation_id, proof.method, proof.path_template,
+             proof.request_fingerprint, proof.request_body_sha256,
+             proof.request_path, proof.request_content_type),
+        )
+    executor = PostgresProtectedWorldExecutor(dsn, expected_login=_real_login(dsn), world_store=store)
+    args = dict(receipt_id=receipt, binding=binding,
+                raw_path=request.raw_path, raw_body=b"", expires_at=now + 30)
+    with pytest.raises(OperationBindingError, match="snapshot_mismatch"):
+        executor.read_verified_inventory_http(**{**args, "raw_body": b"{}"})
+    with pytest.raises(OperationBindingError, match="snapshot_mismatch"):
+        executor.read_verified_inventory_http(**{**args, "raw_path": request.raw_path + b"x"})
+    with pytest.raises(ProtectedGrantError):
+        executor.read_verified_inventory_http(**{
+            **args, "binding": binding.model_copy(update={"session_id": uuid4().hex}),
+        })
+    wire = {"receipt_id": str(receipt),
+            "raw_path_b64": base64.b64encode(request.raw_path).decode("ascii"),
+            "raw_body_b64": ""}
+    with TestClient(create_fixed_executor_app(executor=executor), base_url="https://executor.test") as client:
+        assert client.post("/internal/v1/execute", json={
+            **wire, "raw_body_b64": base64.b64encode(b"{}").decode("ascii"),
+        }).status_code == 503
+        accepted = client.post("/internal/v1/execute", json=wire)
+        if accepted.status_code != 200:
+            executor.execute_verified_http(receipt_id=receipt, raw_path=request.raw_path, raw_body=b"")
+        assert accepted.status_code == 200  # 內部 RPC；不是客戶端原生 200。
+        outcome = accepted.json()
+        assert outcome["kind"] == "inventory_read_admitted" and outcome["operation"] == operation
+        assert outcome["resource_id"] == path.rsplit("/", 1)[-1]
+        assert outcome["world_generation_id"] == snapshot.scope.world_generation_id
+        assert outcome["state_version"] == 1 and outcome["state_hash"] == snapshot.state_hash
+        assert "status_code" not in outcome and "body" not in outcome
+    with psycopg.connect(dsn) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM protected_world_read_sources WHERE receipt_id=%s",
+            (receipt,),
+        ).fetchone()[0] == 1
+        assert connection.execute("SELECT count(*) FROM world_operations").fetchone()[0] == 0
+
+
 def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolated_test_dsn, request, tmp_path):
     """真 PG：只有驗證原始 Medusa headers/Body 並查過世界的 400/404 能 Promote。"""
     import base64

@@ -355,6 +355,57 @@ def test_g3b_executor_rpc_refuses_ambiguous_result_json(monkeypatch):
             asyncio.run(client.execute_receipt(**args))
 
 
+@pytest.mark.parametrize("operation", ["getSyntheticInventory", "getSyntheticOperation"])
+def test_g3b_executor_inventory_get_response_is_admission_metadata_only(monkeypatch, operation):
+    """驗證 Verifier 僅接受精確 I-03／I-04 來源欄位，拒絕混入偽造 HTTP 回應。"""
+    from deception.security import protected_rpc
+
+    resource = "sku-1" if operation == "getSyntheticInventory" else str(uuid4())
+    response = {"kind": "inventory_read_admitted", "operation": operation,
+                "resource_id": resource, "read_admission_id": uuid4().hex,
+                "world_generation_id": uuid4().hex, "state_version": 1, "state_hash": "a" * 64}
+
+    class StubAsyncClient:
+        """僅替換結果傳輸，保留真實 Executor Response Shape Parser。"""
+
+        def __init__(self, **kwargs):
+            """固定內部 TLS 設定，且禁止環境 Proxy 影響隔離測試。"""
+            assert kwargs["trust_env"] is False
+
+        async def __aenter__(self):
+            """提供單次受控測試的 AsyncClient context。"""
+            return self
+
+        async def __aexit__(self, *_):
+            """離開測試用 HTTP context。"""
+            return False
+
+        async def post(self, url, *, json):
+            """回傳受控 Executor metadata，禁止從 Request 選擇其他操作。"""
+            assert url == "https://executor.invalid:8444/internal/v1/execute"
+            assert set(json) == {"receipt_id", "raw_path_b64", "raw_body_b64"}
+            return httpx.Response(200, json=response)
+
+    monkeypatch.setattr(protected_rpc.httpx, "AsyncClient", StubAsyncClient)
+    client = object.__new__(FixedExecutorMTLSClient)
+    client._origin, client._tls = "https://executor.invalid:8444", object()
+    args = dict(receipt_id=uuid4(), operation_id=operation,
+                raw_path=("/synthetic/inventory/" if resource == "sku-1" else
+                          "/synthetic/operations/").encode() + resource.encode(), raw_body=b"")
+    assert asyncio.run(client.execute_receipt(**args)) == response
+    for invalid in ({"status_code": 200}, {"body_b64": "e30="}, {"trusted_send": "enabled"},
+                    {"state_version": True}, {"state_version": 0},
+                    {"state_hash": "short"}, {"operation": "reserveSyntheticInventory"},
+                    {"resource_id": ""}, {"resource_id": "other-resource"},
+                    {"read_admission_id": "forged"}, {"world_generation_id": "not-uuid"}):
+        previous = dict(response)
+        response.update(invalid)
+        with pytest.raises(ProtectedRpcConfigurationError, match="fixed_executor_result_binding_mismatch"):
+            asyncio.run(client.execute_receipt(**args))
+        response.clear()
+        response.update(previous)
+
+
 def test_g3b_real_container_ci_has_explicit_isolation_and_no_sender():
     """真正容器驗收需隔離 DB／三網／四服務，不能把範本靜態測試冒充部署證據。"""
     root = Path(__file__).resolve().parents[1]

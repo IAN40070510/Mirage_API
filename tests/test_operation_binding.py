@@ -9,7 +9,7 @@ import pytest
 from deception.api.ingress import NormalizedRequest
 from deception.security.operation_binding import (
     OperationBindingError, decode_verified_cart_creation, decode_verified_cart_mutation,
-    decode_verified_cart_read,
+    decode_verified_cart_read, decode_verified_inventory_read,
     decode_verified_inventory_mutation,
     derive_verified_operation, _pinned_medusa_operations,
 )
@@ -182,6 +182,44 @@ def test_inventory_command_denies_duplicate_keys_and_bad_path_parameters():
     with pytest.raises(OperationBindingError, match="path_parameter_invalid"):
         decode_verified_inventory_mutation(derive_verified_operation(cancel),
                                            raw_path=cancel.raw_path, raw_body=cancel.body)
+
+
+@pytest.mark.parametrize("path,operation,resource", [
+    ("/synthetic/inventory/sku-1", "getSyntheticInventory", "sku-1"),
+    ("/synthetic/inventory/品項+特別:版", "getSyntheticInventory", "品項+特別:版"),
+    ("/synthetic/operations/" + str(uuid4()), "getSyntheticOperation", None),
+])
+def test_inventory_reads_derive_exact_get_without_rpc_selected_resource(path, operation, resource):
+    """I-03／I-04 由原始 GET 路徑固定 SKU 或 UUID，保留合法 Unicode SKU。"""
+    request = replace(original_request(path=path, method="GET"), body=b"")
+    proof = derive_verified_operation(request)
+    query = decode_verified_inventory_read(proof, raw_path=request.raw_path, raw_body=b"")
+    assert query.operation == operation
+    assert query.resource_id == (resource if resource is not None else path.rsplit("/", 1)[-1])
+    assert (query.attempt_id is not None) == (operation == "getSyntheticOperation")
+    with pytest.raises(OperationBindingError, match="snapshot_mismatch"):
+        decode_verified_inventory_read(proof, raw_path=request.raw_path, raw_body=b"{}")
+    with pytest.raises(OperationBindingError, match="snapshot_mismatch"):
+        decode_verified_inventory_read(proof, raw_path=request.raw_path + b"x", raw_body=b"")
+    with pytest.raises(OperationBindingError, match="operation_or_resource_denied"):
+        decode_verified_inventory_read(replace(proof, operation_id="reserveSyntheticInventory"),
+                                       raw_path=request.raw_path, raw_body=b"")
+
+
+@pytest.mark.parametrize("path", [
+    "/synthetic/inventory/..",
+    "/synthetic/inventory/sku%2Faltered",
+    "/synthetic/inventory/sku?change",
+    "/synthetic/inventory/" + "s" * 129,
+    "/synthetic/operations/not-a-uuid",
+    "/synthetic/operations/00000000-0000-0000-0000-000000000000",
+])
+def test_inventory_read_rejects_ambiguous_sku_and_noncanonical_attempt(path):
+    """拒絕正規化歧義、過長 SKU、無效或非 UUID4 的 Operation 查詢。"""
+    request = replace(original_request(path=path, method="GET"), body=b"")
+    proof = derive_verified_operation(request)
+    with pytest.raises(OperationBindingError, match="operation_or_resource_denied"):
+        decode_verified_inventory_read(proof, raw_path=request.raw_path, raw_body=b"")
 
 
 @pytest.mark.parametrize("path,method,operation,action", [

@@ -56,6 +56,13 @@ Read Source 和封套 hash。Runtime 自填 `SecurityErrorSource` 無受保護�
 不能 Promotion，未實作的原生成功操作和其他錯誤一律 503。
 返回值屬於**受保護內部執行結果**，尚非
 正式回給 Client 的業務回應，也不提供 Candidate Validation／Grant／Send。
+Inventory I-03 `GET /synthetic/operations/{attempt}` 與 I-04
+`GET /synthetic/inventory/{sku}` 另有固定 Handler 讀取子切面：Executor 從
+受保護 Proof 核對原始空 Body／路徑、UUID4／SKU，再由 Receipt 建立
+ReadAdmission；RPC 僅返回 `inventory_read_admitted`、來源 ID、世代及
+版本／Hash。它**不會產生查詢成功／業務拒絕 Payload**，也沒有可送出的
+原生 HTTP Status／Headers／Body。包含百分比編碼 SKU 的 URI 相容測試仍
+未解決，且需要真 PostgreSQL CI 固定 SHA 才能簽收這項子切面。
 已存在可信 Read Source 的重試只查回既有唯一來源的完整 Scope／Fingerprint／
 State Version／Hash／期限，不能再 INSERT 第二個 ReadAdmission 來源；來源錯配
 或到期拒絕。首次提交才建立新的受保護讀取來源。

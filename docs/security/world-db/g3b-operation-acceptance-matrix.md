@@ -64,8 +64,8 @@ Runtime DML、實際 mTLS、可信 Inventory 一次 Commit、Medusa M-03 的
 | --- | --- | --- | --- | --- |
 | I-01 | POST `/synthetic/inventory/reservations` | 隔離 PASS | 受保護 reserve；單一 Receipt Commit | OPEN：尚無可信原生回應 Payload／Validator |
 | I-02 | POST `/synthetic/inventory/reservations/{reservation_id}/cancel` | 隔離 PASS | 受保護 cancel | OPEN：2xx／409、重試與錯誤封套整合 |
-| I-03 | GET `/synthetic/operations/{attempt}` | 隔離 PASS | 尚未接入固定 Executor | OPEN：200／409 與結果來源 |
-| I-04 | GET `/synthetic/inventory/{sku}` | 隔離 PASS | 尚未接入固定 Executor | OPEN：200／409 與讀取來源 |
+| I-03 | GET `/synthetic/operations/{attempt}` | 隔離 PASS | 固定 UUID4／空 Body Proof → Executor 受保護 ReadAdmission；待真 PG CI | OPEN：查詢結果、可信 200／409、獨立 Validator／外部 HTTP |
+| I-04 | GET `/synthetic/inventory/{sku}` | 隔離 PASS | 固定 SKU／空 Body Proof → Executor 受保護 ReadAdmission；待真 PG CI | OPEN：庫存 Payload、可信 200／409、獨立 Validator／外部 HTTP |
 | C-01 | POST `/synthetic/carts` | 隔離 PASS | 受保護 Creator→衍生 Cart | OPEN：200／409、原始成功封套 |
 | C-02 | GET `/synthetic/carts/{cart_id}` | 隔離 PASS | 受保護讀取 Admission | OPEN：完整 cart JSON／錯誤 |
 | C-03 | POST `/synthetic/carts/{cart_id}/line-items` | 隔離 PASS | 受保護 add | OPEN：200／409 原生封套 |
@@ -102,6 +102,16 @@ Runtime DML、實際 mTLS、可信 Inventory 一次 Commit、Medusa M-03 的
 
 G3b 整體狀態 `OPEN`。`MIR-SEC-WORLD-001=OPEN`、`MSDSS P2=NO-GO`；
 正式 Trusted Send `OFF`，不合併 main、不部署 staging 或 production。
+
+**I-03／I-04 ReadAdmission 增量（待固定 SHA CI）**：
+`decode_verified_inventory_read()` 要求 Executor 自行查回 Verifier 寫入的
+不可變 Proof，核對完整原始 GET Path／空 Body／Operation ID／UUID4，再以
+Receipt 身分／Epoch／Key／Generation 建立 `protected_world_read_sources`。
+固定 Executor RPC 對這兩個 GET 僅回傳 `inventory_read_admitted` 內部
+Metadata，並拒絕額外 HTTP Status／Headers／Body 欄位；**沒有可信業務
+Response，也沒有客戶端原生 200／409**。SKU 在字元路徑中可能使用 URL
+百分比編碼，而現行 Verifier 會拒絕所有百分比編碼路徑；因此完整 SKU
+URI 相容性與原生回應仍須獨立驗收，不能因 ReadAdmission 通過而勾選完成。
 
 技術來源：[受保護 RPC](../../protected-rpc.md)、[固定 Operation](../../ingress-receipt.md)、
 [實作 CI 證據](grant-binding-implementation-status.md)、

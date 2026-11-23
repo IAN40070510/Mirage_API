@@ -88,6 +88,12 @@ Cart／Order 實際執行既有 Handler；未接受自選 action，也不執行 
 Cart／Order／Operation 路徑與可信 Creator Lineage，不能由 Runtime
 改選資源或讀取操作 ID；但尚未成為實際 HTTP 服務。Medusa 原生表頭／身份與
 400／404／409 拒絕來源仍未驗收。
+新增 `decode_verified_inventory_read()` 與
+`PostgresProtectedWorldExecutor.read_verified_inventory_http()`，固定 I-03／I-04
+原始 GET 的空 Body／SKU 或 UUID4，再由同 Receipt 產生受保護 ReadAdmission。
+內部 mTLS Executor 可回報來源的版本與 Hash，**不會**回報庫存或操作結果，
+不具有可直接傳送的原生 HTTP 200／409。此增量的真 PostgreSQL 驗收與
+URL 百分比編碼 SKU 相容性仍是 OPEN。
 **上述 primitive 尚未成為 mTLS 的 HTTP 業務 RPC**；當前
 `create_sealed_app()` 的 execute endpoint 依舊回 503。
 格式不合法但需要 409／400／404 的請求尚無可 Promote 的獨立拒絕證據，

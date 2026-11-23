@@ -15,8 +15,9 @@ from deception.api.fingerprint import fingerprint_request
 from deception.api.ingress import NormalizedRequest
 from deception.security.key_revocation import PostgresTrustedKeyRevocations
 from deception.security.operation_binding import (
-    VerifiedCartRead, VerifiedOperationBinding, decode_verified_cart_creation, decode_verified_cart_mutation,
-    decode_verified_cart_read,
+    VerifiedCartRead, VerifiedInventoryRead, VerifiedOperationBinding,
+    decode_verified_cart_creation, decode_verified_cart_mutation,
+    decode_verified_cart_read, decode_verified_inventory_read,
     decode_verified_inventory_mutation,
 )
 
@@ -113,6 +114,17 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
         if (proof.platform == "synthetic-inventory"
                 and isinstance(self._world_store, SyntheticInventory)
                 and not isinstance(self._world_store, SyntheticCarts)):
+            if proof.method == "GET":
+                read, query = self.read_verified_inventory_http(
+                    receipt_id=receipt_id, binding=binding,
+                    raw_path=raw_path, raw_body=raw_body, expires_at=deadline,
+                )
+                return {"kind": "inventory_read_admitted", "operation": query.operation,
+                        "resource_id": query.resource_id,
+                        "read_admission_id": read.source.read_admission_id,
+                        "world_generation_id": read.snapshot.scope.world_generation_id,
+                        "state_version": read.snapshot.version,
+                        "state_hash": read.snapshot.state_hash}
             decode_verified_inventory_mutation(proof, raw_path=raw_path, raw_body=raw_body)
             scope = self._verified_mutation_read_scope(
                 receipt_id=receipt_id, binding=binding,
@@ -706,6 +718,32 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
             proof, resource_id=checked.resource_id,
             raw_path=raw_path, raw_body=raw_body,
         )
+        read = self.admit_read(
+            receipt_id=receipt_id, binding=checked,
+            request_fingerprint=proof.request_fingerprint, expires_at=expires_at,
+        )
+        return read, query
+
+    def read_verified_inventory_http(
+        self, *, receipt_id: UUID, binding: SessionBinding,
+        raw_path: bytes, raw_body: bytes, expires_at: int,
+    ) -> tuple[WorldRead, VerifiedInventoryRead]:
+        """固定 I-03／I-04 GET 並以受保護 Receipt 建立唯一 World Read 來源。
+
+        此處僅核准查詢來源；尚未產生可交付客戶端的操作結果／庫存 JSON，
+        不可把 ReadAdmission 當成業務 200／409 或 Send Authorization。
+        """
+        from deception.domains.ecommerce.carts import SyntheticCarts
+        from deception.domains.ecommerce.inventory import SyntheticInventory
+
+        if (not isinstance(self._world_store, SyntheticInventory)
+                or isinstance(self._world_store, SyntheticCarts)):
+            raise ProtectedGrantError("verified_inventory_read_handler_unavailable")
+        checked = SessionBinding.model_validate(binding.model_dump())
+        if checked.access_mode != "inventory" or checked.resource_id is not None:
+            raise ProtectedGrantError("verified_inventory_read_capability_denied")
+        proof = self._http_operation_proof(receipt_id)
+        query = decode_verified_inventory_read(proof, raw_path=raw_path, raw_body=raw_body)
         read = self.admit_read(
             receipt_id=receipt_id, binding=checked,
             request_fingerprint=proof.request_fingerprint, expires_at=expires_at,

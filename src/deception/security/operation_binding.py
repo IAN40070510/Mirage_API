@@ -70,6 +70,54 @@ class VerifiedCartRead:
     attempt_id: UUID | None
 
 
+@dataclass(frozen=True)
+class VerifiedInventoryRead:
+    """原始 GET Proof 固定的合成庫存或 Operation 查詢，不含可偽造回應。"""
+
+    operation: str
+    resource_id: str
+    attempt_id: UUID | None
+
+
+def decode_verified_inventory_read(
+    proof: VerifiedOperationBinding, *, raw_path: bytes, raw_body: bytes,
+) -> VerifiedInventoryRead:
+    """嚴格解出已受保護的 Inventory GET，拒絕有歧義的 URI／Body／UUID。
+
+    只驗證已由獨立 Verifier 固定的路由快照；呼叫者仍須以 Executor 物理
+    Login 查回 Receipt，並另行執行受保護 ReadAdmission 與來源驗證。
+    """
+    if (not isinstance(proof, VerifiedOperationBinding)
+            or proof.platform != "synthetic-inventory" or proof.method != "GET"
+            or not isinstance(raw_path, bytes) or not isinstance(raw_body, bytes)
+            or not isinstance(proof.request_path, str)
+            or raw_path != proof.request_path.encode("utf-8")
+            or raw_body != b"" or proof.request_body_sha256 != hashlib.sha256(b"").hexdigest()):
+        raise OperationBindingError("verified_inventory_read_snapshot_mismatch")
+    if (proof.operation_id, proof.path_template) == (
+            "getSyntheticInventory", "/synthetic/inventory/{sku}"):
+        # 既有 SKU 可含 Unicode／標點；僅封鎖 URI 正規化歧義和控制字元。
+        matched = re.fullmatch(rb"/synthetic/inventory/([^/%?#\x00-\x1f\x7f]{1,512})", raw_path)
+        if matched is not None and matched[1] not in {b".", b".."}:
+            try:
+                sku = matched[1].decode("utf-8", errors="strict")
+            except UnicodeDecodeError as exc:
+                raise OperationBindingError("verified_inventory_read_sku_invalid") from exc
+            if len(sku) <= 128:
+                return VerifiedInventoryRead("getSyntheticInventory", sku, None)
+    elif (proof.operation_id, proof.path_template) == (
+            "getSyntheticOperation", "/synthetic/operations/{attempt}"):
+        matched = re.fullmatch(rb"/synthetic/operations/([0-9a-f-]{36})", raw_path)
+        if matched is not None:
+            try:
+                attempt = UUID(matched[1].decode("ascii"))
+            except ValueError as exc:
+                raise OperationBindingError("verified_inventory_read_attempt_invalid") from exc
+            if attempt.version == 4 and str(attempt).encode("ascii") == matched[1]:
+                return VerifiedInventoryRead("getSyntheticOperation", str(attempt), attempt)
+    raise OperationBindingError("verified_inventory_read_operation_or_resource_denied")
+
+
 def decode_verified_cart_read(
     proof: VerifiedOperationBinding, *, resource_id: str,
     raw_path: bytes, raw_body: bytes,

@@ -318,14 +318,35 @@ def test_direct_verifier_dispatches_inventory_over_real_executor_mtls_once(isola
             assert accepted.json()["executor_result"]["status"] == "committed"
             assert accepted.json()["executor_result"]["operation"] == "reserveSyntheticInventory"
             assert gateway.send(request).status_code == 403
+            # I-03／I-04 走同一真 Verifier→Executor mTLS，僅取得 ReadAdmission。
+            for index, (read_path, operation) in enumerate((
+                    ("/synthetic/inventory/sku-1", "getSyntheticInventory"),
+                    ("/synthetic/operations/" + json.loads(body)["commit_attempt_id"],
+                     "getSyntheticOperation")), start=1):
+                request_id = f"two-process-read-{index}"
+                original = gateway.build_request("GET", read_path,
+                                                 headers={"x-request-id": request_id})
+                read_fingerprint = fingerprint_httpx_request(original, request_id)
+                original.headers["x-trusted-session"] = signed(
+                    key, jti=uuid4().hex, fingerprint=read_fingerprint,
+                    access_mode="inventory",
+                )
+                read_http = gateway.send(original)
+                assert read_http.status_code == 200, read_http.text  # 僅內部對帳 HTTP。
+                internal = read_http.json()["executor_result"]
+                assert internal["kind"] == "inventory_read_admitted"
+                assert internal["operation"] == operation
+                assert internal["state_version"] == 2
+                assert "status_code" not in internal and "body_b64" not in internal
+                assert gateway.send(original).status_code == 403
         with psycopg.connect(dsn) as connection:
             assert connection.execute(
                 "SELECT state->'inventory'->>'sku-1' FROM world_snapshots WHERE world_generation_id=%s",
                 (snapshot.scope.world_generation_id,),
             ).fetchone()[0] == "2"
             assert connection.execute("SELECT count(*) FROM protected_world_commit_sources").fetchone()[0] == 1
-            assert connection.execute("SELECT count(*) FROM protected_world_read_sources").fetchone()[0] == 1
-            assert connection.execute("SELECT count(*) FROM ingress_receipts").fetchone()[0] == 1
+            assert connection.execute("SELECT count(*) FROM protected_world_read_sources").fetchone()[0] == 3
+            assert connection.execute("SELECT count(*) FROM ingress_receipts").fetchone()[0] == 3
     finally:
         worker.terminate()
         worker.join(timeout=5)
