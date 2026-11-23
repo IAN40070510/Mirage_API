@@ -333,3 +333,12 @@ Commit Attempt UUID4、Result Digest、Version、Hash，所有 Header／Body
 
 這僅是內部 `native_projection`，不是公開客戶端的成功回應，
 也不核發 Send Lease；不得以本功能替代 G4／G5 安全控制。
+
+### I-03 未知歷史 Inventory Operation 的 409 候選（待真 PG CI）
+
+同一 `getSyntheticOperation` GET Proof／ReadAdmission 中，如果在完整
+環境、部署、Session、Generation 及 UUID4 條件下查無 `world_operations`，
+獨立唯讀 Validator 才可產生固定 `{"code":"operation_not_found"}`
+409 JSON。原始 Scope、目前快照 Hash、Epoch、Generation、Key 與期限照常
+重新核對。若記錄存在但為 rejected、來源摘要損壞或 COMMIT 不明，必須
+固定拒絕，不可偽裝成「查無」的 409。這仍是內部候選而非實際客戶端發送。

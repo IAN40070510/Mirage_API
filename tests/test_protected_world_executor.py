@@ -445,6 +445,15 @@ def test_inventory_get_receipt_admits_real_protected_read_without_native_http(
             assert json.loads(projected.body_bytes) == {"code": "unknown_synthetic_sku"}
         with pytest.raises(ProtectedGrantError, match="read_source_missing"):
             projector.project_inventory_snapshot(uuid4())
+    else:
+        # I-03：當前 World 的確不存在該歷史 UUID4，獨立讀取來源產生固定 409 候選。
+        projector = PostgresProtectedNativeProjector(dsn, expected_login=_real_login(dsn))
+        projected = projector.project_inventory_operation(receipt)
+        assert projected.status_code == 409 and projected.source.kind == "snapshot"
+        assert projected.source.state_hash == snapshot.state_hash
+        assert json.loads(projected.body_bytes) == {"code": "operation_not_found"}
+        with pytest.raises(ProtectedGrantError, match="read_source_missing"):
+            projector.project_inventory_operation(uuid4())
 
 
 def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolated_test_dsn, request, tmp_path):

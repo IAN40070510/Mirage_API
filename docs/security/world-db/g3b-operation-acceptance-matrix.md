@@ -150,3 +150,9 @@ C-03～C-06／C-08 七條已核准的 Synthetic Mutation 使用。
 及精確 Envelope。此路徑要求完整成功來源，不接受補造未知操作、
 失敗結果或 Runtime 自稱成功；目前所有七條仍須個別真 PG
 成功／業務拒絕／故障情境驗收，對外原生 HTTP 與 G4 Sender 保持封閉。
+
+**I-03 未知操作 409 候選（待真 PG CI）**：獨立 Validator 只有在受保護
+GET Receipt／ReadAdmission 已通過，且指定 UUID4 在同世代
+`world_operations` 確實不存在時，才按固定 Synthetic Inventory
+OpenAPI 回傳 `operation_not_found` 409 候選。已有記錄卻不可信不可
+降級成未知操作；對外仍禁止 Send。

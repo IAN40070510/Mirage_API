@@ -644,10 +644,10 @@ class FixedNativeValidatorMTLSClient:
         expected_read_admission_id: str, expected_world_generation_id: str,
         expected_state_version: int, expected_state_hash: str,
     ) -> dict[str, object]:
-        """以獨立 Validator 的 I-03 真 Commit/Read 證據取得固定成功候選。
+        """以獨立 Validator 的 I-03 真 Commit／缺少操作 Read 證據取得 200／409 候選。
 
-        Verifier 無權提供 Status、Body 或回應操作結果；歷史 Commit 的版本
-        可小於當前 ReadAdmission 的快照版本，不能偷換成當前版本。
+        Verifier 不提供 Body 或回應碼；200 必須有真 Commit；
+        409 僅允許 Validator 確定缺少操作而重建固定 operation_not_found。
         """
         from deception.world.transmission import response_hashes
 
@@ -678,22 +678,33 @@ class FixedNativeValidatorMTLSClient:
             parsed = json.loads(body, object_pairs_hook=unique_object,
                                 parse_constant=reject_constant)
             source, scope = result["source"], result["scope"]
+            native_status = result["status_code"]
             reservation = parsed.get("reservation") if isinstance(parsed, dict) else None
-            if (not isinstance(parsed, dict) or set(parsed) != {
-                    "commit_attempt_id", "state_version", "state_hash", "reservation"}
-                    or parsed["commit_attempt_id"] != resource_id
-                    or type(parsed["state_version"]) is not int
-                    or not 1 <= parsed["state_version"] <= expected_state_version
-                    or not isinstance(parsed["state_hash"], str)
-                    or re.fullmatch(r"[0-9a-f]{64}", parsed["state_hash"]) is None
-                    or not isinstance(reservation, dict)
-                    or set(reservation) != {"reservation_id", "sku", "quantity", "status"}
-                    or not isinstance(reservation["reservation_id"], str)
-                    or re.fullmatch(r"[0-9a-f]{32}", reservation["reservation_id"]) is None
-                    or not isinstance(reservation["sku"], str)
-                    or not 1 <= len(reservation["sku"]) <= 128
-                    or type(reservation["quantity"]) is not int or reservation["quantity"] < 1
-                    or reservation["status"] not in {"reserved", "cancelled"}
+            if type(native_status) is int and native_status == 200:
+                valid_body = (
+                    isinstance(parsed, dict)
+                    and set(parsed) == {"commit_attempt_id", "state_version", "state_hash", "reservation"}
+                    and parsed["commit_attempt_id"] == resource_id
+                    and type(parsed["state_version"]) is int
+                    and 1 <= parsed["state_version"] <= expected_state_version
+                    and isinstance(parsed["state_hash"], str)
+                    and re.fullmatch(r"[0-9a-f]{64}", parsed["state_hash"]) is not None
+                    and isinstance(reservation, dict)
+                    and set(reservation) == {"reservation_id", "sku", "quantity", "status"}
+                    and isinstance(reservation["reservation_id"], str)
+                    and re.fullmatch(r"[0-9a-f]{32}", reservation["reservation_id"]) is not None
+                    and isinstance(reservation["sku"], str)
+                    and 1 <= len(reservation["sku"]) <= 128
+                    and type(reservation["quantity"]) is int and reservation["quantity"] >= 1
+                    and reservation["status"] in {"reserved", "cancelled"})
+            elif type(native_status) is int and native_status == 409:
+                from deception.world.protected_native_http import fixed_synthetic_rejection_bytes
+                _, missing_body = fixed_synthetic_rejection_bytes(
+                    "synthetic-inventory", "operation_not_found")
+                valid_body = parsed == {"code": "operation_not_found"} and body == missing_body
+            else:
+                valid_body = False
+            if (not valid_body
                     or not isinstance(source, dict) or set(source) != {
                         "kind", "read_admission_id", "world_generation_id",
                         "state_version", "state_hash"}
@@ -711,20 +722,20 @@ class FixedNativeValidatorMTLSClient:
                     or result["receipt_id"] != str(receipt_id)
                     or result["operation_id"] != operation_id
                     or result["request_fingerprint"] != request_fingerprint
-                    or type(result["status_code"]) is not int or result["status_code"] != 200
+                    or type(result["status_code"]) is not int or native_status not in {200, 409}
                     or result["headers"] != [["content-type", "application/json"]]
                     or result["trusted_send"] != "disabled"
                     or body != json.dumps(parsed, ensure_ascii=False, sort_keys=True,
                                           separators=(",", ":")).encode("utf-8")
                     or result["envelope_hash"] != response_hashes(
-                        200, (("content-type", "application/json"),), body)[0]):
+                        native_status, (("content-type", "application/json"),), body)[0]):
                 raise ValueError("inventory_operation_binding_mismatch")
         except (ValueError, TypeError, KeyError, UnicodeError) as exc:
             raise ProtectedRpcConfigurationError("inventory_operation_binding_mismatch") from exc
         return {
-            "status_code": 200, "headers": [["content-type", "application/json"]],
+            "status_code": native_status, "headers": [["content-type", "application/json"]],
             "body_b64": base64.b64encode(body).decode("ascii"),
-            "body_sha256": response_hashes(200, (("content-type", "application/json"),), body)[1],
+            "body_sha256": response_hashes(native_status, (("content-type", "application/json"),), body)[1],
             "envelope_hash": result["envelope_hash"], "scope": dict(scope),
             "source": dict(source), "delivery": "candidate_only_no_send_authorization",
         }
