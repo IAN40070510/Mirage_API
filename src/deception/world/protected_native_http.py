@@ -132,10 +132,11 @@ class PostgresProtectedNativeProjector(_ProtectedConnection):
                 if proof is None or not isinstance(proof[5], str):
                     raise ProtectedGrantError("protected_inventory_operation_missing")
                 matched = re.fullmatch(r"/synthetic/inventory/([A-Za-z0-9._-]{1,128})", proof[5])
+                # GET 的原始 Content-Type 可以不存在，也可能由既有 Client 設定；
+                # 只要仍為空 Body 且原始 Proof/Fingerprint 已驗證，不能誤拒合法查詢。
                 if (proof[:5] != ("synthetic-inventory", "getSyntheticInventory", "GET",
                                    "/synthetic/inventory/{sku}", fingerprint)
-                        or matched is None or proof[6] != hashlib.sha256(b"").hexdigest()
-                        or proof[7] is not None):
+                        or matched is None or proof[6] != hashlib.sha256(b"").hexdigest()):
                     raise ProtectedGrantError("protected_inventory_operation_mismatch")
                 sku = matched[1]
                 cursor.execute(
