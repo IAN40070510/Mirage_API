@@ -53,6 +53,14 @@ Session 逐欄比對，保留已驗證的 `native_projection.status_code`、
 由 Runtime 自選 Body、Status 或 Template。不得把 `body_b64` 直接交給 Gateway
 發送，須先建立合法 Promotion／Authorized Snapshot／獨立 Sender Lease 與 G5 Fence。
 
+I-04 庫存 GET 新增另一個固定 mTLS 路徑
+`POST /internal/v1/project-inventory-snapshot`；Validator 唯讀重建原始
+`sku` 的 `200` JSON，核對不可變 ReadAdmission 與完整 WorldSnapshot
+版本、狀態雜湊、期限及 Epoch／Key。Verifier 重驗精確 JSON、SnapshotSource、
+Scope／Hash；篡改與過期固定 503，不會回退 Runtime 自填庫存數量。
+這只可認列 I-04 合法成功的**隔離候選子項**，未知 SKU 409、原生 ASGI
+傳輸與正式部署仍 OPEN，不提供 Sender 或 G4 Send Lease。
+
 候選投影結果可交既有 `PostgresCandidatePromoter` 的來源核對，
 **並沒有新增可對 Client 送出 400／404 的 HTTP endpoint**；正式獨立
 全 20 操作的原生 2xx／4xx、Contract Gate 和 G4 Sender

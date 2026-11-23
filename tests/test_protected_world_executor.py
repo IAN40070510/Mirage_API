@@ -283,7 +283,7 @@ def test_fixed_inventory_409_has_independent_validator_and_promotable_source(
                 "GRANT SELECT ON protected_world_rejection_sources,world_operations,"
                 "ingress_receipts,protected_http_operation_bindings,protected_world_read_sources,"
                 "read_admissions,session_heads,session_world_bindings,generation_controls,"
-                "trusted_key_revocations TO {}"
+                "trusted_key_revocations,world_snapshots TO {}"
             ).format(sql.Identifier(projector_login)))
 
         def cleanup_validator_role():
@@ -327,6 +327,7 @@ def test_fixed_inventory_409_has_independent_validator_and_promotable_source(
 
 @pytest.mark.parametrize("path,operation", [
     ("/synthetic/inventory/sku-1", "getSyntheticInventory"),
+    ("/synthetic/inventory/unknown-sku", "getSyntheticInventory"),
     ("/synthetic/operations/" + str(uuid4()), "getSyntheticOperation"),
 ])
 def test_inventory_get_receipt_admits_real_protected_read_without_native_http(
@@ -407,6 +408,22 @@ def test_inventory_get_receipt_admits_real_protected_read_without_native_http(
             (receipt,),
         ).fetchone()[0] == 1
         assert connection.execute("SELECT count(*) FROM world_operations").fetchone()[0] == 0
+    if operation == "getSyntheticInventory":
+        from deception.world.protected_native_http import PostgresProtectedNativeProjector
+
+        projector = PostgresProtectedNativeProjector(dsn, expected_login=_real_login(dsn))
+        if path.endswith("/sku-1"):
+            projected = projector.project_inventory_snapshot(receipt)
+            assert projected.status_code == 200 and projected.source.kind == "snapshot"
+            assert projected.source.state_hash == snapshot.state_hash
+            assert json.loads(projected.body_bytes) == {
+                "sku": "sku-1", "available": 4, "state_version": 1,
+            }
+        else:
+            with pytest.raises(ProtectedGrantError, match="not_projectable"):
+                projector.project_inventory_snapshot(receipt)
+        with pytest.raises(ProtectedGrantError, match="read_source_missing"):
+            projector.project_inventory_snapshot(uuid4())
 
 
 def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolated_test_dsn, request, tmp_path):
@@ -567,7 +584,7 @@ def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolat
                 "protected_world_rejection_sources,world_operations,"
                 "protected_http_operation_bindings,protected_world_read_sources,"
                 "read_admissions,session_heads,session_world_bindings,"
-                "generation_controls,trusted_key_revocations TO {}"
+                "generation_controls,trusted_key_revocations,world_snapshots TO {}"
             ).format(sql.Identifier(projector_login)))
 
         def cleanup_validator_role():

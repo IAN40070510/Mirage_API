@@ -60,11 +60,21 @@ Inventory I-03 `GET /synthetic/operations/{attempt}` 與 I-04
 `GET /synthetic/inventory/{sku}` 另有固定 Handler 讀取子切面：Executor 從
 受保護 Proof 核對原始空 Body／路徑、UUID4／SKU，再由 Receipt 建立
 ReadAdmission；RPC 僅返回 `inventory_read_admitted`、來源 ID、世代及
-版本／Hash。它**不會產生查詢成功／業務拒絕 Payload**，也沒有可送出的
-原生 HTTP Status／Headers／Body。包含百分比編碼 SKU 的 URI 相容測試仍
+版本／Hash。I-04 可再透過獨立 Validator 的
+`POST /internal/v1/project-inventory-snapshot`，只按 Receipt 及唯讀 World
+Snapshot 重建精確 `200 {sku,available,state_version}` 候選；Verifier 逐欄核對
+Scope、Fingerprint、SnapshotSource、Body 與 Hash，**仍只回內部 200**。
+I-03 尚未產生可信查詢 Payload，I-04 未知 SKU 的業務 409 也尚無獨立來源。
+包含百分比編碼 SKU 的 URI 相容測試仍
 未解決；ReadAdmission 子切面已在固定 SHA `49fc6ed8` 的
 [真 PostgreSQL CI](https://github.com/IAN40070510/Mirage_API/actions/runs/45185402530)
 通過，但完整 GET 回應仍 OPEN。
+
+**I-04 200 Candidate 待固定 SHA 真 CI**：Validator 對受保護的
+`protected_world_read_sources`、`read_admissions`、原始 GET Proof 與
+World 快照完整性雜湊做一致性核對；快照版本已移動、過期、缺 SKU、
+Session Epoch／Key 撤銷時固定失敗而非合成業務 409。獨立 Validator
+需要唯讀 `world_snapshots` SELECT，Runtime 無權持有該物理 Login。
 新增 Synthetic 固定 mutation 真業務拒絕來源：Executor 將已保存
 `rejected` 的結果與 409 固定 Envelope Hash 原子寫入受保護拒絕表，
 獨立 Validator 從 Receipt 重建 JSON `{"code":"..."}`。Verifier 僅在

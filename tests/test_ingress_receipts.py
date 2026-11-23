@@ -361,7 +361,7 @@ def test_direct_verifier_dispatches_inventory_over_real_executor_mtls_once(isola
             assert accepted.json()["executor_result"]["status"] == "committed"
             assert accepted.json()["executor_result"]["operation"] == "reserveSyntheticInventory"
             assert gateway.send(request).status_code == 403
-            # I-03／I-04 走同一真 Verifier→Executor mTLS，僅取得 ReadAdmission。
+            # I-04 從獨立 Validator 取得 200 候選；I-03 仍只有 ReadAdmission。
             for index, (read_path, operation) in enumerate((
                     ("/synthetic/inventory/sku-1", "getSyntheticInventory"),
                     ("/synthetic/operations/" + json.loads(body)["commit_attempt_id"],
@@ -381,6 +381,17 @@ def test_direct_verifier_dispatches_inventory_over_real_executor_mtls_once(isola
                 assert internal["operation"] == operation
                 assert internal["state_version"] == 2
                 assert "status_code" not in internal and "body_b64" not in internal
+                if operation == "getSyntheticInventory":
+                    candidate = read_http.json()["native_projection"]
+                    assert candidate["status_code"] == 200
+                    assert candidate["source"]["kind"] == "snapshot"
+                    assert candidate["source"]["state_hash"] == internal["state_hash"]
+                    assert json.loads(base64.b64decode(candidate["body_b64"], validate=True)) == {
+                        "sku": "sku-1", "available": 2, "state_version": 2,
+                    }
+                    assert candidate["delivery"] == "candidate_only_no_send_authorization"
+                else:
+                    assert "native_projection" not in read_http.json()
                 assert gateway.send(original).status_code == 403
             # 真實拒絕來源只有被固定 Handler 拒絕後才能由另一程序投影。
             failed_body = json.dumps({"sku": "missing", "quantity": 1,

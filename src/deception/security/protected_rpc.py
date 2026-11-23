@@ -293,6 +293,86 @@ class FixedNativeValidatorMTLSClient:
             "delivery": "candidate_only_no_send_authorization",
         }
 
+    async def project_inventory_snapshot(
+        self, *, receipt_id: UUID, operation_id: str, resource_id: str,
+        request_fingerprint: str, expected_environment_id: str,
+        expected_deployment_id: str, expected_session_id: str,
+    ) -> dict[str, object]:
+        """只從唯讀 Validator 的固定 I-04 ReadAdmission 重建 200 候選。
+
+        Verifier 不傳回應碼、庫存數量、版本或 Body；獨立校驗契約、來源
+        ReadAdmission、Scope、Envelope 和精確 JSON bytes，絕不允許直接 Send。
+        """
+        from deception.world.transmission import response_hashes
+
+        if (operation_id != "getSyntheticInventory"
+                or not isinstance(resource_id, str)
+                or re.fullmatch(r"[A-Za-z0-9._-]{1,128}", resource_id) is None):
+            raise ProtectedRpcConfigurationError("inventory_validator_operation_unapproved")
+        async with httpx.AsyncClient(verify=self._tls, trust_env=False, timeout=8.0) as client:
+            response = await client.post(
+                self._origin + "/internal/v1/project-inventory-snapshot",
+                json={"receipt_id": str(receipt_id)},
+            )
+        if response.status_code != 200:
+            raise ProtectedRpcConfigurationError("inventory_validator_projection_unverifiable")
+        try:
+            result = json.loads(response.content, object_pairs_hook=unique_object,
+                                parse_constant=reject_constant)
+            if not isinstance(result, dict) or set(result) != {
+                    "receipt_id", "operation_id", "scope", "request_fingerprint",
+                    "status_code", "headers", "body_b64", "envelope_hash", "source",
+                    "trusted_send"}:
+                raise ValueError("inventory_validator_shape_invalid")
+            body = _canonical_base64(result["body_b64"], max_bytes=4096)
+            parsed_body = json.loads(body, object_pairs_hook=unique_object,
+                                     parse_constant=reject_constant)
+            source = result["source"]
+            scope = result["scope"]
+            if (not isinstance(parsed_body, dict)
+                    or set(parsed_body) != {"sku", "available", "state_version"}
+                    or parsed_body["sku"] != resource_id
+                    or type(parsed_body["available"]) is not int or parsed_body["available"] < 0
+                    or type(parsed_body["state_version"]) is not int
+                    or parsed_body["state_version"] < 1
+                    or not isinstance(source, dict) or set(source) != {
+                        "kind", "read_admission_id", "world_generation_id",
+                        "state_version", "state_hash"}
+                    or source["kind"] != "snapshot"
+                    or not isinstance(source["read_admission_id"], str)
+                    or re.fullmatch(r"[0-9a-f]{32}", source["read_admission_id"]) is None
+                    or source["state_version"] != parsed_body["state_version"]
+                    or not isinstance(source["state_hash"], str)
+                    or re.fullmatch(r"[0-9a-f]{64}", source["state_hash"]) is None
+                    or not isinstance(scope, dict) or set(scope) != {
+                        "environment_id", "deployment_id", "session_id", "world_generation_id"}
+                    or (scope.get("environment_id"), scope.get("deployment_id"),
+                        scope.get("session_id")) != (
+                        expected_environment_id, expected_deployment_id, expected_session_id)
+                    or not isinstance(scope.get("world_generation_id"), str)
+                    or not scope["world_generation_id"]
+                    or source["world_generation_id"] != scope["world_generation_id"]
+                    or body != json.dumps(parsed_body, ensure_ascii=False, sort_keys=True,
+                                          separators=(",", ":")).encode("utf-8")
+                    or result["receipt_id"] != str(receipt_id)
+                    or result["operation_id"] != operation_id
+                    or result["request_fingerprint"] != request_fingerprint
+                    or type(result["status_code"]) is not int or result["status_code"] != 200
+                    or result["headers"] != [["content-type", "application/json"]]
+                    or result["trusted_send"] != "disabled"
+                    or result["envelope_hash"] != response_hashes(
+                        200, (("content-type", "application/json"),), body)[0]):
+                raise ValueError("inventory_validator_binding_mismatch")
+        except (ValueError, TypeError, KeyError, UnicodeError) as exc:
+            raise ProtectedRpcConfigurationError("inventory_validator_binding_mismatch") from exc
+        return {
+            "status_code": 200, "headers": [["content-type", "application/json"]],
+            "body_b64": base64.b64encode(body).decode("ascii"),
+            "body_sha256": response_hashes(200, (("content-type", "application/json"),), body)[1],
+            "envelope_hash": result["envelope_hash"], "source": dict(source),
+            "scope": dict(scope), "delivery": "candidate_only_no_send_authorization",
+        }
+
 
 def _canonical_base64(raw: str, *, max_bytes: int) -> bytes:
     """嚴格拒絕替代編碼與超大資料，避免 RPC 與 Verifier 解析分歧。"""
@@ -394,6 +474,7 @@ def create_native_validator_app(*, projector) -> FastAPI:
         """只回報 Validator 已掛載且 Sender 關閉，不承諾來源或 Profile 已核准。"""
         return {"control_plane": "native-validator-candidate-only", "trusted_send": "disabled"}
 
+    @app.post("/internal/v1/project-inventory-snapshot")
     @app.post("/internal/v1/project-synthetic-rejection")
     @app.post("/internal/v1/project-medusa-rejection")
     async def project(request: Request) -> dict[str, object]:
@@ -414,7 +495,9 @@ def create_native_validator_app(*, projector) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="native_validator_request_invalid") from exc
         try:
-            if request.scope.get("path") == "/internal/v1/project-synthetic-rejection":
+            if request.scope.get("path") == "/internal/v1/project-inventory-snapshot":
+                projected = projector.project_inventory_snapshot(UUID(str(call.receipt_id)))
+            elif request.scope.get("path") == "/internal/v1/project-synthetic-rejection":
                 projected = projector.project_synthetic_rejection(UUID(str(call.receipt_id)))
             else:
                 projected = projector.project_medusa_rejection(UUID(str(call.receipt_id)))
@@ -553,6 +636,23 @@ def create_direct_verifier_app(
             except Exception as exc:
                 raise HTTPException(status_code=503,
                                     detail="direct_verifier_native_projection_unverifiable") from exc
+        elif (isinstance(outcome, dict) and outcome.get("kind") == "inventory_read_admitted"
+              and operation.operation_id == "getSyntheticInventory"):
+            if native_validator_client is None:
+                raise HTTPException(status_code=503,
+                                    detail="direct_verifier_native_validator_not_wired")
+            try:
+                projection = await native_validator_client.project_inventory_snapshot(
+                    receipt_id=receipt_id, operation_id=operation.operation_id,
+                    resource_id=outcome["resource_id"],
+                    request_fingerprint=fingerprint_request(normalized),
+                    expected_environment_id=claims.environment_id,
+                    expected_deployment_id=claims.deployment_id,
+                    expected_session_id=claims.session_id,
+                )
+            except Exception as exc:
+                raise HTTPException(status_code=503,
+                                    detail="direct_verifier_inventory_projection_unverifiable") from exc
         elif (isinstance(outcome, dict) and outcome.get("kind") == "world_mutation"
               and outcome.get("status") == "rejected"):
             if native_validator_client is None:

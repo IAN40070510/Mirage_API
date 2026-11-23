@@ -160,6 +160,37 @@ def _gateway() -> None:
         }, sort_keys=True))
         if gateway.send(request).status_code != 403:
             raise RuntimeError("g3b_ci_replay_accepted")
+        # I-04 的 200 唯讀庫存資料須從獨立 Validator 查實際 Snapshot 版本，
+        # 不是把 Executor 的 ReadAdmission Metadata 當成原生客戶端 200。
+        inventory_get = gateway.build_request(
+            "GET", origin + "/synthetic/inventory/sku-1",
+            headers={"x-request-id": "g3b-ci-inventory-get-200"},
+        )
+        inventory_get.headers["x-trusted-session"] = _sign(
+            key, fingerprint=fingerprint_httpx_request(
+                inventory_get, "g3b-ci-inventory-get-200"),
+            session="session", mode="inventory",
+        )
+        read_result = gateway.send(inventory_get)
+        if read_result.status_code != 200:
+            raise RuntimeError("g3b_ci_inventory_snapshot_internal_rpc_unverifiable")
+        read_candidate = read_result.json().get("native_projection", {})
+        read_bytes = base64.b64decode(read_candidate.get("body_b64", ""), validate=True)
+        read_headers = (("content-type", "application/json"),)
+        if (read_candidate.get("status_code") != 200
+                or read_candidate.get("source", {}).get("kind") != "snapshot"
+                or read_candidate.get("source", {}).get("state_version") != 2
+                or read_candidate.get("scope", {}).get("session_id") != "session"
+                or read_candidate.get("delivery") != "candidate_only_no_send_authorization"
+                or read_candidate.get("envelope_hash") != response_hashes(200, read_headers, read_bytes)[0]
+                or json.loads(read_bytes) != {"sku": "sku-1", "available": 3, "state_version": 2}
+                or gateway.send(inventory_get).status_code != 403):
+            raise RuntimeError("g3b_ci_inventory_snapshot_validator_source_mismatch")
+        print("G3B_ROUTE_PROTECTED_INVENTORY_SNAPSHOT " + json.dumps({
+            "operation_id": "getSyntheticInventory", "http_status": read_result.status_code,
+            "validated_native_status": 200, "source": "protected_world_read_sources",
+            "native_business_response": False,
+        }, sort_keys=True))
         # 真實四容器與兩組 mTLS CA：已拒絕的 Handler 結果只能由獨立 Validator
         # 還原 409 候選，外層控制面 200 不能冒稱 Client 已收到原生 409。
         rejection_body = json.dumps({
@@ -243,7 +274,7 @@ def _gateway() -> None:
         except socket.gaierror:
             continue
         raise RuntimeError("g3b_ci_gateway_network_leak:" + hostname)
-    print("G3B_GATEWAY_PASS unsigned_routes=20/20 inventory_commit=1 synthetic_409=1 medusa_400=1 "
+    print("G3B_GATEWAY_PASS unsigned_routes=20/20 inventory_commit=1 inventory_read_200=1 synthetic_409=1 medusa_400=1 "
           "medusa_404=1 replay=denied anonymous=denied execution_network=unreachable trusted_send=off")
 
 
@@ -298,7 +329,7 @@ def _audit(root: Path) -> None:
             raise RuntimeError("g3b_ci_medusa_rejection_evidence_missing")
         if admin.execute("SELECT count(*) FROM protected_world_rejection_sources").fetchone()[0] != 1:
             raise RuntimeError("g3b_ci_synthetic_rejection_evidence_missing")
-        if admin.execute("SELECT count(*) FROM protected_http_operation_bindings").fetchone()[0] != 4:
+        if admin.execute("SELECT count(*) FROM protected_http_operation_bindings").fetchone()[0] != 5:
             raise RuntimeError("g3b_ci_operation_proof_count_mismatch")
         for role, forbidden in (
                 ("mirage_g3b_ci_verifier", "protected_world_commit_sources"),
