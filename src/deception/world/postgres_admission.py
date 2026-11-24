@@ -49,6 +49,10 @@ class PostgresAdmissionControl:
         """
         if not isinstance(projection_registry, PostgresProjectionRegistry) or not projection_registry.shares_store(self._dsn):
             return None
+        if source.kind == "cart_creation":
+            # 原型 Grant 不驗證 Creator Receipt／派生 Lineage；此來源專屬獨立
+            # PostgresProtectedAuthorizer，不能靠任何 legacy Audit 參數繞過。
+            raise ValueError("cart creation requires protected authorizer")
         with self._connection() as connection:
             with connection.cursor() as cursor:
                 self._ensure_generation(cursor, world_generation_id)

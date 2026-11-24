@@ -198,8 +198,8 @@ Session／WorldGeneration。不能把衍生 Cart 快照直接當作 Creator Scop
 Commit Receipt、雙方 Session Head／Generation、期限及 Key Revocation
 重建固定 200 JSON；Projection／Promotion／Admission **全部保持 Creator
 Scope**，只有 Source 指向 Derived Session。Promotion 必須重算精確
-Envelope Hash；Grant 交易再驗來源是否仍有效，舊 Prototype Audit 不能
-藉此繞過獨立 Authorizer。
+Envelope Hash；Grant 交易再驗來源是否仍有效，舊 Prototype Grant／Audit
+不得接受這個特殊來源來繞過獨立 Authorizer。
 
 [真 PostgreSQL 17.6 CI 45331338643](https://github.com/IAN40070510/Mirage_API/actions/runs/45331338643)
 `155 passed`、真 mTLS `5 passed`、G5 密碼學回歸 `9 passed`；

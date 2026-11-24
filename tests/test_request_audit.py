@@ -168,7 +168,7 @@ def test_legacy_request_audit_cannot_accept_unprotected_cross_scope_creation(aud
                                 commit_attempt_id=str(uuid4()), state_version=1,
                                 state_hash="d" * 64)
     assert source.derived_world_generation_id != snapshot.scope.world_generation_id
-    with pytest.raises(ValueError, match="request audit admission mismatch"):
+    with pytest.raises(ValueError, match="cart creation requires protected authorizer"):
         audited_grant(audit_case, source=source)
     with psycopg.connect(audit._dsn) as connection:
         assert connection.execute("SELECT count(*) FROM response_admissions").fetchone() == (0,)
