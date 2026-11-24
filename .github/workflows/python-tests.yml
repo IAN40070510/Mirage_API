@@ -6,8 +6,6 @@ on:
       - main
       - 'refactor/mirage-*-standalone-20261125'
   pull_request:
-    branches:
-      - main
   workflow_dispatch:
 
 permissions:
