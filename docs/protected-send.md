@@ -86,3 +86,25 @@ Object Store 的 GC／共享 Blob Pin、跨資料庫 Restore quarantine 或
 
 套件與授權：僅使用專案既有 `psycopg`、Starlette／ASGI、Python 標準庫與
 PostgreSQL 17；未加入新模型／商用外部服務。依賴授權沿用專案既有清單。
+
+## 2026-11-24 Lease 回傳綁定補強：固定版本證據
+
+修補程式 SHA [`1eee81ed4648e6ceee4d61b40aa5db15cd0d14cd`](https://github.com/IAN40070510/Mirage_API/commit/1eee81ed4648e6ceee4d61b40aa5db15cd0d14cd)。
+先新增 ASGI 負面測試，實測「回傳 Deadline 較短」在修補前未被拒絕；
+加入回傳 Lease UUIDv4／Deadline 精確比對後，同一案例與非法 UUID 均拒絕，
+首筆 `http.response.start`／body 未輸出。正常 Lease、原有錯 Receipt／
+Payload 與未知 ACK 單次毒化測試仍通過。
+
+- 本地：G4／Protected Services／Operation Binding／Anchor／mTLS 聚焦
+  `130 passed / 5 skipped`；五項未設 `MIRAGE_POSTGRES_TEST_DSN`，不是 PASS。
+  `tools/check_documentation.py` PASS（1951 functions、71 guides），`git diff --check` PASS。
+- [真 PostgreSQL 17.6 受保護合約 CI 45402191600](https://github.com/IAN40070510/Mirage_API/actions/runs/45402191600)：
+  `166 passed`，另跑實體 mTLS `5 passed`、G5 Anchor 密碼學模擬 `9 passed`。
+- [Python CI 45402191237](https://github.com/IAN40070510/Mirage_API/actions/runs/45402191237)：
+  `1449 passed / 21 skipped / 2 warnings`。
+- [容器示範 CI 45402191268](https://github.com/IAN40070510/Mirage_API/actions/runs/45402191268)：`success`。
+
+上述證據只能簽收「G4 Lease 回傳欄位的 ASGI 前置完整性防護」子項。
+CI 中的 PostgreSQL 不是部署環境的獨立 Sender 登入驗收；G5 獨立 Restore
+Fence、真實 Sender 對外 ASGI、跨 DB 故障注入、G6 及最終 Owner Release
+仍 **OPEN／NO-GO**，Trusted Send 保持 **OFF**。
