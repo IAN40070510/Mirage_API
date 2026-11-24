@@ -325,6 +325,53 @@ def _gateway() -> None:
             "validated_native_status": 409, "template_id": "unknown_synthetic_sku",
             "source": "protected_world_rejection_sources", "native_business_response": False,
         }, sort_keys=True))
+        # C-01：合法 Creator JWS 真走四容器建立 Cart，獨立 Validator 只能由
+        # 新派生世界建立 200 候選，不得把 Derived Scope 當成 Creator Admission。
+        create_request_id = "g3b-ci-cart-create-200"
+        cart_create = gateway.build_request(
+            "POST", origin + "/synthetic/carts", content=b"{}",
+            headers={"x-request-id": create_request_id, "content-type": "application/json"},
+        )
+        cart_create.headers["x-trusted-session"] = _sign(
+            key, fingerprint=fingerprint_httpx_request(cart_create, create_request_id),
+            session="g3b-ci-cart-creator", mode="cart",
+        )
+        created_result = gateway.send(cart_create)
+        if created_result.status_code != 200:
+            raise RuntimeError("g3b_ci_cart_creation_rpc_unverifiable")
+        created_json = created_result.json()
+        created_metadata = created_json.get("executor_result", {})
+        created_projection = created_json.get("native_projection", {})
+        created_source = created_projection.get("source", {})
+        created_body = base64.b64decode(created_projection.get("body_b64", ""), validate=True)
+        created_payload = json.loads(created_body)
+        if (created_metadata.get("kind") != "cart_created"
+                or created_metadata.get("operation") != "createGuestCart"
+                or created_metadata.get("status") != "committed"
+                or created_projection.get("status_code") != 200
+                or created_projection.get("operation_id") is not None
+                or created_source.get("kind") != "cart_creation"
+                or created_source.get("resource_id") != created_metadata.get("resource_id")
+                or created_source.get("commit_attempt_id") != created_metadata.get("commit_attempt_id")
+                or created_source.get("derived_session_id") == "g3b-ci-cart-creator"
+                or created_projection.get("scope", {}).get("session_id") != "g3b-ci-cart-creator"
+                or created_projection.get("scope", {}).get("world_generation_id")
+                    == created_source.get("derived_world_generation_id")
+                or created_projection.get("delivery") != "candidate_only_no_send_authorization"
+                or created_payload.get("cart", {}).get("id") != created_metadata.get("resource_id")
+                or created_payload.get("cart", {}).get("items") != []
+                or created_payload.get("state_version") != 1
+                or created_payload.get("commit_attempt_id") != created_metadata.get("commit_attempt_id")
+                or created_payload.get("state_hash") != created_source.get("state_hash")
+                or created_projection.get("envelope_hash") != response_hashes(
+                    200, read_headers, created_body)[0]
+                or gateway.send(cart_create).status_code != 403):
+            raise RuntimeError("g3b_ci_cart_creation_validator_source_mismatch")
+        print("G3B_ROUTE_PROTECTED_CART_CREATION_CANDIDATE " + json.dumps({
+            "operation_id": "createGuestCart", "outer_http_status": created_result.status_code,
+            "validated_native_status": 200, "source": "protected_cart_creations",
+            "authorization_scope": "creator", "native_business_response": False,
+        }, sort_keys=True))
         # C-02：同樣透過真 Gateway→Cart Executor→獨立唯讀 Validator，
         # 只能查驗與既有派生 Cart Session 相符的原生成功 JSON 候選。
         cart_request_id = "g3b-ci-cart-get-200"
@@ -412,7 +459,7 @@ def _gateway() -> None:
         raise RuntimeError("g3b_ci_gateway_network_leak:" + hostname)
     print("G3B_GATEWAY_PASS unsigned_routes=20/20 inventory_commit=1 inventory_read_200=1 "
           "inventory_operation_200=1 inventory_absence_409=1 unknown_operation=503 "
-          "synthetic_409=1 cart_read_200=1 medusa_400=1 medusa_404=1 "
+          "synthetic_409=1 cart_create_200=1 cart_read_200=1 medusa_400=1 medusa_404=1 "
           "replay=denied anonymous=denied "
           "execution_network=unreachable trusted_send=off")
 
@@ -476,6 +523,7 @@ def _audit(root: Path) -> None:
                 "reserveSyntheticInventory": 2,
                 "getSyntheticInventory": 2,
                 "getSyntheticOperation": 2,
+                "createGuestCart": 1,
                 "getGuestCart": 1,
                 "PostCartsIdLineItems": 2,
         }:
@@ -484,10 +532,18 @@ def _audit(root: Path) -> None:
                 ("mirage_g3b_ci_verifier", "protected_world_commit_sources"),
                 ("mirage_g3b_ci_validator", "protected_medusa_rejection_sources"),
                 ("mirage_g3b_ci_validator", "protected_world_rejection_sources"),
+                ("mirage_g3b_ci_validator", "protected_cart_creations"),
+                ("mirage_g3b_ci_validator", "guest_cart_creations"),
                 ("mirage_g3b_ci_runtime", "ingress_receipts")):
             if admin.execute("SELECT has_table_privilege(%s,%s,'INSERT')",
                              (role, forbidden)).fetchone() != (False,):
                 raise RuntimeError("g3b_ci_forbidden_acl:" + role)
+        for table in ("protected_cart_creations", "guest_cart_creations"):
+            if (admin.execute("SELECT has_table_privilege(%s,%s,'SELECT')",
+                              ("mirage_g3b_ci_validator", table)).fetchone() != (True,)
+                    or admin.execute("SELECT has_table_privilege(%s,%s,'SELECT')",
+                                     ("mirage_g3b_ci_runtime", table)).fetchone() != (False,)):
+                raise RuntimeError("g3b_ci_cart_creation_source_acl_mismatch:" + table)
     runtime_dsn = (root / "probe" / "runtime-host.dsn").read_text(encoding="utf-8")
     with psycopg.connect(runtime_dsn) as runtime:
         if runtime.execute("SELECT current_user,session_user").fetchone() != (

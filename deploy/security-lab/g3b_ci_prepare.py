@@ -132,7 +132,8 @@ def _provision_roles(admin_dsn: str) -> dict[str, str]:
              "protected_http_operation_bindings,protected_world_read_sources,read_admissions,"
              "session_heads,session_world_bindings,generation_controls,trusted_key_revocations,"
              "protected_world_rejection_sources,world_operations,world_commit_receipts,"
-             "protected_world_commit_sources,world_snapshots,synthetic_resources"),
+             "protected_world_commit_sources,world_snapshots,synthetic_resources,"
+             "protected_cart_creations,guest_cart_creations"),
         )
         for role, privilege, names in grants:
             admin.execute(sql.SQL("GRANT {} ON {} TO {}").format(
