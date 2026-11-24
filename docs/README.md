@@ -8,11 +8,11 @@
 
 專案自有程式採 Apache-2.0；Medusa 規格、OWASP 分類資料、套件及模型的個別授權與封裝聲明見 [專案授權與第三方材料](licensing.md)。
 
-**v0.2 契約基準**：Mirage 上游 `main` `88dc2008fd35a2d3873949a769653dc9f18e8980`；MSDSS Freeze v1 整合基準 `main` `5a1ee26dcf79f04cf29345a0403e3f3f8082358b`；文件前置分支 `docs/mir-sec-world-001-adr-v0.1`／HEAD `003c918f142296588d2fe14b70fafe3cc5cf8458`（**main 尚未包含 ADR**）。此 Draft 不是 Runtime 或 PostgreSQL ACL 已實作。測試 ID 與 NOT_RUN 的唯一清單見 [Verification Plan](security/world-db/verification-plan.md)；文件工具應執行 `python tools/check_documentation.py`。
+**v0.2 契約基準**：Mirage 上游 `main` `88dc2008fd35a2d3873949a769653dc9f18e8980`；外部判定服務 Freeze v1 整合基準 `main` `5a1ee26dcf79f04cf29345a0403e3f3f8082358b`；文件前置分支 `docs/mir-sec-world-001-adr-v0.1`／HEAD `003c918f142296588d2fe14b70fafe3cc5cf8458`（**main 尚未包含 ADR**）。此 Draft 不是 Runtime 或 PostgreSQL ACL 已實作。測試 ID 與 NOT_RUN 的唯一清單見 [Verification Plan](security/world-db/verification-plan.md)；文件工具應執行 `python tools/check_documentation.py`。
 
-安全架構提案（**尚未實作／尚未驗收**）：[MIR-SEC-WORLD-001 World DB 信任邊界 ADR v0.2](adr/MIR-SEC-WORLD-001-world-db-trust-boundary.md)；[決策歷史、權威證據、交易鎖與負面測試索引](security/world-db/README.md)。狀態：Architecture Proposed／Weakness OPEN／MSDSS P2 NO-GO。
+安全架構提案（**尚未實作／尚未驗收**）：[MIR-SEC-WORLD-001 World DB 信任邊界 ADR v0.2](adr/MIR-SEC-WORLD-001-world-db-trust-boundary.md)；[決策歷史、權威證據、交易鎖與負面測試索引](security/world-db/README.md)。狀態：Architecture Proposed／Weakness OPEN／外部端權限驗收 NO-GO。
 
-**ADR 三層證據狀態**：MSDSS Freeze v1 baseline **ACCEPTED**、Mirage Owner adoption **PENDING**、Mirage native conformance **NOT_RUN**；新增 `WORLD-PROTOCOL-MATRIX-01`、`WORLD-RESTORE-FENCE-01`、`WORLD-PURGE-BOUNDARY-01` 仍為設計中的驗收，完整內容見 [World DB 驗收計畫](security/world-db/verification-plan.md)，並非已通過測試。
+**ADR 三層證據狀態**：外部判定服務 Freeze v1 baseline **ACCEPTED**、Mirage Owner adoption **PENDING**、Mirage native conformance **NOT_RUN**；新增 `WORLD-PROTOCOL-MATRIX-01`、`WORLD-RESTORE-FENCE-01`、`WORLD-PURGE-BOUNDARY-01` 仍為設計中的驗收，完整內容見 [World DB 驗收計畫](security/world-db/verification-plan.md)，並非已通過測試。
 
 | 工具／介面 | 程式位置 | 說明文件 |
 | --- | --- | --- |
