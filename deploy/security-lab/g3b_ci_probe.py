@@ -604,6 +604,86 @@ def _gateway() -> None:
             "validated_native_status": 409, "template_id": "unknown_synthetic_variant",
             "native_business_response": False,
         }, sort_keys=True))
+        # C-04／C-05：同一 Derived Cart 的受保護 CAS 版本 2→3→4。
+        # 不接受 Runtime 自稱的 item ID；只能從上一個 Validator 200 候選取值。
+        item_id = items[0].get("id")
+        if not isinstance(item_id, str) or re.fullmatch(r"item_[0-9a-f]{32}", item_id) is None:
+            raise RuntimeError("g3b_ci_derived_cart_committed_item_id_invalid")
+        mutation_route = origin + "/synthetic/carts/" + derived_id + "/line-items/" + item_id
+        for label, method, operation_id, expected_version, next_version, quantity in (
+                ("update", "POST", "updateGuestCartItem", 2, 3, 3),
+                ("remove", "DELETE", "removeGuestCartItem", 3, 4, None)):
+            mutation_request_id = "g3b-ci-derived-cart-" + label
+            mutation_attempt = str(uuid4())
+            mutation_input = {
+                "expected_version": expected_version,
+                "idempotency_key": "g3b-derived-cart-" + label + "-once",
+                "commit_attempt_id": mutation_attempt,
+            }
+            if quantity is not None:
+                mutation_input["quantity"] = quantity
+            mutation_bytes = json.dumps(
+                mutation_input, separators=(",", ":"), sort_keys=True,
+            ).encode("utf-8")
+            mutation = gateway.build_request(
+                method, mutation_route, content=mutation_bytes,
+                headers={"x-request-id": mutation_request_id,
+                         "content-type": "application/json"},
+            )
+            mutation.headers["x-trusted-session"] = _sign(
+                key, fingerprint=fingerprint_httpx_request(mutation, mutation_request_id),
+                session=derived_session, mode="cart", resource_id=derived_id,
+            )
+            mutation_result = gateway.send(mutation)
+            if mutation_result.status_code != 200:
+                raise RuntimeError("g3b_ci_derived_cart_" + label + "_rpc_unverifiable")
+            mutation_json = mutation_result.json()
+            mutation_metadata = mutation_json.get("executor_result", {})
+            mutation_projection = mutation_json.get("native_projection", {})
+            mutation_source = mutation_projection.get("source", {})
+            mutation_body = base64.b64decode(
+                mutation_projection.get("body_b64", ""), validate=True,
+            )
+            mutation_payload = json.loads(mutation_body)
+            mutation_cart = mutation_payload.get("cart", {})
+            mutation_items = mutation_cart.get("items", [])
+            if (mutation_metadata.get("kind") != "world_mutation"
+                    or mutation_metadata.get("operation") != operation_id
+                    or mutation_metadata.get("status") != "committed"
+                    or mutation_metadata.get("commit_attempt_id") != mutation_attempt
+                    or mutation_metadata.get("state_version") != next_version
+                    or mutation_projection.get("status_code") != 200
+                    or mutation_source.get("kind") != "committed_operation"
+                    or mutation_source.get("operation_result_digest")
+                        != mutation_metadata.get("result_digest")
+                    or mutation_source.get("committed_state_version") != next_version
+                    or mutation_source.get("committed_state_hash")
+                        != mutation_metadata.get("state_hash")
+                    or mutation_projection.get("scope", {}).get("session_id") != derived_session
+                    or mutation_projection.get("scope", {}).get("world_generation_id")
+                        != created_source.get("derived_world_generation_id")
+                    or mutation_projection.get("delivery")
+                        != "candidate_only_no_send_authorization"
+                    or mutation_payload.get("state_version") != next_version
+                    or mutation_payload.get("state_hash") != mutation_metadata.get("state_hash")
+                    or mutation_payload.get("commit_attempt_id") != mutation_attempt
+                    or mutation_cart.get("id") != derived_id
+                    or mutation_cart.get("status") != "active"
+                    or mutation_cart.get("total") != (quantity or 0) * 100
+                    or not isinstance(mutation_items, list)
+                    or len(mutation_items) != (1 if quantity is not None else 0)
+                    or quantity is not None and (
+                        mutation_items[0].get("id") != item_id
+                        or mutation_items[0].get("quantity") != quantity)
+                    or mutation_projection.get("envelope_hash") != response_hashes(
+                        200, read_headers, mutation_body)[0]
+                    or gateway.send(mutation).status_code != 403):
+                raise RuntimeError("g3b_ci_derived_cart_" + label + "_candidate_source_mismatch")
+            print("G3B_ROUTE_CART_DERIVED_ITEM_MUTATION_CANDIDATE " + json.dumps({
+                "operation_id": operation_id, "source": "protected_world_commit_sources",
+                "validated_native_status": 200, "state_version": next_version,
+                "native_business_response": False,
+            }, sort_keys=True))
         # C-02：同樣透過真 Gateway→Cart Executor→獨立唯讀 Validator，
         # 只能查驗與既有派生 Cart Session 相符的原生成功 JSON 候選。
         cart_request_id = "g3b-ci-cart-get-200"
@@ -695,7 +775,8 @@ def _gateway() -> None:
           "cart_invalid_body=2_denied "
           "cart_read_200=1 cart_created_then_read_200=1 "
           "cart_creator_cross_scope_read=denied cart_derived_add_200=1 "
-          "cart_derived_unknown_variant_409=1 "
+          "cart_derived_unknown_variant_409=1 cart_derived_update_200=1 "
+          "cart_derived_remove_200=1 "
           "medusa_400=1 medusa_404=1 "
           "replay=denied anonymous=denied "
           "execution_network=unreachable trusted_send=off")
@@ -746,7 +827,7 @@ def _audit(root: Path) -> None:
             raise RuntimeError("g3b_ci_cross_role_secret_exposure:" + name)
     with psycopg.connect("postgresql://mirage_ci_owner:mirage_ci_only@127.0.0.1:55433/"
                          "mirage_g3b_ci?connect_timeout=5") as admin:
-        if admin.execute("SELECT count(*) FROM protected_world_commit_sources").fetchone()[0] != 2:
+        if admin.execute("SELECT count(*) FROM protected_world_commit_sources").fetchone()[0] != 4:
             raise RuntimeError("g3b_ci_inventory_commit_evidence_missing")
         if admin.execute("SELECT count(*) FROM protected_medusa_rejection_sources").fetchone()[0] != 2:
             raise RuntimeError("g3b_ci_medusa_rejection_evidence_missing")
@@ -763,6 +844,8 @@ def _audit(root: Path) -> None:
                 "createGuestCart": 4,
                 "getGuestCart": 3,
                 "addGuestCartItem": 2,
+                "updateGuestCartItem": 1,
+                "removeGuestCartItem": 1,
                 "PostCartsIdLineItems": 2,
         }:
             raise RuntimeError("g3b_ci_operation_proof_count_mismatch")
