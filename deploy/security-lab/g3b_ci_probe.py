@@ -950,6 +950,64 @@ def _gateway() -> None:
             "validated_native_status": 200, "state_version": 7,
             "native_business_response": False,
         }, sort_keys=True))
+        # C-09：Order 已取消後，仍只能用原 Cart ID 查其歷史操作。
+        # Validator 要由舊 World Operation＋Commit Source＋Receipt 還原版本 2，
+        # 不能將目前版本 7 的世界狀態偷換成舊操作的結果。
+        for operation_label, attempt, native_status in (
+                ("historical", add_attempt, 200),
+                ("missing", str(uuid4()), 409)):
+            op_id = "g3b-ci-derived-cart-operation-" + operation_label
+            op_read = gateway.build_request(
+                "GET", origin + "/synthetic/carts/" + derived_id
+                + "/operations/" + attempt,
+                headers={"x-request-id": op_id},
+            )
+            op_read.headers["x-trusted-session"] = _sign(
+                key, fingerprint=fingerprint_httpx_request(op_read, op_id),
+                session=derived_session, mode="cart", resource_id=derived_id,
+            )
+            op_response = gateway.send(op_read)
+            if op_response.status_code != 200:
+                raise RuntimeError("g3b_ci_derived_cart_" + operation_label
+                                   + "_operation_rpc_unverifiable")
+            op_response_json = op_response.json()
+            op_metadata = op_response_json.get("executor_result", {})
+            op_projection = op_response_json.get("native_projection", {})
+            op_bytes = base64.b64decode(op_projection.get("body_b64", ""), validate=True)
+            op_payload = json.loads(op_bytes)
+            if (op_metadata.get("kind") != "cart_read_admitted"
+                    or op_metadata.get("operation") != "getCartOperation"
+                    or op_metadata.get("resource_id") != derived_id
+                    or op_metadata.get("attempt_id") != attempt
+                    or op_metadata.get("state_version") != 7
+                    or op_metadata.get("state_hash") != canceled_metadata.get("state_hash")
+                    or op_projection.get("status_code") != native_status
+                    or op_projection.get("source", {}).get("kind") != "snapshot"
+                    or op_projection.get("source", {}).get("read_admission_id")
+                        != op_metadata.get("read_admission_id")
+                    or op_projection.get("scope", {}).get("session_id") != derived_session
+                    or op_projection.get("scope", {}).get("world_generation_id")
+                        != created_source.get("derived_world_generation_id")
+                    or op_projection.get("delivery")
+                        != "candidate_only_no_send_authorization"
+                    or op_projection.get("envelope_hash") != response_hashes(
+                        native_status, read_headers, op_bytes)[0]
+                    or gateway.send(op_read).status_code != 403):
+                raise RuntimeError("g3b_ci_derived_cart_" + operation_label
+                                   + "_operation_source_mismatch")
+            if operation_label == "historical":
+                if (op_payload.get("cart") != add_payload.get("cart")
+                        or op_payload.get("state_version") != 2
+                        or op_payload.get("state_hash") != add_metadata.get("state_hash")
+                        or op_payload.get("commit_attempt_id") != add_attempt):
+                    raise RuntimeError("g3b_ci_derived_cart_historical_operation_mismatch")
+            elif op_payload != {"code": "operation_not_found"}:
+                raise RuntimeError("g3b_ci_derived_cart_absent_operation_409_mismatch")
+            print("G3B_ROUTE_CART_DERIVED_OPERATION_CANDIDATE " + json.dumps({
+                "operation_id": "getCartOperation", "source": "protected_world_read_sources",
+                "validated_native_status": native_status, "case": operation_label,
+                "native_business_response": False,
+            }, sort_keys=True))
         # C-02：同樣透過真 Gateway→Cart Executor→獨立唯讀 Validator，
         # 只能查驗與既有派生 Cart Session 相符的原生成功 JSON 候選。
         cart_request_id = "g3b-ci-cart-get-200"
@@ -1046,6 +1104,7 @@ def _gateway() -> None:
           "cart_derived_empty_complete_409=1 "
           "cart_derived_complete_200=1 "
           "derived_order_get_200=1 derived_order_cancel_200=1 "
+          "cart_historical_operation_200=1 cart_missing_operation_409=1 "
           "medusa_400=1 medusa_404=1 "
           "replay=denied anonymous=denied "
           "execution_network=unreachable trusted_send=off")
@@ -1118,6 +1177,7 @@ def _audit(root: Path) -> None:
                 "completeGuestCart": 2,
                 "getSyntheticOrder": 1,
                 "cancelSyntheticOrder": 1,
+                "getCartOperation": 2,
                 "PostCartsIdLineItems": 2,
         }:
             raise RuntimeError("g3b_ci_operation_proof_count_mismatch")
