@@ -476,6 +476,23 @@ def _gateway() -> None:
             "validated_native_status": 200, "derived_scope": True,
             "native_business_response": False,
         }, sort_keys=True))
+        # Creator 先前有權建立 Cart，並不因此取得該 Derived Session 的讀權。
+        # 以新簽章、同一真 Cart ID 冒名讀取必須 fail closed，不能有 200 Candidate。
+        cross_scope_id = "g3b-ci-cart-creator-cannot-read-derived"
+        cross_scope_get = gateway.build_request(
+            "GET", origin + "/synthetic/carts/" + derived_id,
+            headers={"x-request-id": cross_scope_id},
+        )
+        cross_scope_get.headers["x-trusted-session"] = _sign(
+            key, fingerprint=fingerprint_httpx_request(cross_scope_get, cross_scope_id),
+            session="g3b-ci-cart-creator", mode="cart", resource_id=derived_id,
+        )
+        if gateway.send(cross_scope_get).status_code != 503:
+            raise RuntimeError("g3b_ci_creator_cross_scope_cart_read_not_denied")
+        print("G3B_ROUTE_CART_CREATOR_CROSS_SCOPE_READ_DENIED " + json.dumps({
+            "operation_id": "getGuestCart", "outcome": "fail_closed",
+            "native_business_response": False,
+        }, sort_keys=True))
         # C-02：同樣透過真 Gateway→Cart Executor→獨立唯讀 Validator，
         # 只能查驗與既有派生 Cart Session 相符的原生成功 JSON 候選。
         cart_request_id = "g3b-ci-cart-get-200"
@@ -565,7 +582,8 @@ def _gateway() -> None:
           "inventory_operation_200=1 inventory_absence_409=1 unknown_operation=503 "
           "synthetic_409=1 cart_create_200=1 cart_cross_receipt_key=denied "
           "cart_invalid_body=2_denied "
-          "cart_read_200=1 cart_created_then_read_200=1 medusa_400=1 medusa_404=1 "
+          "cart_read_200=1 cart_created_then_read_200=1 "
+          "cart_creator_cross_scope_read=denied medusa_400=1 medusa_404=1 "
           "replay=denied anonymous=denied "
           "execution_network=unreachable trusted_send=off")
 
@@ -630,7 +648,7 @@ def _audit(root: Path) -> None:
                 "getSyntheticInventory": 2,
                 "getSyntheticOperation": 2,
                 "createGuestCart": 4,
-                "getGuestCart": 2,
+                "getGuestCart": 3,
                 "PostCartsIdLineItems": 2,
         }:
             raise RuntimeError("g3b_ci_operation_proof_count_mismatch")
@@ -644,6 +662,11 @@ def _audit(root: Path) -> None:
                 "WHERE creator_session_id=%s", ("g3b-ci-cart-creator",),
         ).fetchone() != (2,)):
             raise RuntimeError("g3b_ci_cart_cross_receipt_created_second_world")
+        if admin.execute(
+                "SELECT count(*) FROM protected_world_read_sources WHERE session_id=%s",
+                ("g3b-ci-cart-creator",),
+        ).fetchone() != (0,):
+            raise RuntimeError("g3b_ci_creator_cross_scope_read_source_created")
         for role, forbidden in (
                 ("mirage_g3b_ci_verifier", "protected_world_commit_sources"),
                 ("mirage_g3b_ci_validator", "protected_medusa_rejection_sources"),
