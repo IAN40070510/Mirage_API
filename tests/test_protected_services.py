@@ -1021,6 +1021,81 @@ def test_g3b_validator_handoff_preserves_native_status_headers_and_body(
         })
 
 
+def test_g3b_medusa_add_validator_handoff_rejects_rebound_commit(monkeypatch):
+    """M-03 唯讀 200 候選不可替換 Cart、Hash、Receipt、Scope 或附帶 Send 權。"""
+    from deception.security import protected_rpc
+    from deception.security.operation_binding import _receipt_uuid4
+
+    receipt = uuid4()
+    cart_id = "cart_" + uuid4().hex
+    attempt = str(_receipt_uuid4(receipt, b"medusa-m03-add"))
+    headers = (("content-type", "application/json"),)
+    body = json.dumps({"cart": {"id": cart_id, "items": []}}, sort_keys=True,
+                      separators=(",", ":")).encode()
+    envelope = response_hashes(200, headers, body)[0]
+    baseline = {
+        "receipt_id": str(receipt), "operation_id": "PostCartsIdLineItems",
+        "scope": {"environment_id": "env", "deployment_id": "deploy",
+                  "session_id": "session", "world_generation_id": "world"},
+        "request_fingerprint": "a" * 64, "status_code": 200,
+        "headers": [["content-type", "application/json"]],
+        "body_b64": base64.b64encode(body).decode(), "envelope_hash": envelope,
+        "source": {"kind": "committed_operation", "world_generation_id": "world",
+                   "operation_result_digest": "b" * 64,
+                   "committed_state_version": 2, "committed_state_hash": "c" * 64},
+        "trusted_send": "disabled",
+    }
+    projected = deepcopy(baseline)
+
+    class StubAsyncClient:
+        """固定獨立 mTLS 200 回傳形狀，允許逐欄插入攻擊負面。"""
+
+        def __init__(self, **kwargs):
+            """確保候選交接不使用不受控環境 Proxy。"""
+            assert kwargs["trust_env"] is False
+
+        async def __aenter__(self):
+            """開啟固定測試的 async Client。"""
+            return self
+
+        async def __aexit__(self, *_):
+            """關閉測試連線上下文。"""
+            return False
+
+        async def post(self, url, *, json):
+            """唯一 RPC 輸入是 Receipt，不能帶 Body／Status／來源選擇。"""
+            assert url == "https://validator.invalid:8445/internal/v1/project-medusa-add-success"
+            assert json == {"receipt_id": str(receipt)}
+            return httpx.Response(200, json=projected)
+
+    monkeypatch.setattr(protected_rpc.httpx, "AsyncClient", StubAsyncClient)
+    client = object.__new__(FixedNativeValidatorMTLSClient)
+    client._origin, client._tls = "https://validator.invalid:8445", object()
+    args = dict(receipt_id=receipt, operation_id="PostCartsIdLineItems",
+                resource_id=cart_id, request_fingerprint="a" * 64,
+                expected_environment_id="env", expected_deployment_id="deploy",
+                expected_session_id="session", expected_commit_attempt_id=attempt,
+                expected_result_digest="b" * 64, expected_state_version=2,
+                expected_state_hash="c" * 64)
+    good = asyncio.run(client.project_medusa_add_success(**args))
+    assert good["status_code"] == 200 and good["delivery"] == "candidate_only_no_send_authorization"
+    for changed in (
+            {"receipt_id": str(uuid4())}, {"status_code": 409},
+            {"trusted_send": "enabled"}, {"request_fingerprint": "d" * 64},
+            {"source": {**baseline["source"], "operation_result_digest": "d" * 64}},
+            {"scope": {**baseline["scope"], "session_id": "attacker"}},
+            {"body_b64": base64.b64encode(b'{"cart":{"id":"cart_attacker"}}').decode()},
+            {"envelope_hash": "e" * 64}, {"unexpected": True},
+    ):
+        projected.clear()
+        projected.update(deepcopy(baseline))
+        projected.update(changed)
+        with pytest.raises(ProtectedRpcConfigurationError, match="medusa_add_validator_binding_mismatch"):
+            asyncio.run(client.project_medusa_add_success(**args))
+    with pytest.raises(ProtectedRpcConfigurationError, match="operation_unapproved"):
+        asyncio.run(client.project_medusa_add_success(**{**args, "expected_commit_attempt_id": str(uuid4())}))
+
+
 def test_g3b_executor_rpc_refuses_ambiguous_result_json(monkeypatch):
     """Executor 的內部 200 不等於可信資料；重複 Key／NaN 不得傳給 Verifier。"""
     from deception.security import protected_rpc

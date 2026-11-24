@@ -745,6 +745,30 @@ def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolat
             "medusa_mutation", "PostCartsIdLineItems", "committed", 2,
         )
         assert "body" not in add_metadata and "send_authorized" not in add_metadata
+        # Validator 不接收自填 Cart JSON；同次 Commit Source／Native Context／
+        # SHA 固定 Medusa 契約共同決定唯一候選，外層仍禁止 Client Send。
+        add_projector = PostgresProtectedNativeProjector(
+            dsn, expected_login=_real_login(dsn), medusa_source=medusa_source,
+        )
+        projected_add = add_projector.project_medusa_add_success(add_receipt)
+        native_cart = json.loads(projected_add.body_bytes)["cart"]
+        assert (projected_add.status_code, projected_add.operation_id,
+                projected_add.scope, projected_add.source.kind) == (
+            200, "PostCartsIdLineItems", snapshot.scope, "committed_operation",
+        )
+        assert native_cart["id"] == binding.resource_id
+        assert native_cart["total"] == 2.0
+        assert len(native_cart["items"]) == 1
+        assert native_cart["items"][0]["quantity"] == 2
+        assert projected_add.source.operation_result_digest == add_metadata["result_digest"]
+        assert projected_add.envelope_hash == response_hashes(
+            200, projected_add.headers, projected_add.body_bytes,
+        )[0]
+        assert _candidate(dsn, scope=snapshot.scope, source=projected_add.source,
+                          receipt_id=add_receipt, fingerprint=add_proof.request_fingerprint,
+                          status=200, body=projected_add.body_bytes) == 1
+        with pytest.raises(ProtectedGrantError, match="source_missing"):
+            add_projector.project_medusa_add_success(uuid4())
         # 重複 ReadAdmission 的相同 Receipt 直接封閉；不可第二次更新數量。
         assert client.post("/internal/v1/execute", json=add_wire).status_code == 503
         with psycopg.connect(dsn) as connection:

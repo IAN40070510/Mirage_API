@@ -61,9 +61,13 @@ Publishable Key、JSON Body、Derived Cart Capability 和 Creator→Derived
 預期世界版本只從受保護 ReadAdmission 快照取得，冪等鍵與 Attempt 由 Receipt
 固定派生。一次 `cart.add` Commit 的內部結果只包含版本／Hash／Digest，不
 包含可發送 Body；重送相同 Receipt 因唯一 Read Source 固定拒絕，不能重複
-增加數量。此路徑**尚未完成獨立 Medusa 200 Validator、Candidate Promotion
-或 Client HTTP 200**；若 CAS／業務結果不確定，一律 fail closed。這項
-Executor 子切面仍須對照本分支真 PG CI 證據，不能據程式存在就簽 G3b。
+增加數量。後續在隔離分支接上獨立 Medusa 200 Validator 候選：只讀核對
+`protected_world_commit_sources`、真 Handler Result／Commit Receipt、
+ReadAdmission、目前 WorldSnapshot、`native_response_contexts` 的 Hash、
+Creator→Derived Lineage 及 SHA 固定 `StoreCartResponse`。Verifier 要求
+Validator 200 的 Body、Envelope、Scope 和 Commit 摘要精確符合本次執行來源。
+**候選不等於 Client HTTP 200，也沒有 G4 Sender 授權**；CAS／結果不明
+一律 fail closed。新增四服務流程及獨立驗證仍需真 CI 證據才可逐子項簽收。
 
 I-04 庫存 GET 新增另一個固定 mTLS 路徑
 `POST /internal/v1/project-inventory-snapshot`；Validator 唯讀重建原始

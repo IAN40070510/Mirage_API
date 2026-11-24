@@ -1124,6 +1124,18 @@ class PostgresProtectedNativeProjector(_ProtectedConnection):
         並驗證合成 OpenAPI。世界移動、來源缺失或操作不符時一律失敗；
         不回傳已授權 Send，也不以未知 COMMIT 猜測成功。
         """
+        return self._project_mutation_success(receipt_id, medusa=False)
+
+    def project_medusa_add_success(self, receipt_id: UUID) -> ProtectedNativeProjection:
+        """M-03 唯讀重建原生 Cart 200，必須有真 Commit 與同次固定 Native Context。"""
+        if self._medusa_specification is None:
+            raise ProtectedGrantError("protected_medusa_add_contract_not_configured")
+        return self._project_mutation_success(receipt_id, medusa=True)
+
+    def _project_mutation_success(
+        self, receipt_id: UUID, *, medusa: bool,
+    ) -> ProtectedNativeProjection:
+        """共用不可變 Commit／Read／Epoch／Key 查核，按固定路由分別驗原生契約。"""
         from jsonschema import Draft202012Validator
         from deception.domains.ecommerce.cart_http import cart_specification
         from deception.domains.ecommerce.inventory_http import inventory_specification
@@ -1161,8 +1173,11 @@ class PostgresProtectedNativeProjector(_ProtectedConnection):
                  actual_version, actual_hash, encoding, actual_digest, epoch, issuer,
                  key_id, token_deadline, mode, resource, operation_id, platform, method,
                  template, raw_path, content_type, proof_fingerprint) = row
-                selected = _SYNTHETIC_MUTATION_HANDLERS.get(operation_id)
-                path_pattern = _SYNTHETIC_MUTATION_PATHS.get(operation_id)
+                selected = (_SYNTHETIC_MUTATION_HANDLERS.get(operation_id) if not medusa else
+                            ("medusa-native-cart", "POST", "/store/carts/{id}/line-items",
+                             "cart.add") if operation_id == "PostCartsIdLineItems" else None)
+                path_pattern = (_SYNTHETIC_MUTATION_PATHS.get(operation_id) if not medusa else
+                                r"/store/carts/(cart_[0-9a-f]{32})/line-items")
                 match = re.fullmatch(path_pattern, raw_path) if (
                     path_pattern is not None and isinstance(raw_path, str)) else None
                 if (selected is None or match is None
@@ -1177,9 +1192,19 @@ class PostgresProtectedNativeProjector(_ProtectedConnection):
                         or not isinstance(content_type, str)
                         or content_type.split(";", 1)[0].strip().lower() != "application/json"
                         or (platform == "synthetic-inventory" and (mode, resource) != ("inventory", None))
-                        or (platform == "synthetic-carts" and (
+                        or (platform in {"synthetic-carts", "medusa-native-cart"} and (
                             mode != "cart" or not resource or match[1] != resource))):
                     raise ProtectedGrantError("protected_synthetic_success_proof_mismatch")
+                if medusa:
+                    cursor.execute(
+                        """SELECT 1 FROM protected_cart_creations
+                           WHERE environment_id=%s AND deployment_id=%s
+                             AND derived_session_id=%s AND derived_world_generation_id=%s
+                             AND resource_id=%s""",
+                        (environment, deployment, session, generation, resource),
+                    )
+                    if cursor.fetchone() is None:
+                        raise ProtectedGrantError("protected_medusa_add_derived_lineage_missing")
                 cursor.execute(
                     """SELECT state_version,state_hash FROM world_commit_receipts
                        WHERE environment_id=%s AND deployment_id=%s AND session_id=%s
@@ -1246,13 +1271,49 @@ class PostgresProtectedNativeProjector(_ProtectedConnection):
                                 snapshot_state=snapshot.state):
                             raise ProtectedGrantError("protected_synthetic_success_order_identity_denied")
                         entity = result
-                    payload = {kind: entity, "state_version": saved_version,
-                               "state_hash": saved_hash, "commit_attempt_id": str(attempt)}
-                    spec = cart_specification()
-                schema = spec["paths"][template.removeprefix("/synthetic")][method.lower()][
-                    "responses"]["200"]["content"]["application/json"]["schema"]
-                if not Draft202012Validator(schema).is_valid(payload):
-                    raise ProtectedGrantError("protected_synthetic_success_contract_invalid")
+                    if medusa:
+                        from deception.domains.ecommerce.medusa_cart_projection import cart_view
+                        from .models import canonical_state_hash
+
+                        cursor.execute(
+                            """SELECT context,context_hash FROM native_response_contexts
+                               WHERE environment_id=%s AND deployment_id=%s AND session_id=%s
+                                 AND world_generation_id=%s AND commit_attempt_id=%s""",
+                            (environment, deployment, session, generation, attempt),
+                        )
+                        context_row = cursor.fetchone()
+                        native_context = snapshot.state.get("native_context")
+                        if (context_row is None or not isinstance(context_row[0], dict)
+                                or not isinstance(native_context, dict)
+                                or canonical_state_hash(context_row[0]) != context_row[1]
+                                or context_row[0].get("catalog") != snapshot.state.get("catalog")
+                                or any(context_row[0].get(field) != native_context.get(field)
+                                    for field in ("region_id", "sales_channel_id", "email", "metadata"))):
+                            raise ProtectedGrantError("protected_medusa_add_context_unverifiable")
+                        try:
+                            payload = {"cart": cart_view(entity, context_row[0])}
+                        except (ValueError, TypeError, KeyError, OverflowError) as exc:
+                            raise ProtectedGrantError("protected_medusa_add_projection_invalid") from exc
+                        from referencing import Registry, Resource
+                        from referencing.jsonschema import DRAFT4
+                        from openapi_schema_validator import OAS30Validator
+
+                        registry = Registry().with_resource(
+                            "urn:mirage:medusa-contract", Resource.from_contents(
+                                self._medusa_specification, default_specification=DRAFT4),
+                        )
+                        schema = {"$ref": "urn:mirage:medusa-contract#/components/schemas/StoreCartResponse"}
+                        if not OAS30Validator(schema, registry=registry).is_valid(payload):
+                            raise ProtectedGrantError("protected_medusa_add_contract_invalid")
+                    else:
+                        payload = {kind: entity, "state_version": saved_version,
+                                   "state_hash": saved_hash, "commit_attempt_id": str(attempt)}
+                        spec = cart_specification()
+                if not medusa:
+                    schema = spec["paths"][template.removeprefix("/synthetic")][method.lower()][
+                        "responses"]["200"]["content"]["application/json"]["schema"]
+                    if not Draft202012Validator(schema).is_valid(payload):
+                        raise ProtectedGrantError("protected_synthetic_success_contract_invalid")
                 cursor.execute("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
                 now = cursor.fetchone()[0]
                 if (token_deadline <= now or read[5] <= now

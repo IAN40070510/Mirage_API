@@ -118,6 +118,8 @@ class FixedExecutorMTLSClient:
                                      "state_version", "state_hash"},
             "medusa_rejection": {"kind", "operation", "status_code", "template_id",
                                  "contract_revision", "envelope_hash"},
+            "medusa_mutation": {"kind", "operation", "commit_attempt_id", "status",
+                                 "state_version", "state_hash", "result_digest"},
         }
         if (not isinstance(result, dict) or result.get("operation") != operation_id
                 or result.get("kind") not in fields
@@ -128,6 +130,7 @@ class FixedExecutorMTLSClient:
                     (result.get("status_code") not in {400, 404}
                      or result.get("template_id") not in {"native-cart-invalid", "native-cart-rejected"}
                      or result.get("contract_revision") != "medusa-cart-1"))
+                or (result["kind"] == "medusa_mutation" and result.get("status") != "committed")
                 or (result["kind"] == "cart_created" and result.get("status") != "committed")):
             raise ProtectedRpcConfigurationError("fixed_executor_result_binding_mismatch")
         valid_sku_path = False
@@ -202,6 +205,19 @@ class FixedExecutorMTLSClient:
                     or result["state_version"] < 1
                     or not isinstance(result.get("state_hash"), str)
                     or re.fullmatch(r"[0-9a-f]{64}", result["state_hash"]) is None):
+                raise ProtectedRpcConfigurationError("fixed_executor_result_binding_mismatch")
+        if result["kind"] == "medusa_mutation":
+            try:
+                attempt = UUID(result["commit_attempt_id"])
+            except (TypeError, ValueError) as exc:
+                raise ProtectedRpcConfigurationError("fixed_executor_result_binding_mismatch") from exc
+            if (operation_id != "PostCartsIdLineItems"
+                    or re.fullmatch(rb"/store/carts/cart_[0-9a-f]{32}/line-items", raw_path) is None
+                    or attempt.version != 4 or str(attempt) != result["commit_attempt_id"]
+                    or type(result["state_version"]) is not int or result["state_version"] < 2
+                    or not all(isinstance(result[field], str)
+                               and re.fullmatch(r"[0-9a-f]{64}", result[field]) is not None
+                               for field in ("state_hash", "result_digest"))):
                 raise ProtectedRpcConfigurationError("fixed_executor_result_binding_mismatch")
         if result["kind"] == "cart_created":
             try:
@@ -610,6 +626,77 @@ class FixedNativeValidatorMTLSClient:
                 raise ValueError("medusa_validator_binding_mismatch")
         except (ValueError, TypeError, KeyError, UnicodeError) as exc:
             raise ProtectedRpcConfigurationError("medusa_validator_binding_mismatch") from exc
+        return {
+            "status_code": 200, "headers": [["content-type", "application/json"]],
+            "body_b64": base64.b64encode(body).decode("ascii"),
+            "body_sha256": response_hashes(200, (("content-type", "application/json"),), body)[1],
+            "envelope_hash": result["envelope_hash"], "source": dict(source),
+            "scope": dict(scope), "delivery": "candidate_only_no_send_authorization",
+        }
+
+    async def project_medusa_add_success(
+        self, *, receipt_id: UUID, operation_id: str, resource_id: str,
+        request_fingerprint: str, expected_environment_id: str,
+        expected_deployment_id: str, expected_session_id: str,
+        expected_commit_attempt_id: str, expected_result_digest: str,
+        expected_state_version: int, expected_state_hash: str,
+    ) -> dict[str, object]:
+        """mTLS 核對 M-03 Commit 的固定 Medusa 200 候選，絕不賦予 Send 權限。"""
+        from deception.world.transmission import response_hashes
+        from deception.security.operation_binding import _receipt_uuid4
+
+        if (operation_id != "PostCartsIdLineItems"
+                or not isinstance(resource_id, str)
+                or re.fullmatch(r"cart_[0-9a-f]{32}", resource_id) is None
+                or expected_commit_attempt_id != str(
+                    _receipt_uuid4(receipt_id, b"medusa-m03-add"))):
+            raise ProtectedRpcConfigurationError("medusa_add_validator_operation_unapproved")
+        async with httpx.AsyncClient(verify=self._tls, trust_env=False, timeout=8.0) as client:
+            response = await client.post(
+                self._origin + "/internal/v1/project-medusa-add-success",
+                json={"receipt_id": str(receipt_id)},
+            )
+        if response.status_code != 200:
+            raise ProtectedRpcConfigurationError("medusa_add_validator_projection_unverifiable")
+        try:
+            result = json.loads(response.content, object_pairs_hook=unique_object,
+                                parse_constant=reject_constant)
+            if not isinstance(result, dict) or set(result) != {
+                    "receipt_id", "operation_id", "scope", "request_fingerprint",
+                    "status_code", "headers", "body_b64", "envelope_hash", "source",
+                    "trusted_send"}:
+                raise ValueError("medusa_add_validator_shape_invalid")
+            body = _canonical_base64(result["body_b64"], max_bytes=1048576)
+            payload = json.loads(body, object_pairs_hook=unique_object,
+                                 parse_constant=reject_constant)
+            source, scope = result["source"], result["scope"]
+            if (not isinstance(scope, dict) or set(scope) != {
+                    "environment_id", "deployment_id", "session_id", "world_generation_id"}
+                    or not isinstance(payload, dict) or set(payload) != {"cart"}
+                    or not isinstance(payload["cart"], dict)
+                    or payload["cart"].get("id") != resource_id
+                    or source != {
+                        "kind": "committed_operation",
+                        "world_generation_id": scope["world_generation_id"],
+                        "operation_result_digest": expected_result_digest,
+                        "committed_state_version": expected_state_version,
+                        "committed_state_hash": expected_state_hash,
+                    }
+                    or (scope["environment_id"], scope["deployment_id"], scope["session_id"])
+                        != (expected_environment_id, expected_deployment_id, expected_session_id)
+                    or result["receipt_id"] != str(receipt_id)
+                    or result["operation_id"] != operation_id
+                    or result["request_fingerprint"] != request_fingerprint
+                    or type(result["status_code"]) is not int or result["status_code"] != 200
+                    or result["headers"] != [["content-type", "application/json"]]
+                    or result["trusted_send"] != "disabled"
+                    or body != json.dumps(payload, ensure_ascii=False, sort_keys=True,
+                                          separators=(",", ":")).encode("utf-8")
+                    or result["envelope_hash"] != response_hashes(
+                        200, (("content-type", "application/json"),), body)[0]):
+                raise ValueError("medusa_add_validator_binding_mismatch")
+        except (ValueError, TypeError, KeyError, UnicodeError) as exc:
+            raise ProtectedRpcConfigurationError("medusa_add_validator_binding_mismatch") from exc
         return {
             "status_code": 200, "headers": [["content-type", "application/json"]],
             "body_b64": base64.b64encode(body).decode("ascii"),
@@ -1177,6 +1264,7 @@ def create_native_validator_app(*, projector) -> FastAPI:
     @app.post("/internal/v1/project-cart-read")
     @app.post("/internal/v1/project-medusa-creation")
     @app.post("/internal/v1/project-medusa-read")
+    @app.post("/internal/v1/project-medusa-add-success")
     @app.post("/internal/v1/project-cart-creation")
     @app.post("/internal/v1/project-synthetic-success")
     @app.post("/internal/v1/project-synthetic-rejection")
@@ -1209,6 +1297,8 @@ def create_native_validator_app(*, projector) -> FastAPI:
                 projected = projector.project_medusa_creation(UUID(str(call.receipt_id)))
             elif request.scope.get("path") == "/internal/v1/project-medusa-read":
                 projected = projector.project_medusa_read(UUID(str(call.receipt_id)))
+            elif request.scope.get("path") == "/internal/v1/project-medusa-add-success":
+                projected = projector.project_medusa_add_success(UUID(str(call.receipt_id)))
             elif request.scope.get("path") == "/internal/v1/project-cart-creation":
                 projected = projector.project_cart_creation(UUID(str(call.receipt_id)))
             elif request.scope.get("path") == "/internal/v1/project-synthetic-success":
@@ -1378,6 +1468,32 @@ def create_direct_verifier_app(
             except Exception as exc:
                 raise HTTPException(status_code=503,
                                     detail="direct_verifier_native_projection_unverifiable") from exc
+        elif (isinstance(outcome, dict) and outcome.get("kind") == "medusa_mutation"
+              and operation.operation_id == "PostCartsIdLineItems"):
+            if native_validator_client is None:
+                raise HTTPException(status_code=503,
+                                    detail="direct_verifier_medusa_validator_not_wired")
+            match = re.fullmatch(r"/store/carts/(cart_[0-9a-f]{32})/line-items",
+                                 normalized.path)
+            if match is None:
+                raise HTTPException(status_code=503,
+                                    detail="direct_verifier_medusa_resource_invalid")
+            try:
+                projection = await native_validator_client.project_medusa_add_success(
+                    receipt_id=receipt_id, operation_id=operation.operation_id,
+                    resource_id=match[1],
+                    request_fingerprint=fingerprint_request(normalized),
+                    expected_environment_id=claims.environment_id,
+                    expected_deployment_id=claims.deployment_id,
+                    expected_session_id=claims.session_id,
+                    expected_commit_attempt_id=outcome["commit_attempt_id"],
+                    expected_result_digest=outcome["result_digest"],
+                    expected_state_version=outcome["state_version"],
+                    expected_state_hash=outcome["state_hash"],
+                )
+            except Exception as exc:
+                raise HTTPException(status_code=503,
+                                    detail="direct_verifier_medusa_add_unverifiable") from exc
         elif (isinstance(outcome, dict) and outcome.get("kind") == "medusa_read_admitted"
               and operation.operation_id in {"GetCartsId", "GetOrdersId"}):
             if native_validator_client is None:
