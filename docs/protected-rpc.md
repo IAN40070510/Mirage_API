@@ -98,6 +98,13 @@ WorldOperation＋Commit Receipt＋ReadAdmission，重建固定 `200` 操作結�
 World 快照完整性雜湊做一致性核對；快照版本已移動、過期、
 Session Epoch／Key 撤銷時固定失敗；**只有真缺 SKU** 可以建立 409 候選。獨立 Validator
 需要唯讀 `world_snapshots` SELECT，Runtime 無權持有該物理 Login。
+**I-04 UTF-8 SKU 路徑一致性修補（2026-11-24）**：可信 GET Decoder、
+獨立 Snapshot Projector 與 Verifier 的 mTLS 候選交接共用
+`decode_verified_inventory_sku_path()`。已核准的原始 UTF-8 SKU（例如
+`品項+特別:版`）不再在後段被誤判為不支援；`%` 路徑編碼、分隔符、
+控制字元、`.`／`..`、非 UTF-8 與超長名稱仍固定拒絕。這只是既有
+原始 Path 規則的跨角色一致性，不代表一般瀏覽器的 percent-encoded
+URI 已通過相容驗收，也沒有開啟正式 HTTP Send。
 **C-02／C-07 Cart／Order GET 200 候選（本輪待真 CI）**：Cart Executor
 回傳固定 `cart_read_admitted`、`read_admission_id`、World Generation／版本／Hash；
 獨立 Validator 的 `POST /internal/v1/project-cart-read` 只收 UUID4 Receipt，

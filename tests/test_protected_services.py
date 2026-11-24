@@ -667,6 +667,16 @@ def test_g3b_inventory_200_validator_handoff_rejects_modified_world_bytes(monkey
         projected["envelope_hash"] = response_hashes(409, headers, bad_body)[0]
         with pytest.raises(ProtectedRpcConfigurationError, match="inventory_validator_binding_mismatch"):
             asyncio.run(client.project_inventory_snapshot(**kwargs))
+    # I-04 原始 GET 允許未百分比編碼的 UTF-8 SKU；候選 mTLS 不得另設 ASCII 限制。
+    unicode_sku = "品項+特別:版"
+    unicode_body = json.dumps({"sku": unicode_sku, "available": 4, "state_version": 2},
+                              ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    projected.clear()
+    projected.update(deepcopy(baseline))
+    projected["body_b64"] = base64.b64encode(unicode_body).decode("ascii")
+    projected["envelope_hash"] = response_hashes(200, headers, unicode_body)[0]
+    assert asyncio.run(client.project_inventory_snapshot(
+        **{**kwargs, "resource_id": unicode_sku}))["status_code"] == 200
 
 
 def test_g3b_inventory_operation_200_validator_rejects_forged_history(monkeypatch):

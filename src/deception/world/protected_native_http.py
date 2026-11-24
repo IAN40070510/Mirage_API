@@ -500,6 +500,10 @@ class PostgresProtectedNativeProjector(_ProtectedConnection):
         一律直接拒絕，不能將安全故障包裝成業務 409。
         此函式沒有 Send 權，快照到實際傳輸的競態仍須由 G4/G5 關閉。
         """
+        from deception.security.operation_binding import (
+            OperationBindingError, decode_verified_inventory_sku_path,
+        )
+
         if not isinstance(receipt_id, UUID) or receipt_id.version != 4:
             raise ProtectedGrantError("protected_inventory_receipt_invalid")
         with self._connection() as connection:
@@ -542,14 +546,16 @@ class PostgresProtectedNativeProjector(_ProtectedConnection):
                 proof = cursor.fetchone()
                 if proof is None or not isinstance(proof[5], str):
                     raise ProtectedGrantError("protected_inventory_operation_missing")
-                matched = re.fullmatch(r"/synthetic/inventory/([A-Za-z0-9._-]{1,128})", proof[5])
+                try:
+                    sku = decode_verified_inventory_sku_path(proof[5].encode("utf-8"))
+                except (OperationBindingError, UnicodeError) as exc:
+                    raise ProtectedGrantError("protected_inventory_operation_mismatch") from exc
                 # GET 的原始 Content-Type 可以不存在，也可能由既有 Client 設定；
                 # 只要仍為空 Body 且原始 Proof/Fingerprint 已驗證，不能誤拒合法查詢。
                 if (proof[:5] != ("synthetic-inventory", "getSyntheticInventory", "GET",
                                    "/synthetic/inventory/{sku}", fingerprint)
-                        or matched is None or proof[6] != hashlib.sha256(b"").hexdigest()):
+                        or proof[6] != hashlib.sha256(b"").hexdigest()):
                     raise ProtectedGrantError("protected_inventory_operation_mismatch")
-                sku = matched[1]
                 cursor.execute(
                     """SELECT version,state_hash,state,expires_at FROM world_snapshots
                        WHERE environment_id=%s AND deployment_id=%s AND session_id=%s

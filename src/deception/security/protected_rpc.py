@@ -566,12 +566,21 @@ class FixedNativeValidatorMTLSClient:
 
         Verifier 不傳回應碼、庫存數量、版本或 Body；獨立校驗契約、來源
         ReadAdmission、Scope、Envelope 和精確 JSON bytes，絕不允許直接 Send。
+        UTF-8 SKU 使用與受保護 GET 相同的原始路徑規則，不另設 ASCII 限制。
         """
+        from deception.security.operation_binding import (
+            OperationBindingError, decode_verified_inventory_sku_path,
+        )
         from deception.world.transmission import response_hashes
 
-        if (operation_id != "getSyntheticInventory"
-                or not isinstance(resource_id, str)
-                or re.fullmatch(r"[A-Za-z0-9._-]{1,128}", resource_id) is None):
+        if operation_id != "getSyntheticInventory" or not isinstance(resource_id, str):
+            raise ProtectedRpcConfigurationError("inventory_validator_operation_unapproved")
+        try:
+            verified_sku = decode_verified_inventory_sku_path(
+                ("/synthetic/inventory/" + resource_id).encode("utf-8"))
+        except (OperationBindingError, UnicodeError) as exc:
+            raise ProtectedRpcConfigurationError("inventory_validator_operation_unapproved") from exc
+        if verified_sku != resource_id:
             raise ProtectedRpcConfigurationError("inventory_validator_operation_unapproved")
         async with httpx.AsyncClient(verify=self._tls, trust_env=False, timeout=8.0) as client:
             response = await client.post(

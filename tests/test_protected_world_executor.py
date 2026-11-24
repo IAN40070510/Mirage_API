@@ -342,13 +342,14 @@ def test_fixed_inventory_409_has_independent_validator_and_promotable_source(
         projector.project_synthetic_rejection(uuid4())
 
 
-@pytest.mark.parametrize("path,operation", [
-    ("/synthetic/inventory/sku-1", "getSyntheticInventory"),
-    ("/synthetic/inventory/unknown-sku", "getSyntheticInventory"),
-    ("/synthetic/operations/" + str(uuid4()), "getSyntheticOperation"),
+@pytest.mark.parametrize("path,operation,expected_available", [
+    ("/synthetic/inventory/sku-1", "getSyntheticInventory", 4),
+    ("/synthetic/inventory/品項+特別:版", "getSyntheticInventory", 7),
+    ("/synthetic/inventory/unknown-sku", "getSyntheticInventory", None),
+    ("/synthetic/operations/" + str(uuid4()), "getSyntheticOperation", None),
 ])
 def test_inventory_get_receipt_admits_real_protected_read_without_native_http(
-        isolated_test_dsn, path, operation):
+        isolated_test_dsn, path, operation, expected_available):
     """真 PostgreSQL I-03／I-04 經固定 RPC 建讀取來源，拒絕偽造 Bytes／跨 Session。
 
     只證明 ReadAdmission 存在，並未宣稱原生 200／409 或 Sender 可用。
@@ -362,7 +363,7 @@ def test_inventory_get_receipt_admits_real_protected_read_without_native_http(
     binding = SessionBinding(environment_id="inventory-get-http", deployment_id="isolated",
                              session_id=uuid4().hex, session_epoch=1, access_mode="inventory")
     store = SyntheticInventory(dsn)
-    snapshot = store.resolve(binding, {"inventory": {"sku-1": 4}, "reservations": {}},
+    snapshot = store.resolve(binding, {"inventory": {"sku-1": 4, "品項+特別:版": 7}, "reservations": {}},
                              now=now, ttl=120)
     request = replace(original_request(path=path, method="GET"), body=b"")
     proof = derive_verified_operation(request)
@@ -427,12 +428,13 @@ def test_inventory_get_receipt_admits_real_protected_read_without_native_http(
         assert connection.execute("SELECT count(*) FROM world_operations").fetchone()[0] == 0
     if operation == "getSyntheticInventory":
         projector = PostgresProtectedNativeProjector(dsn, expected_login=_real_login(dsn))
-        if path.endswith("/sku-1"):
+        if expected_available is not None:
             projected = projector.project_inventory_snapshot(receipt)
             assert projected.status_code == 200 and projected.source.kind == "snapshot"
             assert projected.source.state_hash == snapshot.state_hash
             assert json.loads(projected.body_bytes) == {
-                "sku": "sku-1", "available": 4, "state_version": 1,
+                "sku": path.rsplit("/", 1)[-1], "available": expected_available,
+                "state_version": 1,
             }
         else:
             # 由獨立 Snapshot 證實 SKU 不存在，現在可以投影固定的業務 409；

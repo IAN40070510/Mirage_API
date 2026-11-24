@@ -79,6 +79,22 @@ class VerifiedInventoryRead:
     attempt_id: UUID | None
 
 
+def decode_verified_inventory_sku_path(raw_path: bytes) -> str:
+    """統一驗證 I-04 原始 UTF-8 SKU 路徑，拒絕編碼、分隔符與控制字元歧義。"""
+    if not isinstance(raw_path, bytes):
+        raise OperationBindingError("verified_inventory_read_operation_or_resource_denied")
+    matched = re.fullmatch(rb"/synthetic/inventory/([^/%?#\x00-\x1f\x7f]{1,512})", raw_path)
+    if matched is None or matched[1] in {b".", b".."}:
+        raise OperationBindingError("verified_inventory_read_operation_or_resource_denied")
+    try:
+        sku = matched[1].decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise OperationBindingError("verified_inventory_read_operation_or_resource_denied") from exc
+    if len(sku) > 128:
+        raise OperationBindingError("verified_inventory_read_operation_or_resource_denied")
+    return sku
+
+
 def decode_verified_inventory_read(
     proof: VerifiedOperationBinding, *, raw_path: bytes, raw_body: bytes,
 ) -> VerifiedInventoryRead:
@@ -96,15 +112,8 @@ def decode_verified_inventory_read(
         raise OperationBindingError("verified_inventory_read_snapshot_mismatch")
     if (proof.operation_id, proof.path_template) == (
             "getSyntheticInventory", "/synthetic/inventory/{sku}"):
-        # 既有 SKU 可含 Unicode／標點；僅封鎖 URI 正規化歧義和控制字元。
-        matched = re.fullmatch(rb"/synthetic/inventory/([^/%?#\x00-\x1f\x7f]{1,512})", raw_path)
-        if matched is not None and matched[1] not in {b".", b".."}:
-            try:
-                sku = matched[1].decode("utf-8", errors="strict")
-            except UnicodeDecodeError as exc:
-                raise OperationBindingError("verified_inventory_read_sku_invalid") from exc
-            if len(sku) <= 128:
-                return VerifiedInventoryRead("getSyntheticInventory", sku, None)
+        return VerifiedInventoryRead("getSyntheticInventory",
+                                     decode_verified_inventory_sku_path(raw_path), None)
     elif (proof.operation_id, proof.path_template) == (
             "getSyntheticOperation", "/synthetic/operations/{attempt}"):
         matched = re.fullmatch(rb"/synthetic/operations/([0-9a-f-]{36})", raw_path)
