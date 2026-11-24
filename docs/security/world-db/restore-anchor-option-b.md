@@ -158,6 +158,36 @@ BD-05 automated Quarantine transition or Sender/Purge concurrency test.
 
 ## Deployment guardrails
 
+### 2026-11-24 第二 PostgreSQL Fence Ledger 隔離增量（待 CI）
+
+`deploy/security-lab/g5-fence-schema.sql` 專供**不同於 World DB 的隔離 Fence
+資料庫**，不納入 World DB 的 `migrations/`。Schema 有不可改寫 Checkpoint、
+單調 Head、Namespace／Epoch／Sequence 與 Publication 唯一約束，禁止 SQL
+直接 UPDATE／DELETE／TRUNCATE Checkpoint，拒絕 Head 倒退。
+`src/deception/world/postgres_restore_anchor.py` 新增兩個獨立 DB 登入界面：
+
+- `PostgresAnchorPublisher`：在 DB 交易內驗證 Publisher Ed25519 簽章、
+  序號、前節 Hash、事件號連續，原子追加 COMMITTED Checkpoint 並前進 Head；
+  拒絕同 Publication 重送與順序不明結果。跨 World DB 的 COMMIT/ACK
+  對帳**尚未提供**，不可將此 append 視為已對帳完成。
+- `PostgresAnchorHeadReader`：唯讀登入取得外部 Head，對 Verifier 當次
+  隨機 nonce 簽署；另一個唯讀查詢返回完整原始 Checkpoint，交由既有
+  `verify_restore_anchor` 驗證。Head 私鑰須由獨立 Head 服務的秘密通道提供，
+  不能從 World DB、Runtime 或請求參數取用。
+
+`tests/test_postgres_restore_anchor.py` 與
+`.github/workflows/world-security-contract.yml` 新增**第二個全新 PostgreSQL
+17.6 CI service**（獨立於 World PG），以三個隨機臨時 SCRAM Login 測試
+Publisher／Reader／Runtime 的資料表 ACL、真正持久化 Head、舊世界回退、
+重送／缺口／錯簽章、直接 DML 防護。只允許專用 CI／Lab 啟用
+`MIRAGE_G5_FENCE_TEST_DSN`；沒有變數必須 SKIP，不可算 PASS。
+
+**此項狀態仍是 G5 PARTIAL／NO-GO**：CI 只有兩個測試資料庫與用後即刪的
+隔離角色，尚未完成正式憑證隔離、不可回退的獨立最高 Head Authority、
+端到端事件語意覆蓋、World DB 發布意圖與雙向未知 ACK 對帳、BD-05
+Quarantine 原子自動解禁、正式 Restore／Send／Purge 競態。任何符合簽章的
+`HEAD_MATCHED` 仍固定 `release_authorized=False`，Sender 保持 Sealed。
+
 Use only the dedicated `mir-sec-world001-lab` resources for implementation and tests. Do not attach the existing staging networks, restart the seven existing containers, reuse production secrets, merge the Draft PR, or enable trusted send.
 
 Decision: **Option B approved**. Implementation: **IN PROGRESS**. G5: **NOT RUN**. MIR-SEC-WORLD-001: **OPEN**. MSDSS P2: **NO-GO**.

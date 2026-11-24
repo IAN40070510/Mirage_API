@@ -1,0 +1,164 @@
+"""G5 第二個實體 PostgreSQL 的簽章 Anchor 發布／讀取與隔離 ACL 子驗收。"""
+
+from dataclasses import replace
+from pathlib import Path
+import os
+import secrets
+from uuid import uuid4
+
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+import psycopg
+from psycopg import sql
+import pytest
+
+from deception.world.postgres_restore_anchor import PostgresAnchorPublisher, PostgresAnchorHeadReader
+from deception.world.restore_anchor import (
+    RestoreAnchorError, SignedAnchorCheckpoint, verify_restore_anchor,
+)
+
+
+def _public(key: Ed25519PrivateKey) -> bytes:
+    """提供驗章用途的原生 Ed25519 公鑰，私鑰只存在測試程序。"""
+    return key.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw, format=serialization.PublicFormat.Raw,
+    )
+
+
+def _checkpoint(key: Ed25519PrivateKey, *, namespace: str, sequence: int,
+                prior: str, first: int, last: int) -> SignedAnchorCheckpoint:
+    """建立簽章有效且具有事件範圍的單一測試 Checkpoint。"""
+    unsigned = SignedAnchorCheckpoint(
+        namespace=namespace, epoch="epoch-test", sequence=sequence,
+        previous_digest=prior, world_digest=f"{sequence:064x}",
+        events_digest=f"{sequence + 100:064x}", first_event=first,
+        last_event=last, publication_id=f"publication-{sequence}",
+        status="COMMITTED", signature=bytes(64),
+    )
+    return replace(unsigned, signature=key.sign(unsigned.payload()))
+
+
+@pytest.fixture(scope="module")
+def fence_lab():
+    """只在第二個一次性 PG 服務建立臨時 Schema 與三個實體無繼承 SCRAM Login。"""
+    admin_dsn = os.environ.get("MIRAGE_G5_FENCE_TEST_DSN")
+    if not admin_dsn:
+        pytest.skip("requires separate MIRAGE_G5_FENCE_TEST_DSN")
+    suffix = uuid4().hex[:12]
+    roles = {kind: f"g5_{kind}_{suffix}" for kind in ("publisher", "reader", "runtime")}
+    passwords = {kind: secrets.token_urlsafe(32) for kind in roles}
+    with psycopg.connect(admin_dsn, autocommit=True) as admin:
+        # 專用 ephemeral database 第一次啟動時，Schema 不得已有另一份資料。
+        assert admin.execute(
+            "SELECT to_regnamespace('mirage_restore_fence')"
+        ).fetchone()[0] is None
+        ddl = (Path(__file__).parents[1] / "deploy/security-lab/g5-fence-schema.sql").read_text()
+        admin.execute(ddl)
+        for kind, role in roles.items():
+            admin.execute(sql.SQL("CREATE ROLE {} LOGIN NOINHERIT NOSUPERUSER NOCREATEDB "
+                                  "NOCREATEROLE PASSWORD {}").format(
+                                      sql.Identifier(role), sql.Literal(passwords[kind])))
+        for kind in ("publisher", "reader"):
+            admin.execute(sql.SQL("GRANT USAGE ON SCHEMA mirage_restore_fence TO {}").format(
+                sql.Identifier(roles[kind])))
+        admin.execute(sql.SQL("GRANT SELECT ON mirage_restore_fence.checkpoints, "
+                              "mirage_restore_fence.heads TO {}, {}").format(
+                                  sql.Identifier(roles["publisher"]), sql.Identifier(roles["reader"])))
+        admin.execute(sql.SQL("GRANT INSERT ON mirage_restore_fence.checkpoints, "
+                              "mirage_restore_fence.heads TO {}").format(
+                                  sql.Identifier(roles["publisher"])))
+        admin.execute(sql.SQL("GRANT UPDATE ON mirage_restore_fence.heads TO {}").format(
+            sql.Identifier(roles["publisher"])))
+    dsns = {kind: psycopg.conninfo.make_conninfo(admin_dsn, user=roles[kind],
+                                                password=passwords[kind]) for kind in roles}
+    try:
+        yield dsns, roles
+    finally:
+        with psycopg.connect(admin_dsn, autocommit=True) as admin:
+            admin.execute("DROP SCHEMA mirage_restore_fence CASCADE")
+            for role in roles.values():
+                admin.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(role)))
+
+
+def test_fence_lab_persists_latest_head_and_rejects_restored_world_rollback(fence_lab):
+    """真第二個 PostgreSQL 保留更新 Head；回退 World 的歷史摘要只能判為落後。"""
+    dsns, roles = fence_lab
+    namespace = f"isolated-{uuid4().hex}"
+    publisher_key, head_key = Ed25519PrivateKey.generate(), Ed25519PrivateKey.generate()
+    publisher = PostgresAnchorPublisher(
+        dsns["publisher"], expected_login=roles["publisher"],
+        publisher_public_key=_public(publisher_key))
+    reader = PostgresAnchorHeadReader(dsns["reader"], expected_login=roles["reader"],
+                                      head_private_key=head_key)
+    first = _checkpoint(publisher_key, namespace=namespace, sequence=1,
+                        prior="0" * 64, first=1, last=3)
+    second = _checkpoint(publisher_key, namespace=namespace, sequence=2,
+                         prior=first.chain_digest(), first=4, last=7)
+    assert publisher.append(first) == first.chain_digest()
+    assert publisher.append(second) == second.chain_digest()
+    args = dict(reader=reader, namespace=namespace, epoch="epoch-test",
+                publisher_public_key=_public(publisher_key), head_public_key=_public(head_key))
+    behind = verify_restore_anchor(restored_sequence=1,
+                                   restored_world_digest=first.world_digest, **args)
+    assert behind.state == "RESTORE_BEHIND" and not behind.release_authorized
+    matched = verify_restore_anchor(restored_sequence=2,
+                                    restored_world_digest=second.world_digest, **args)
+    assert matched.state == "HEAD_MATCHED" and not matched.release_authorized
+
+
+def test_fence_lab_refuses_replay_gap_signature_and_direct_mutation(fence_lab):
+    """重送、事件缺口、錯簽章與 SQL 直接改寫不可推進最高 Head。"""
+    dsns, roles = fence_lab
+    namespace = f"isolated-{uuid4().hex}"
+    publisher_key = Ed25519PrivateKey.generate()
+    publisher = PostgresAnchorPublisher(
+        dsns["publisher"], expected_login=roles["publisher"],
+        publisher_public_key=_public(publisher_key))
+    first = _checkpoint(publisher_key, namespace=namespace, sequence=1,
+                        prior="0" * 64, first=1, last=3)
+    assert publisher.append(first) == first.chain_digest()
+    with pytest.raises(RestoreAnchorError, match="sequence_or_coverage"):
+        publisher.append(first)
+    gap = _checkpoint(publisher_key, namespace=namespace, sequence=2,
+                      prior=first.chain_digest(), first=5, last=7)
+    with pytest.raises(RestoreAnchorError, match="sequence_or_coverage"):
+        publisher.append(gap)
+    invalid = _checkpoint(publisher_key, namespace=namespace, sequence=2,
+                          prior=first.chain_digest(), first=4, last=7)
+    with pytest.raises(RestoreAnchorError, match="signature_invalid"):
+        publisher.append(replace(invalid, signature=bytes(64)))
+    with psycopg.connect(dsns["publisher"]) as conn:
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            conn.execute("UPDATE mirage_restore_fence.checkpoints SET world_digest=%s "
+                         "WHERE namespace=%s", ("f" * 64, namespace))
+    with psycopg.connect(dsns["runtime"]) as conn:
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            conn.execute("SELECT * FROM mirage_restore_fence.heads")
+    with psycopg.connect(dsns["publisher"]) as conn:
+        assert conn.execute("SELECT sequence FROM mirage_restore_fence.heads "
+                            "WHERE namespace=%s", (namespace,)).fetchone()[0] == 1
+
+
+def test_fence_lab_reader_cannot_write_or_forge_latest_head(fence_lab):
+    """Head Reader 的真 SCRAM 角色只有 SELECT，簽錯的 Head 金鑰不能通過驗證。"""
+    dsns, roles = fence_lab
+    namespace = f"isolated-{uuid4().hex}"
+    publisher_key, head_key = Ed25519PrivateKey.generate(), Ed25519PrivateKey.generate()
+    publisher = PostgresAnchorPublisher(
+        dsns["publisher"], expected_login=roles["publisher"],
+        publisher_public_key=_public(publisher_key))
+    first = _checkpoint(publisher_key, namespace=namespace, sequence=1,
+                        prior="0" * 64, first=1, last=3)
+    publisher.append(first)
+    with psycopg.connect(dsns["reader"]) as conn:
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            conn.execute("DELETE FROM mirage_restore_fence.checkpoints WHERE namespace=%s",
+                         (namespace,))
+    reader = PostgresAnchorHeadReader(dsns["reader"], expected_login=roles["reader"],
+                                      head_private_key=head_key)
+    with pytest.raises(RestoreAnchorError):
+        verify_restore_anchor(
+            reader=reader, namespace=namespace, epoch="epoch-test", restored_sequence=1,
+            restored_world_digest=first.world_digest, publisher_public_key=_public(publisher_key),
+            head_public_key=_public(Ed25519PrivateKey.generate()),
+        )
