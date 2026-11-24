@@ -2,20 +2,20 @@
 
 > **文件性質**：跨輪討論的可追溯工作清單；不取代 [ADR](../../adr/MIR-SEC-WORLD-001-world-db-trust-boundary.md)、[決策紀錄](decisions-log.md)、[實作 Runbook](implementation-runbook.md) 或 [Verification Plan](verification-plan.md)。
 >
-> **整理日期**：2026-11-22（臺北時間）。**整合基準**：遠端文件分支 `docs/mir-sec-world-001-http-latency-baseline`、提交 `80eb37c6e2a13530cfd96bcfe89634450bc6ed5f`。本總表存於另一獨立文件分支；基準 SHA 不是 Mirage upstream main、MSDSS Protocol baseline，也不是本文件提交後的 SHA。
+> **整理日期**：2026-11-22（臺北時間）。**整合基準**：遠端文件分支 `docs/mir-sec-world-001-http-latency-baseline`、提交 `80eb37c6e2a13530cfd96bcfe89634450bc6ed5f`。本總表存於另一獨立文件分支；基準 SHA 不是 Mirage upstream main、外部判定服務 Protocol baseline，也不是本文件提交後的 SHA。
 >
-> **結論**：`MIR-SEC-WORLD-001 = OPEN`；`MSDSS P2 = NO-GO`；正式 Trusted Send／production DECEIVE **OFF**；未經安全驗收與核准不得啟用。獨立分支已有部分原生程式和隔離 Lab 測試，但**完整的受保護權限、真正的 HTTP 傳輸／Restore 閘門及端到端效能都未驗收**。
+> **結論**：`MIR-SEC-WORLD-001 = OPEN`；`外部端權限驗收 = NO-GO`；正式 Trusted Send／production DECEIVE **OFF**；未經安全驗收與核准不得啟用。獨立分支已有部分原生程式和隔離 Lab 測試，但**完整的受保護權限、真正的 HTTP 傳輸／Restore 閘門及端到端效能都未驗收**。
 
 ## 1. 範圍、優先次序及證據標記
 
 - **使用者需求優先次序**：① 回應功能有效、資料與世界狀態正確；② 使用者感受到的速度與可用性；③ 在前兩者之上繼續強化安全性。**既定 Release Gate 不得因優化速度而跳過**，例如未授權發送、恢復未知 COMMIT 後盲目重試、Restore 隔離失效。
-- **已採納架構**：資料庫強制關鍵狀態轉移（方案 B）；Mirage Owner 採納 **MSDSS Protocol Freeze v1**（D-68）；同一 Oracle 主機上獨立 Verifier／Authorizer 容器、OS 身分、SCRAM Role、Secret、DSN、Pool（D-69）；**Candidate Clean Cutover**，保留生成器，淘汰舊 Candidate 直接取得可信授權的入口（D-70）。另外 [Restore Anchor Option B](restore-anchor-option-b.md) 已核准獨立還原域；[BD-11](bd-11-deadline-semantics.md) 已選擇鎖後 DB 權威時間判定；[BD-05](bd-05-restore-quarantine-release.md) 已正式採納證據自動驗證解禁。
+- **已採納架構**：資料庫強制關鍵狀態轉移（方案 B）；Mirage Owner 採納 **外部判定服務 Protocol Freeze v1**（D-68）；同一 Oracle 主機上獨立 Verifier／Authorizer 容器、OS 身分、SCRAM Role、Secret、DSN、Pool（D-69）；**Candidate Clean Cutover**，保留生成器，淘汰舊 Candidate 直接取得可信授權的入口（D-70）。另外 [Restore Anchor Option B](restore-anchor-option-b.md) 已核准獨立還原域；[BD-11](bd-11-deadline-semantics.md) 已選擇鎖後 DB 權威時間判定；[BD-05](bd-05-restore-quarantine-release.md) 已正式採納證據自動驗證解禁。
 - **已明確要求的方向**：Fence 必須真正置於 World DB 備份／還原範圍之外；Send、Purge、Restore 走不能繞過的受保護閘門；全部證據正常時**自動解除 Quarantine，無需每次雙人或人工核准**；異常持續隔離，由人工修復後重跑驗證，**不得人工覆蓋失敗結果放行**。這是已採納的目標安全合約，不是現有部署完成證據。
 - **威脅範圍**：R1（Runtime DB 憑證與全部該身分 SQL 能力）必須抵抗；R2（取得同等 SQL 能力的 SQLi）納入 R1；R3（合法 Verifier API 濫用／部分秘密）按能力負面測試。R4（完整 HTTP Runtime 程序控制並自行 ASGI send）、R5（主機 root／Docker daemon／PG superuser）**不宣稱本輪完整防護**。
 
 | 標籤 | 精確意義 |
 | --- | --- |
-| **已重現** | 先前 MSDSS PR #23 的 PostgreSQL 缺口驗收報告有明確證據；本文件未重新執行。 |
+| **已重現** | 先前 外部判定服務 PR #23 的 PostgreSQL 缺口驗收報告有明確證據；本文件未重新執行。 |
 | **已觀察** | 指定來源版本的程式／交易結構或本地檔案直接可見。 |
 | **局部 PASS** | 特定隔離 PostgreSQL／CI 子案例通過；**不得擴寫成整體 Gate PASS**。 |
 | **待實作** | ADR／修補方向已定，但關鍵接線、Migration、部署或閘門尚未完成。 |
@@ -24,7 +24,7 @@
 
 ## 2. 原始已確認安全控制缺口
 
-唯一沿用的正式問題編號為 **`MIR-SEC-WORLD-001`**（MSDSS `P2` 是另一專案的驗收代號，不得重複充當漏洞 ID）。MSDSS [Draft PR #23](https://github.com/IAN40070510/MSDSS/pull/23) 記錄 PostgreSQL 17.6 **13／13 符合測試預期**，其中三項是**成功重現缺口**，不是修復 PASS。
+唯一沿用的正式問題編號為 **`MIR-SEC-WORLD-001`**（外部判定服務 `P2` 是另一專案的驗收代號，不得重複充當漏洞 ID）。外部判定服務消費端歷史問題紀錄（已另行封存） 記錄 PostgreSQL 17.6 **13／13 符合測試預期**，其中三項是**成功重現缺口**，不是修復 PASS。
 
 | 缺口 | 已觀察／報告能力 | 修復不變量 | 關閉前必有證據 |
 | --- | --- | --- | --- |
@@ -90,7 +90,7 @@
 | **需要即時模型生成** | **PENDING BASELINE** | 不將即時推論耗時混入純快路徑 SLO；先實測模型與硬體，再決定可接受時間、回壓及業務處置 |
 | **完整請求有效率** | **PENDING POLICY** | 除延遲外需單獨記成功、拒絕、未知結果、錯誤與正確 World 狀態，防止「全回錯誤但跑很快」取得假 PASS |
 
-**效能優化不能暗中變更**：MSDSS Freeze v1、受保護 Admission、Replay single-use、Operation Recovery、真正獨立 Fence、Snapshot／Purge 資格、Restore Quarantine 或正式 Trusted Send 的禁用控制。
+**效能優化不能暗中變更**：外部判定服務 Freeze v1、受保護 Admission、Replay single-use、Operation Recovery、真正獨立 Fence、Snapshot／Purge 資格、Restore Quarantine 或正式 Trusted Send 的禁用控制。
 
 ## 5. 修補順序與依賴（對照現行 G0～G6）
 
@@ -131,6 +131,6 @@
 2. **傳輸與還原**：Fence 不在 World DB 同一還原範圍；Send、Purge、Restore 全呼叫路徑無旁路；跨資料庫提交未知與真實 HTTP 部分傳輸均完成故障注入與對帳。
 3. **安全測試證據**：PG 17 實體權限／SQLSTATE、角色與 Secret、並行鎖 DAG、policy race、rollback/unknown commit、Snapshot GC／Purge、Restore／舊備份、Mixed Binary、現有正常功能皆 PASS；每項 PASS 有版本、Migration、環境、測資、時間與脫敏 log。
 4. **效能與品質**：拿到完整安全路徑的 HTTP P50/P95/P99／TTFB／錯誤率／有效回應率後優化並驗證；不能讓「降低檢查數量」成為性能改善手段。實際量化門檻需 Owner 採納。
-5. **流程與發布**：Owner、DBA、Security、Release Approver 與 MSDSS P2 各依所屬驗收完成審核。**在此之前維持 Draft／獨立分支，production DECEIVE OFF，不合併 main 或擴張到共享 staging。**
+5. **流程與發布**：Owner、DBA、Security、Release Approver 與外部端權限驗收 各依所屬驗收完成審核。**在此之前維持 Draft／獨立分支，production DECEIVE OFF，不合併 main 或擴張到共享 staging。**
 
 本檔僅整合**目前可追溯的討論、固定來源與修補證據**；出現新問題須記錄日期、Work Item ID、affected source SHA、修復方案、實測結果及殘餘風險，並同步更新 [Decisions Log](decisions-log.md) 與 [Verification Plan](verification-plan.md)。不可因新增文字就把 `NOT_RUN` 改成 `PASS`。

@@ -8,7 +8,7 @@
 - `trusted_http.create_app()` 對 Trusted Session Provider、Candidate、Admission、Registry、Audit／World 共用 `postgres_dsn`。
 - `TrustedSessionVerifier.verify()` 在簽章驗證後透過 `PostgresTrustedKeyRevocations.guard()` 與 `PostgresReplayStore.consume()` 操作**兩條獨立交易連線**；現況不具備 Replay＋Receipt 同交易。
 - `PostgresAdmissionControl.grant/claim/authorize_send/start_send/emergency_revoke` 直接對 `response_admissions`、`generation_controls` DML；`PostgresReplayStore.gc()` 直接 `DELETE replay_entries`。
-- Mirage 固定上游版 `start_send()` 經 `_lock_admission(..., for_send=True)` 再讀 Generation/Profile Emergency；與 MSDSS Freeze v1 有局部差異。**2026-11-21 使用者已正式選定 Mirage 採納 Freeze v1**；獨立實作分支開始修正該差異，完整原生協定與安全驗收仍未通過。
+- Mirage 固定上游版 `start_send()` 經 `_lock_admission(..., for_send=True)` 再讀 Generation/Profile Emergency；與外部判定服務 Freeze v1 有局部差異。**2026-11-21 使用者已正式選定 Mirage 採納 Freeze v1**；獨立實作分支開始修正該差異，完整原生協定與安全驗收仍未通過。
 - 本工作使用獨立分支，不得合併 `main` 或變更 staging／production；文件紀錄、程式修補和真實資料庫驗收必須各自標示。
 
 ## 實作順序（每一步前後保留負面與正常路徑證據）
@@ -79,4 +79,4 @@
 - 只以隔離專用 PostgreSQL 測試 DB 執行會修改角色或資料表的整合測試，不能指向共享 staging 或 production。
 - 結果變更須循 `NOT_RUN → RUNNING → PASS/FAIL/BLOCKED`，留下固定 Mirage SHA、Schema/Migration hash、PG 版本、實體 DB Login、資料集與 Fault Injection、UTC 時間及脫敏日誌。
 - `python tools/check_documentation.py` 成功只代表文件品質，不代表 G0–G6 或 `WORLD-*` 安全驗收通過。
-- 在所有 Gate 未通過且簽核未完成前：`Architecture=Proposed`、`MIR-SEC-WORLD-001=OPEN`、`MSDSS P2=NO-GO`、`production trusted-send=DISABLED`。
+- 在所有 Gate 未通過且簽核未完成前：`Architecture=Proposed`、`MIR-SEC-WORLD-001=OPEN`、`外部端權限驗收=NO-GO`、`production trusted-send=DISABLED`。

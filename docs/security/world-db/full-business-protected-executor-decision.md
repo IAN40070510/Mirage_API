@@ -31,4 +31,4 @@
 | G5 | independent fence authority and fault injection | NOT IMPLEMENTED |
 | Production | complete G0–G6, security owner approval | NO-GO |
 
-**Safety state:** `MIR-SEC-WORLD-001=OPEN`, `MSDSS P2=NO-GO`, production Trusted Send OFF, existing release fuse intact, main and staging untouched.
+**Safety state:** `MIR-SEC-WORLD-001=OPEN`, `外部端權限驗收=NO-GO`, production Trusted Send OFF, existing release fuse intact, main and staging untouched.

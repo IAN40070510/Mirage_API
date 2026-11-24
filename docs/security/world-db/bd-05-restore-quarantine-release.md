@@ -25,4 +25,4 @@ This supersedes the previously proposed mandatory two-person approval and the ex
 - RESTORE-RELEASE-06: operator credentials cannot override failed verification.
 - RESTORE-RELEASE-07: release cannot itself authorize or start a send.
 
-**Decision status: ADOPTED, implementation NOT COMPLETE, acceptance NOT RUN. MIR-SEC-WORLD-001 OPEN; MSDSS P2 NO-GO; production trusted send OFF.**
+**Decision status: ADOPTED, implementation NOT COMPLETE, acceptance NOT RUN. MIR-SEC-WORLD-001 OPEN; 外部端權限驗收 NO-GO; production trusted send OFF.**

@@ -202,13 +202,13 @@ def check_world_adr_contract(root: Path) -> list[str]:
         "ADR": (
             "Architecture", "Proposed", "SEND_AUTHORIZED",
             "Protocol Freeze v1", "NOT_RUN", "MIR-SEC-WORLD-001",
-            "MSDSS P2", "OperationSnapshotBinding", "decision_time",
+            "OperationSnapshotBinding", "decision_time",
             "SNAPSHOT_BINDING_CONFLICT", "WORLD_COMMITTED_ADMISSION_UNAVAILABLE",
             "Protocol baseline", "Mirage Owner adoption", "Mirage native conformance",
         ),
         "verification": (
             "NOT_RUN", "WORLD_COMMITTED_ADMISSION_UNAVAILABLE",
-            "SEND_STARTED", "MIR-SEC-WORLD-001", "MSDSS P2",
+            "SEND_STARTED", "MIR-SEC-WORLD-001",
         ),
         "decisions": (
             "NOT_RUN", "WORLD_COMMITTED_ADMISSION_UNAVAILABLE",
