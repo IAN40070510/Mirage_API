@@ -338,7 +338,17 @@ def _gateway() -> None:
         )
         created_result = gateway.send(cart_create)
         if created_result.status_code != 200:
-            raise RuntimeError("g3b_ci_cart_creation_rpc_unverifiable")
+            # Only the fixed, generic API failure category is logged; never
+            # print tokens, receipt contents, DSNs or native candidate bytes.
+            try:
+                failure_detail = created_result.json().get("detail", "unavailable")
+            except (ValueError, AttributeError):
+                failure_detail = "non_json"
+            if not isinstance(failure_detail, str) or len(failure_detail) > 120:
+                failure_detail = "invalid_detail"
+            raise RuntimeError(
+                "g3b_ci_cart_creation_rpc_unverifiable:"
+                + str(created_result.status_code) + ":" + failure_detail)
         created_json = created_result.json()
         created_metadata = created_json.get("executor_result", {})
         created_projection = created_json.get("native_projection", {})
