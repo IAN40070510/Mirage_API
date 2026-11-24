@@ -115,6 +115,13 @@ Order GET 200 需要 Creator Lineage／Read Source；未取得真 CI 不可勾�
 再驗證結果確實存在同一 World Snapshot 且 Order→Cart 衍生關係一致；
 跨 Cart、跨 Order、孤兒 Order 負面單元測試 PASS，修補版真 PG 待 CI。
 
+**I-02 Cancel 200／409 連續候選（待真 PG CI）**：以已受保護的 I-01
+成功預留結果取得 Reservation ID；新的固定 HTTP Receipt 取消並由
+Validator 重建 200 `cancelled`，再以第三個 Receipt 重複取消該資源，
+必須由真實 `rejected` WorldOperation 重建固定 409
+`reservation_not_active`，世界版本不增加。這不涵蓋 CAS conflict 或
+正式 Client HTTP，未取得真 CI 前保留 OPEN。
+
 | G3b 子門檻 | 獨立實測結果 | 正式簽收 |
 | --- | --- | --- |
 | 真 HTTPS Gateway→Verifier→Executor、互異 Client CA、拒絕重播／竄改 | 隔離 CI PASS | 僅實驗室傳輸子項 PASS |
@@ -132,7 +139,7 @@ Order GET 200 需要 Creator Lineage／Read Source；未取得真 CI 不可勾�
 | 編號 | 實際方法／路由 | 來源 Proof | 固定 Executor | 2xx／4xx 完整相容簽收 |
 | --- | --- | --- | --- | --- |
 | I-01 | POST `/synthetic/inventory/reservations` | 隔離 PASS | 受保護 reserve；單一 Receipt Commit；真 Handler `unknown_synthetic_sku` 409 候選四服務 PASS；200 成功 Commit／獨立 Validator 候選真 PG PASS | OPEN：其他 409、CAS conflict、原生 HTTP |
-| I-02 | POST `/synthetic/inventory/reservations/{reservation_id}/cancel` | 隔離 PASS | 受保護 cancel；409 候選能力已有固定 Handler，個別情境未真容器逐條實測 | OPEN：200、CAS conflict／其他 409、原生 HTTP |
+| I-02 | POST `/synthetic/inventory/reservations/{reservation_id}/cancel` | 隔離 PASS | 受保護 cancel；新增真 Reservation 的 200 與重複取消 409 連續來源回歸待 PG CI | OPEN：200／409 真 CI、CAS conflict、原生 HTTP |
 | I-03 | GET `/synthetic/operations/{attempt}` | 隔離 PASS | 固定 UUID4／空 Body Proof → ReadAdmission；獨立 Validator 核對 WorldOperation、Commit Receipt、Snapshot／Epoch／Key，重建歷史 200 或確定不存在的 409 候選；固定 SHA `88d286f` 真 PG/mTLS CI PASS | OPEN：客戶端原生 200／409、競態與故障路徑 |
 | I-04 | GET `/synthetic/inventory/{sku}` | 隔離 PASS | 固定 SKU／空 Body Proof → Executor ReadAdmission → 獨立 Validator 200 成功／真正缺 SKU 409 候選；SHA `c1769b9` 原始 UTF-8 三段一致性真 PG/mTLS CI PASS；正規百分比編碼候選待真 CI | OPEN：Client 原生 200／409、編碼完整相容、G4 Send |
 | C-01 | POST `/synthetic/carts` | 隔離 PASS | 受保護 Creator→衍生 Cart | OPEN：200／409、原始成功封套 |

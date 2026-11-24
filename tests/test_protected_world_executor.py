@@ -202,6 +202,72 @@ def test_inventory_http_proof_selects_handler_and_rejects_rpc_substitution(isola
     with pytest.raises(ProtectedGrantError, match="source_missing"):
         PostgresProtectedNativeProjector(dsn, expected_login=_real_login(dsn)).project_synthetic_success(uuid4())
 
+    # I-02：真 reserve 之後的 cancel 200 與重複取消 409，各自由 Receipt 決定。
+    reservation_id = json.loads(projected.body_bytes)["reservation"]["reservation_id"]
+    cancel_path = "/synthetic/inventory/reservations/" + reservation_id + "/cancel"
+
+    def issue_cancel_attempt(*, version: int, idempotency_key: str) -> tuple[dict, UUID]:
+        """以真 PostgreSQL 另一個 Receipt 固定取消操作，從 Executor 取內部結果。"""
+        cancel_body = json.dumps({
+            "expected_version": version, "idempotency_key": idempotency_key,
+            "commit_attempt_id": str(uuid4()),
+        }).encode()
+        cancel_request = replace(original_request(path=cancel_path), body=cancel_body)
+        cancel_proof = derive_verified_operation(cancel_request)
+        cancel_receipt, cancel_jti = uuid4(), uuid4().hex
+        with psycopg.connect(dsn) as connection:
+            connection.execute("INSERT INTO replay_entries VALUES ('gateway','mirage',%s,%s)",
+                               (cancel_jti, now + 120))
+            connection.execute(
+                """INSERT INTO ingress_receipts (
+                       receipt_id,issuer,audience,jti,key_id,environment_id,deployment_id,
+                       session_id,session_epoch,request_fingerprint,assessment_digest,
+                       claims_digest,verification_policy_version,token_issued_at,
+                       token_not_before,token_expires_at,access_mode)
+                   VALUES (%s,'gateway','mirage',%s,'kid',%s,%s,%s,1,%s,%s,%s,
+                           'trusted-session-v1.1',%s,%s,%s,'inventory')""",
+                (cancel_receipt, cancel_jti, binding.environment_id, binding.deployment_id,
+                 binding.session_id, cancel_proof.request_fingerprint, digest("b"), digest("c"),
+                 now - 5, now - 5, now + 90),
+            )
+            connection.execute(
+                """INSERT INTO protected_http_operation_bindings (
+                       receipt_id,platform,operation_id,method,path_template,
+                       request_fingerprint,request_body_sha256,request_path,request_content_type)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                (cancel_receipt, cancel_proof.platform, cancel_proof.operation_id,
+                 cancel_proof.method, cancel_proof.path_template,
+                 cancel_proof.request_fingerprint, cancel_proof.request_body_sha256,
+                 cancel_proof.request_path, cancel_proof.request_content_type),
+            )
+        result = executor.execute_verified_http(
+            receipt_id=cancel_receipt, raw_path=cancel_request.raw_path, raw_body=cancel_body,
+        )
+        return result, cancel_receipt
+
+    cancelled, cancel_receipt = issue_cancel_attempt(version=2, idempotency_key="cancel-one")
+    assert cancelled["operation"] == "cancelSyntheticInventory"
+    assert cancelled["status"] == "committed" and cancelled["state_version"] == 3
+    cancel_projection = PostgresProtectedNativeProjector(
+        dsn, expected_login=_real_login(dsn)).project_synthetic_success(cancel_receipt)
+    assert cancel_projection.operation_id == "cancelSyntheticInventory"
+    assert cancel_projection.status_code == 200
+    cancel_payload = json.loads(cancel_projection.body_bytes)
+    assert cancel_payload["reservation"]["reservation_id"] == reservation_id
+    assert cancel_payload["reservation"]["status"] == "cancelled"
+
+    repeated, rejected_receipt = issue_cancel_attempt(version=3, idempotency_key="cancel-again")
+    assert repeated["status"] == "rejected" and repeated["state_version"] == 3
+    rejection = PostgresProtectedNativeProjector(
+        dsn, expected_login=_real_login(dsn)).project_synthetic_rejection(rejected_receipt)
+    assert rejection.status_code == 409 and rejection.operation_id == "cancelSyntheticInventory"
+    assert rejection.body_bytes == b'{"code":"reservation_not_active"}'
+    with psycopg.connect(dsn) as connection:
+        assert connection.execute(
+            "SELECT version FROM world_snapshots WHERE world_generation_id=%s",
+            (snapshot.scope.world_generation_id,),
+        ).fetchone()[0] == 3
+
 
 def test_inventory_http_legacy_receipt_cannot_select_operation(isolated_test_dsn):
     """舊 Receipt 即使持有有效 Inventory Scope，缺原始 Operation Proof 就不能執行。"""
