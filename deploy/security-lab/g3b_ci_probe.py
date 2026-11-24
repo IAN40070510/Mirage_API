@@ -559,11 +559,15 @@ def _gateway() -> None:
                 session="g3b-ci-cart-creator", mode="cart",
             )
             rejected = gateway.send(forbidden)
-            if rejected.status_code != 503:
+            # Query 於 Verifier 的 derive_verified_operation() 前置規則拒絕，
+            # 尚無 Receipt／Proof，故回 403；另外六組具 Proof，Executor 回 503。
+            expected_status = 403 if suffix == "query" else 503
+            if rejected.status_code != expected_status:
                 raise RuntimeError("g3b_ci_medusa_create_input_not_denied:" + suffix
                                    + ":status=" + str(rejected.status_code))
         print("G3B_ROUTE_MEDUSA_CREATE_INPUT_DENIED " + json.dumps({
             "operation_id": "PostCarts", "cases": 7, "native_business_response": False,
+            "query_pre_receipt_status": 403, "executor_denials": 6,
             "new_cart_source": False,
         }, sort_keys=True))
         # 新 JWS／JTI／Request ID 是另一張 Receipt，不可借用已提交的 Cart Source。
@@ -1471,8 +1475,9 @@ def _audit(root: Path) -> None:
                 "GetOrdersId": 1,
                 "cancelSyntheticOrder": 1,
                 "getCartOperation": 2,
-                # M-01：合法一張、非空 items 一張及七個合法 JWS 的惡意輸入。
-                "PostCarts": 9,
+                # M-01：合法一張、非空 items 一張、六個 Executor 503；
+                # 第七個 Query 在 Verifier 403，不允許鑄造 Operation Proof。
+                "PostCarts": 8,
                 "PostCartsIdLineItems": 2,
         }:
             raise RuntimeError("g3b_ci_operation_proof_count_mismatch")
