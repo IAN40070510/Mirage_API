@@ -426,6 +426,56 @@ def _gateway() -> None:
             "operation_id": "createGuestCart", "cases": 2,
             "native_business_response": False,
         }, sort_keys=True))
+        # C-02：不要只讀 Owner 事先準備的 Cart；直接以 C-01 真 HTTP 新建的
+        # Derived Session／Resource 簽新 JWS，驗證跨 Creator→Derived 邊界
+        # 的 ReadAdmission 和獨立 Validator 仍只接受該資源的最新快照。
+        derived_session = created_source.get("derived_session_id")
+        derived_id = created_metadata.get("resource_id")
+        if (not isinstance(derived_session, str)
+                or re.fullmatch(r"[0-9a-f]{32}", derived_session) is None
+                or not isinstance(derived_id, str)
+                or re.fullmatch(r"cart_[0-9a-f]{32}", derived_id) is None):
+            raise RuntimeError("g3b_ci_cart_derived_identity_unverifiable")
+        derived_request_id = "g3b-ci-cart-created-then-read"
+        derived_get = gateway.build_request(
+            "GET", origin + "/synthetic/carts/" + derived_id,
+            headers={"x-request-id": derived_request_id},
+        )
+        derived_get.headers["x-trusted-session"] = _sign(
+            key, fingerprint=fingerprint_httpx_request(derived_get, derived_request_id),
+            session=derived_session, mode="cart", resource_id=derived_id,
+        )
+        derived_response = gateway.send(derived_get)
+        if derived_response.status_code != 200:
+            raise RuntimeError("g3b_ci_cart_derived_read_rpc_unverifiable")
+        derived_result = derived_response.json()
+        derived_metadata = derived_result.get("executor_result", {})
+        derived_projection = derived_result.get("native_projection", {})
+        derived_body = base64.b64decode(derived_projection.get("body_b64", ""), validate=True)
+        derived_payload = json.loads(derived_body)
+        if (derived_metadata.get("kind") != "cart_read_admitted"
+                or derived_metadata.get("operation") != "getGuestCart"
+                or derived_projection.get("status_code") != 200
+                or derived_projection.get("source", {}).get("kind") != "snapshot"
+                or derived_projection.get("source", {}).get("read_admission_id")
+                    != derived_metadata.get("read_admission_id")
+                or derived_projection.get("scope", {}).get("session_id") != derived_session
+                or derived_projection.get("scope", {}).get("world_generation_id")
+                    != created_source.get("derived_world_generation_id")
+                or derived_payload.get("cart") != created_payload.get("cart")
+                or derived_payload.get("commit_attempt_id", "unexpected") is not None
+                or derived_payload.get("state_version") != 1
+                or derived_payload.get("state_hash") != created_source.get("state_hash")
+                or derived_projection.get("delivery") != "candidate_only_no_send_authorization"
+                or derived_projection.get("envelope_hash") != response_hashes(
+                    200, read_headers, derived_body)[0]
+                or gateway.send(derived_get).status_code != 403):
+            raise RuntimeError("g3b_ci_cart_derived_read_source_mismatch")
+        print("G3B_ROUTE_CART_CREATED_THEN_READ_CANDIDATE " + json.dumps({
+            "operation_id": "getGuestCart", "source": "protected_world_read_sources",
+            "validated_native_status": 200, "derived_scope": True,
+            "native_business_response": False,
+        }, sort_keys=True))
         # C-02：同樣透過真 Gateway→Cart Executor→獨立唯讀 Validator，
         # 只能查驗與既有派生 Cart Session 相符的原生成功 JSON 候選。
         cart_request_id = "g3b-ci-cart-get-200"
@@ -515,7 +565,7 @@ def _gateway() -> None:
           "inventory_operation_200=1 inventory_absence_409=1 unknown_operation=503 "
           "synthetic_409=1 cart_create_200=1 cart_cross_receipt_key=denied "
           "cart_invalid_body=2_denied "
-          "cart_read_200=1 medusa_400=1 medusa_404=1 "
+          "cart_read_200=1 cart_created_then_read_200=1 medusa_400=1 medusa_404=1 "
           "replay=denied anonymous=denied "
           "execution_network=unreachable trusted_send=off")
 
@@ -580,7 +630,7 @@ def _audit(root: Path) -> None:
                 "getSyntheticInventory": 2,
                 "getSyntheticOperation": 2,
                 "createGuestCart": 4,
-                "getGuestCart": 1,
+                "getGuestCart": 2,
                 "PostCartsIdLineItems": 2,
         }:
             raise RuntimeError("g3b_ci_operation_proof_count_mismatch")
