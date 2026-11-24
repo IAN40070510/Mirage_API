@@ -260,7 +260,8 @@ def test_inventory_http_proof_selects_handler_and_rejects_rpc_substitution(isola
     assert cancel_payload["reservation"]["status"] == "cancelled"
 
     repeated, rejected_receipt = issue_cancel_attempt(version=3, idempotency_key="cancel-again")
-    assert repeated["status"] == "rejected" and repeated["state_version"] == 3
+    # Executor 的拒絕結果不宣稱成功 Commit 版本；真實 World 版本另由 DB 查證。
+    assert repeated["status"] == "rejected" and repeated["state_version"] is None
     rejection = PostgresProtectedNativeProjector(
         dsn, expected_login=_real_login(dsn)).project_synthetic_rejection(rejected_receipt)
     assert rejection.status_code == 409 and rejection.operation_id == "cancelSyntheticInventory"
