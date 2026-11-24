@@ -4,7 +4,7 @@ import asyncio
 import time
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -193,6 +193,8 @@ def test_asgi_emits_nothing_without_valid_sender_lease(candidate_and_gate):
             """控制本次測試提供相符或故意錯誤的已授權封套。"""
             self.corrupt = False
             self.wrong_receipt = False
+            self.wrong_deadline = False
+            self.invalid_lease_id = False
             self.transport_failure = False
 
         def start_send(self, *, admission_id, receipt_id, owner, request_fingerprint,
@@ -202,12 +204,14 @@ def test_asgi_emits_nothing_without_valid_sender_lease(candidate_and_gate):
             if self.transport_failure:
                 raise ConnectionError("simulated COMMIT ACK loss")
             return ProtectedSendLease(
-                lease_id=uuid4(), admission_id=admission_id, send_owner=owner,
+                lease_id=UUID(int=0) if self.invalid_lease_id else uuid4(),
+                admission_id=admission_id, send_owner=owner,
                 receipt_id=uuid4() if self.wrong_receipt else receipt_id,
                 request_fingerprint=request_fingerprint,
                 candidate_hash=admission.candidate_hash,
                 envelope_bytes=(expected_envelope + b"attacker" if self.corrupt else expected_envelope),
-                transmission_deadline=admission.transmission_deadline,
+                transmission_deadline=(admission.transmission_deadline - 1
+                                       if self.wrong_deadline else admission.transmission_deadline),
             )
 
         def finish_send(self, **kwargs):
@@ -276,6 +280,24 @@ def test_asgi_emits_nothing_without_valid_sender_lease(candidate_and_gate):
         pipeline_result(candidate, gate, request), request,
     )
     sender.wrong_receipt = False
+    sender.wrong_deadline = True
+    events.clear()
+    response_bad_deadline = ResponseRenderer(gate, transmission_factory=factory).render(
+        pipeline_result(candidate, gate, request), request,
+    )
+    with pytest.raises(TransmissionError, match="lease_refused"):
+        asyncio.run(response_bad_deadline(scope, receive, send))
+    assert events == ["lease"]
+    sender.wrong_deadline = False
+    sender.invalid_lease_id = True
+    events.clear()
+    response_bad_lease_id = ResponseRenderer(gate, transmission_factory=factory).render(
+        pipeline_result(candidate, gate, request), request,
+    )
+    with pytest.raises(TransmissionError, match="lease_refused"):
+        asyncio.run(response_bad_lease_id(scope, receive, send))
+    assert events == ["lease"]
+    sender.invalid_lease_id = False
     sender.transport_failure = True
     events.clear()
     with pytest.raises(ConnectionError, match="COMMIT ACK loss"):

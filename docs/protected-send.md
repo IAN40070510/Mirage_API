@@ -22,6 +22,9 @@ transmission_factory=...)` 接到既有 `ValidatedHTTPResponse`：在真正發�
 `http.response.start` 之前先核對原請求、最終 Header／Body Hash，取得
 一次性 Lease 並比對**真正保存**的 Envelope bytes。ASGI 完成／失敗時
 以同一 Lease ID 原子寫入唯一終態及必要 Audit；任何不明結果不重新起送。
+傳輸層另外要求回傳的 `lease_id` 是 UUIDv4，且 Lease 的
+`transmission_deadline` 與已授權 Admission 完全一致；即使內部 Sender
+回傳了匹配的 Payload，錯誤期限或無效 Lease ID 仍須在第一個 ASGI bytes 前拒絕。
 
 **這些仍是隔離測試中的內部 primitive，不是正式 HTTP 入口。**
 `protected_rpc.create_sealed_app()` 仍對業務 RPC 回 503；
@@ -54,6 +57,7 @@ from deception.world import PostgresProtectedSender
 sender = PostgresProtectedSender(sender_dsn, expected_login="mirage_sender")
 lease = sender.start_send(
     admission_id=authorized_admission_id,
+    receipt_id=verified_receipt_id,
     owner=authorized_sender_owner,
     request_fingerprint=original_request_fingerprint,
     expected_envelope=validated_final_envelope,
@@ -70,6 +74,8 @@ if lease is None:
 錯 Pin 時零 ASGI 訊息；使用 `MIRAGE_POSTGRES_TEST_DSN` 的真 PostgreSQL
 隔離測試驗證重複／併發起送只有一把 Lease、不同 Owner／Fingerprint／
 bytes 拒絕、不可改寫 Lease、Lease INSERT 故障時 transaction rollback。
+另有隔離 ASGI 負面測試故意回傳錯誤 Deadline 或非 UUIDv4 Lease ID，
+均必須拒絕且不送出 `http.response.start`；這不代表 G5 已接線。
 
 隔離測試的 Sender 登入者為專用 schema 管理者，不等於真實
 `mirage_sender` 的最小權限 SCRAM／pg_hba／Secret 分離驗收。這裡的

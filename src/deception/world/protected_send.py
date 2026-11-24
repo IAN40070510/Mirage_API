@@ -210,12 +210,16 @@ class ProtectedLeaseTransmission:
             request_fingerprint=self._fingerprint,
             expected_envelope=self._expected_envelope,
         )
-        if (lease is None or lease.admission_id != self.admission.admission_id
+        if (not isinstance(lease, ProtectedSendLease)
+                or not isinstance(lease.lease_id, UUID) or lease.lease_id.version != 4
+                or lease.admission_id != self.admission.admission_id
                 or lease.receipt_id != self.receipt_id
                 or lease.send_owner != self.owner
                 or lease.request_fingerprint != self._fingerprint
                 or lease.candidate_hash != self.admission.candidate_hash
-                or lease.envelope_bytes != self._expected_envelope):
+                or lease.envelope_bytes != self._expected_envelope
+                or type(lease.transmission_deadline) is not int
+                or lease.transmission_deadline != self.admission.transmission_deadline):
             raise TransmissionError("protected_send_lease_refused")
         self._lease = lease
 
