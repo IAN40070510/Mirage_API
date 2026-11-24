@@ -842,6 +842,114 @@ def _gateway() -> None:
             "validated_native_status": 200, "state_version": 6, "derived_scope": True,
             "native_business_response": False,
         }, sort_keys=True))
+        # C-07：Order ID 源自已驗證的 complete 候選，而非 Client 自填。
+        # 同一派生世界、但新的 Order Resource Capability 才能做 GET。
+        order_get_id = "g3b-ci-derived-order-get-200"
+        order_get = gateway.build_request(
+            "GET", origin + "/synthetic/orders/" + derived_order_id,
+            headers={"x-request-id": order_get_id},
+        )
+        order_get.headers["x-trusted-session"] = _sign(
+            key, fingerprint=fingerprint_httpx_request(order_get, order_get_id),
+            session=derived_session, mode="cart", resource_id=derived_order_id,
+        )
+        order_read = gateway.send(order_get)
+        if order_read.status_code != 200:
+            raise RuntimeError("g3b_ci_derived_order_read_rpc_unverifiable")
+        order_read_json = order_read.json()
+        order_read_metadata = order_read_json.get("executor_result", {})
+        order_read_projection = order_read_json.get("native_projection", {})
+        order_read_bytes = base64.b64decode(
+            order_read_projection.get("body_b64", ""), validate=True,
+        )
+        order_read_payload = json.loads(order_read_bytes)
+        if (order_read_metadata.get("kind") != "cart_read_admitted"
+                or order_read_metadata.get("operation") != "getSyntheticOrder"
+                or order_read_metadata.get("resource_id") != derived_order_id
+                or order_read_metadata.get("state_version") != 6
+                or order_read_metadata.get("state_hash") != completed_metadata.get("state_hash")
+                or order_read_projection.get("status_code") != 200
+                or order_read_projection.get("source", {}).get("kind") != "snapshot"
+                or order_read_projection.get("source", {}).get("read_admission_id")
+                    != order_read_metadata.get("read_admission_id")
+                or order_read_projection.get("scope", {}).get("session_id") != derived_session
+                or order_read_projection.get("scope", {}).get("world_generation_id")
+                    != created_source.get("derived_world_generation_id")
+                or order_read_projection.get("delivery")
+                    != "candidate_only_no_send_authorization"
+                or order_read_payload.get("order") != completed_order
+                or order_read_payload.get("state_version") != 6
+                or order_read_payload.get("state_hash") != completed_metadata.get("state_hash")
+                or order_read_payload.get("commit_attempt_id", "missing") is not None
+                or order_read_projection.get("envelope_hash") != response_hashes(
+                    200, read_headers, order_read_bytes)[0]
+                or gateway.send(order_get).status_code != 403):
+            raise RuntimeError("g3b_ci_derived_order_read_source_mismatch")
+        print("G3B_ROUTE_DERIVED_ORDER_READ_CANDIDATE " + json.dumps({
+            "operation_id": "getSyntheticOrder", "source": "protected_world_read_sources",
+            "validated_native_status": 200, "state_version": 6,
+            "native_business_response": False,
+        }, sort_keys=True))
+        # C-08：受保護 Order Capability、CAS 版本 6、獨立 Receipt 才能取消。
+        cancel_order_id = "g3b-ci-derived-order-cancel-200"
+        cancel_order_attempt = str(uuid4())
+        cancel_order_body = json.dumps({
+            "expected_version": 6, "idempotency_key": "g3b-order-cancel-once",
+            "commit_attempt_id": cancel_order_attempt,
+        }, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        cancel_order = gateway.build_request(
+            "POST", origin + "/synthetic/orders/" + derived_order_id + "/cancel",
+            content=cancel_order_body,
+            headers={"x-request-id": cancel_order_id, "content-type": "application/json"},
+        )
+        cancel_order.headers["x-trusted-session"] = _sign(
+            key, fingerprint=fingerprint_httpx_request(cancel_order, cancel_order_id),
+            session=derived_session, mode="cart", resource_id=derived_order_id,
+        )
+        canceled = gateway.send(cancel_order)
+        if canceled.status_code != 200:
+            raise RuntimeError("g3b_ci_derived_order_cancel_rpc_unverifiable")
+        canceled_metadata = canceled.json().get("executor_result", {})
+        canceled_projection = canceled.json().get("native_projection", {})
+        canceled_bytes = base64.b64decode(
+            canceled_projection.get("body_b64", ""), validate=True,
+        )
+        canceled_payload = json.loads(canceled_bytes)
+        canceled_order = canceled_payload.get("order", {})
+        if (canceled_metadata.get("kind") != "world_mutation"
+                or canceled_metadata.get("operation") != "cancelSyntheticOrder"
+                or canceled_metadata.get("status") != "committed"
+                or canceled_metadata.get("commit_attempt_id") != cancel_order_attempt
+                or canceled_metadata.get("state_version") != 7
+                or canceled_projection.get("status_code") != 200
+                or canceled_projection.get("source", {}).get("kind") != "committed_operation"
+                or canceled_projection.get("source", {}).get("operation_result_digest")
+                    != canceled_metadata.get("result_digest")
+                or canceled_projection.get("source", {}).get("committed_state_version") != 7
+                or canceled_projection.get("source", {}).get("committed_state_hash")
+                    != canceled_metadata.get("state_hash")
+                or canceled_projection.get("scope", {}).get("session_id") != derived_session
+                or canceled_projection.get("scope", {}).get("world_generation_id")
+                    != created_source.get("derived_world_generation_id")
+                or canceled_projection.get("delivery")
+                    != "candidate_only_no_send_authorization"
+                or canceled_payload.get("state_version") != 7
+                or canceled_payload.get("state_hash") != canceled_metadata.get("state_hash")
+                or canceled_payload.get("commit_attempt_id") != cancel_order_attempt
+                or canceled_order.get("id") != derived_order_id
+                or canceled_order.get("cart_id") != derived_id
+                or canceled_order.get("status") != "cancelled"
+                or canceled_order.get("total") != 100
+                or canceled_order.get("items") != completed_order.get("items")
+                or canceled_projection.get("envelope_hash") != response_hashes(
+                    200, read_headers, canceled_bytes)[0]
+                or gateway.send(cancel_order).status_code != 403):
+            raise RuntimeError("g3b_ci_derived_order_cancel_source_mismatch")
+        print("G3B_ROUTE_DERIVED_ORDER_CANCEL_CANDIDATE " + json.dumps({
+            "operation_id": "cancelSyntheticOrder", "source": "protected_world_commit_sources",
+            "validated_native_status": 200, "state_version": 7,
+            "native_business_response": False,
+        }, sort_keys=True))
         # C-02：同樣透過真 Gateway→Cart Executor→獨立唯讀 Validator，
         # 只能查驗與既有派生 Cart Session 相符的原生成功 JSON 候選。
         cart_request_id = "g3b-ci-cart-get-200"
@@ -937,6 +1045,7 @@ def _gateway() -> None:
           "cart_derived_remove_200=1 "
           "cart_derived_empty_complete_409=1 "
           "cart_derived_complete_200=1 "
+          "derived_order_get_200=1 derived_order_cancel_200=1 "
           "medusa_400=1 medusa_404=1 "
           "replay=denied anonymous=denied "
           "execution_network=unreachable trusted_send=off")
@@ -987,7 +1096,7 @@ def _audit(root: Path) -> None:
             raise RuntimeError("g3b_ci_cross_role_secret_exposure:" + name)
     with psycopg.connect("postgresql://mirage_ci_owner:mirage_ci_only@127.0.0.1:55433/"
                          "mirage_g3b_ci?connect_timeout=5") as admin:
-        if admin.execute("SELECT count(*) FROM protected_world_commit_sources").fetchone()[0] != 6:
+        if admin.execute("SELECT count(*) FROM protected_world_commit_sources").fetchone()[0] != 7:
             raise RuntimeError("g3b_ci_inventory_commit_evidence_missing")
         if admin.execute("SELECT count(*) FROM protected_medusa_rejection_sources").fetchone()[0] != 2:
             raise RuntimeError("g3b_ci_medusa_rejection_evidence_missing")
@@ -1007,6 +1116,8 @@ def _audit(root: Path) -> None:
                 "updateGuestCartItem": 1,
                 "removeGuestCartItem": 1,
                 "completeGuestCart": 2,
+                "getSyntheticOrder": 1,
+                "cancelSyntheticOrder": 1,
                 "PostCartsIdLineItems": 2,
         }:
             raise RuntimeError("g3b_ci_operation_proof_count_mismatch")
