@@ -12,7 +12,7 @@ fingerprint 與部署 scope 驗證後，可從部署者明確注入的
 `AttackAssessment`。若 `require_original_assessment=True`，
 建構時無 callable 查回介面即拒絕；運作時查回缺失、錯誤、
 型別不符、身份／scope／digest 不符，一律拒絕而不降級為
-claims-only。外部資料庫 DSN、SQL 或 `msdss_*` 函式不是 Mirage
+claims-only。外部資料庫 DSN、SQL 或 `external-consumer_*` 函式不是 Mirage
 runtime 的組成部分。
 
 原生 Session epoch 的 FOR SHARE／FOR UPDATE 交易界限、

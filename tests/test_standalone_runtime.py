@@ -37,12 +37,12 @@ def test_container_copy_sources_exist():
 def test_no_consumer_owned_python_imports():
     """防止程式與一般測試再次依賴被移交的整合套件。"""
     root = Path(__file__).resolve().parents[1]
-    assert not (root / "integrations/msdss").exists()
+    assert not (root / "integrations").exists()
     for directory in ("src", "mirage_validator", "tools", "tests"):
         for path in (root / directory).rglob("*.py"):
             parsed = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             for node in ast.walk(parsed):
                 if isinstance(node, ast.Import):
-                    assert all(not alias.name.startswith("integrations.msdss") for alias in node.names), path
+                    assert all(not alias.name.startswith("integrations.") for alias in node.names), path
                 if isinstance(node, ast.ImportFrom) and node.module:
-                    assert not node.module.startswith("integrations.msdss"), path
+                    assert not node.module.startswith("integrations."), path
