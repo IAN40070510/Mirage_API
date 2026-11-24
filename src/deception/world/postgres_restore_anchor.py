@@ -49,6 +49,18 @@ class PostgresAnchorPublisher:
                     cursor.execute("SELECT current_user")
                     if cursor.fetchone()[0] != self._login:
                         raise RestoreAnchorError("restore_anchor_publisher_login_mismatch")
+                    # 與獨立 DBA 的 epoch 追加共用 xact lock；先鎖再讀最新權威，
+                    # 舊世代的有效簽章也不能在新 epoch 發布後提交舊 Head。
+                    cursor.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                                   (f"mirage.fence.epoch:{self._namespace}",))
+                    cursor.execute(
+                        "SELECT epoch FROM mirage_restore_fence.authority_epochs "
+                        "WHERE namespace=%s ORDER BY generation DESC LIMIT 1",
+                        (self._namespace,),
+                    )
+                    current = cursor.fetchone()
+                    if current is None or current[0] != self._epoch:
+                        raise RestoreAnchorError("restore_anchor_publisher_epoch_retired")
                     # 第 1 節尚無可 FOR UPDATE 的 Head；固定 advisory xact lock
                     # 將同 Namespace/Epoch 的首次發布也序列化。
                     cursor.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
@@ -141,8 +153,12 @@ class PostgresAnchorHeadReader:
         if namespace != self._namespace or epoch != self._epoch:
             raise RestoreAnchorError("restore_anchor_head_scope_mismatch")
         rows = self._query(
-            """SELECT sequence, checkpoint_digest FROM mirage_restore_fence.heads
-               WHERE namespace=%s AND epoch=%s""", (namespace, epoch),
+            """SELECT h.sequence,h.checkpoint_digest FROM mirage_restore_fence.heads h
+               JOIN LATERAL (
+                   SELECT ae.epoch FROM mirage_restore_fence.authority_epochs ae
+                   WHERE ae.namespace=%s ORDER BY ae.generation DESC LIMIT 1
+               ) current_epoch ON current_epoch.epoch=h.epoch
+               WHERE h.namespace=%s AND h.epoch=%s""", (namespace, namespace, epoch),
         )
         if len(rows) != 1:
             raise RestoreAnchorError("restore_anchor_head_missing")
@@ -161,10 +177,17 @@ class PostgresAnchorHeadReader:
         if namespace != self._namespace or epoch != self._epoch:
             raise RestoreAnchorError("restore_anchor_head_scope_mismatch")
         rows = self._query(
-            """SELECT namespace,epoch,sequence,previous_digest,world_digest,events_digest,
-                      first_event,last_event,publication_id,status,signature
-               FROM mirage_restore_fence.checkpoints
-               WHERE namespace=%s AND epoch=%s AND sequence BETWEEN %s AND %s
-               ORDER BY sequence""", (namespace, epoch, first, last),
+            """SELECT c.namespace,c.epoch,c.sequence,c.previous_digest,c.world_digest,
+                      c.events_digest,c.first_event,c.last_event,c.publication_id,
+                      c.status,c.signature
+               FROM mirage_restore_fence.checkpoints c
+               JOIN LATERAL (
+                   SELECT ae.epoch FROM mirage_restore_fence.authority_epochs ae
+                   WHERE ae.namespace=%s ORDER BY ae.generation DESC LIMIT 1
+               ) current_epoch ON current_epoch.epoch=c.epoch
+               WHERE c.namespace=%s AND c.epoch=%s AND c.sequence BETWEEN %s AND %s
+               ORDER BY c.sequence""", (namespace, namespace, epoch, first, last),
         )
+        if not rows:
+            raise RestoreAnchorError("restore_anchor_checkpoint_missing_or_epoch_retired")
         return [SignedAnchorCheckpoint(*row[:10], bytes(row[10])) for row in rows]

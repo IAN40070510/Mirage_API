@@ -236,10 +236,30 @@ Reader 請求在任何查詢前拒絕、未設定合法範圍不能啟動，並�
 Head nonce 驗章。現有實體 PostgreSQL 測試仍負責證明合法發布與歷史鏈節
 讀取；未提供第二個專用 Fence DSN 的環境必須保留 SKIP，不可算成實體 PASS。
 
-**仍未解決**：單一 namespace 下具權威性的最高 active epoch 登錄、完整事件
+**此子項仍未解決**：單一 namespace 下最高 active epoch 登錄（後續增量見下）、完整事件
 涵蓋、跨 World/Fence DB 未知 COMMIT／ACK 對帳、BD-05 原子自動解禁，以及
 Restore↔Sender↔Purge 競態。此切面不提供釋放 Quarantine 的 API，
 不修改正式發送封鎖，G5 仍 **OPEN／NO-GO**。
+
+### 2026-11-25 獨立 Fence DB 最高 active epoch 登錄（待實體 CI 簽收）
+
+第二個 Fence DB 隔離 schema 新增 `authority_epochs(namespace, generation, epoch)`
+不可變追加表，權威世代必須從 1 開始連續遞增、同一 namespace 不得重用 epoch。
+只有獨立 DBA 能追加；Publisher／Head Reader 只獲 `SELECT`，Runtime 無權讀寫。
+Publisher 在發佈之前使用與 DBA 世代追加同一把 namespace advisory transaction
+lock，再讀最高 generation 的 epoch；舊簽章與舊實體 DB login 不能在換代後
+接續更新 Head。Reader 在每次 Head 觀測與鏈節讀取時，都在獨立 DB 查當前
+最高 generation；舊 epoch 就算保有簽章有效的歷史 Head 也不可再次簽發。
+
+新增真第二 PostgreSQL 測試：管理者建立初始權威、Publisher／Reader 正常使用、
+DBA 追加第二世代、舊 Reader／Publisher 拒絕、新世代可進行獨立簽章鏈、
+Publisher 不得自行追加權威世代、管理者不能修改歷史或跳號。隔離 CI 會驗證
+這個新子項；在完成前不得把它登記為 PASS。
+
+**嚴格限制**：這只建立單一獨立 Fence DB 的世代上限與不可回退稽核資料。
+它不保證對抗該 Fence DB 管理者或儲存備份域自身的回退，也不驗證跨 epoch
+的全部業務事件涵蓋或跨兩庫原子性。BD-05 機器解禁、同時 Send/Purge、
+正式憑證與 Release Gate 仍未接線；正式 Trusted Send 保持 OFF。
 
 **隔離主線 CI 補證**：固定提交
 [`d35af3f`](https://github.com/IAN40070510/Mirage_API/commit/d35af3f62c9ab7bf667bfcae903540a3ec333f7d)
