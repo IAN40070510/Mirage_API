@@ -558,8 +558,10 @@ def _gateway() -> None:
                 key, fingerprint=fingerprint_httpx_request(forbidden, forbidden_id),
                 session="g3b-ci-cart-creator", mode="cart",
             )
-            if gateway.send(forbidden).status_code != 503:
-                raise RuntimeError("g3b_ci_medusa_create_input_not_denied:" + suffix)
+            rejected = gateway.send(forbidden)
+            if rejected.status_code != 503:
+                raise RuntimeError("g3b_ci_medusa_create_input_not_denied:" + suffix
+                                   + ":status=" + str(rejected.status_code))
         print("G3B_ROUTE_MEDUSA_CREATE_INPUT_DENIED " + json.dumps({
             "operation_id": "PostCarts", "cases": 7, "native_business_response": False,
             "new_cart_source": False,
