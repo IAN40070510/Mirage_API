@@ -202,7 +202,7 @@ G5 實體 DB 案例在此流程因未設第二 DSN 而明確 SKIP，不能重複
 
 ### 2026-11-24 Fence COMMIT ACK 遺失增量（隔離紅綠驗證）
 
-在最新獨立 Mirage 主線（已移除 consumer-owned MSDSS integration）新增
+在最新獨立 Mirage 主線（已移除 consumer-owned 外部判定服務 integration）新增
 `test_fence_lab_lost_commit_ack_fails_closed_and_does_not_republish`：
 對全新、內部網路、SCRAM PostgreSQL 17.6 的 Publisher 真正完成第一筆
 Checkpoint 與 Head 更新，卻在交易 context 返回前注入 `OSError` 模擬
