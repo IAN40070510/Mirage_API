@@ -196,5 +196,5 @@ authorize_send 以 Admission 已落盤的 Generation 查詢 Session 綁定，
 epoch+1 先提交時，舊世代不能取得新授權；授權已提交後，epoch 切換不追溯取消。
 沒有 Session 映射／Head 消失時，正式可信 HTTP 拒絕，不降級為單機原型。
 
-原始判定 ledger 使用獨立 schema 生命週期（參考 p2-original-assessment-store.md），
-不得把它混入一般 World migration；隔離證據不是正式部署核准。
+原始判定 ledger 由外部消費者管理（參考 p2-original-assessment-store.md），
+不屬於 Mirage World migration；隔離證據不是正式部署核准。

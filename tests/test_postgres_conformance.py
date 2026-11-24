@@ -78,8 +78,7 @@ def apply_schema(dsn: str) -> None:
     migrations = Path(__file__).parents[1] / "migrations"
     with psycopg.connect(dsn) as connection:
         for migration in sorted(migrations.glob("[0-9]*.sql")):
-            # The original-assessment ledger lives in the dedicated nested
-            # migrations/original_assessment/ and is not a World migration.
+            # Consumer-owned original-assessment storage is not a Mirage World migration.
             connection.execute(migration.read_text(encoding="utf-8"))
 
 
