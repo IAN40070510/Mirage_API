@@ -19,7 +19,7 @@
 | Profile 整體撤銷 | `src/deception/world/projection_registry.py`、`admission.py`、`postgres_admission.py` | [一般／緊急墓碑、控制邊界與驗證](profile-revocation.md) |
 | Medusa 原生購物車映射 | `src/deception/domains/ecommerce/medusa_cart_http.py`、`medusa_cart_projection.py` | [原生路由、金額、匿名投影與隔離驗收](medusa-carts.md) |
 | 原生資源時間 | `src/deception/domains/ecommerce/native_time.py` | [UTC 格式、單調時間與歷史拒絕](medusa-carts.md) |
-| Gateway 部署組裝與已核准注入點 | `integrations/msdss/gateway_bootstrap.py` | [預設觀察政策、秘密檔與外部變更](gateway-bootstrap.md) |
+| Gateway 部署組裝（由 MSDSS 維護） | `MSDSS/src/msdss/gateway_integration/` | [Mirage 舊匯入相容與責任界線](gateway-bootstrap.md) |
 | Gateway 原版框架相容性環境 | `integrations/msdss/requirements.compatibility-test.txt` | [隔離版本清單與驗收邊界](gateway-bootstrap.md) |
 | 脫敏封裝與版本化資料庫更新 | `tools/package_runtime.py`、`tools/apply_migrations.py` | [操作邊界、輸入與驗證](runtime-operations.md) |
 | 匿名合成購物車與訂單 | `src/deception/domains/ecommerce/carts.py`、`cart_http.py` | [cart.id、訪客狀態、下單與取消](carts.md) |
