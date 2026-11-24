@@ -979,20 +979,67 @@ def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolat
             (400, "native_bad_item_body", True), (404, "native_variant_absent", True)]
         assert connection.execute("SELECT count(*) FROM protected_world_read_sources ").fetchone()[0] == 7
         assert connection.execute("SELECT count(*) FROM world_events").fetchone()[0] == 3
-    # 只為 M-07 Order 讀取測試回填合成品項；M-05 的真正刪除版本已獨立核對。
+    # M-06 不可完成剛由 M-05 刪空的 Cart；空購物車 4xx 尚無核准來源，固定 503。
+    _, empty_receipt, empty_proof, empty_wire = prepare_request(
+        b"", route="/store/carts/" + binding.resource_id + "/complete", method="POST",
+    )
+    assert empty_proof.operation_id == "PostCartsIdComplete"
+    with TestClient(rpc, base_url="https://executor.test") as client:
+        assert client.post("/internal/v1/execute", json=empty_wire).status_code == 503
+    with pytest.raises(ProtectedGrantError, match="source_missing"):
+        add_projector.project_medusa_add_success(empty_receipt)
+    # 只為 M-06／M-07 回填合成品項；M-05 的真刪除版本已獨立核對。
     restored_item = store.mutate_cart(
         binding, action="add", command={"variant_id": "known", "quantity": 1},
         expected_version=4, idempotency_key="native-test-order-item",
         commit_attempt_id=uuid4(), now=now,
     )
     assert restored_item.status == "committed"
-    # M-07 沿用 M-03／M-04／M-05 及測試回填後的世界版本 5；
-    # 不可拿假的 order_ ID 或 Creator Cart Capability 代替。
-    completed = store.mutate_cart(binding, action="complete", command={},
-        expected_version=5, idempotency_key="native-test-complete",
-        commit_attempt_id=uuid4(), now=now)
-    assert completed.status == "committed"
-    order_id = completed.result["id"]
+    # M-06 在原始 JWS／Receipt 與真 Derived Cart 的 Version 5 之上提交
+    # cart.complete；Validator 必須重建官方 type=order 成功封套，不能提供 Send。
+    native_complete, complete_receipt, complete_proof, complete_wire = prepare_request(
+        b"", route="/store/carts/" + binding.resource_id + "/complete", method="POST",
+    )
+    with TestClient(rpc, base_url="https://executor.test") as client:
+        assert client.post("/internal/v1/execute", json={
+            **complete_wire, "raw_body_b64": base64.b64encode(b'{"cart":{}}').decode(),
+        }).status_code == 503
+        completed = client.post("/internal/v1/execute", json=complete_wire)
+        assert completed.status_code == 200
+        complete_meta = completed.json()
+        assert (complete_meta["kind"], complete_meta["operation"],
+                complete_meta["status"], complete_meta["state_version"]) == (
+            "medusa_mutation", "PostCartsIdComplete", "committed", 6,
+        )
+        projected_complete = add_projector.project_medusa_add_success(complete_receipt)
+        complete_body = json.loads(projected_complete.body_bytes)
+        assert set(complete_body) == {"type", "order"}
+        assert (complete_body["type"], complete_body["order"]["status"],
+                complete_body["order"]["payment_status"],
+                complete_body["order"]["fulfillment_status"],
+                complete_body["order"]["customer_id"]) == (
+            "order", "pending", "not_paid", "not_fulfilled", None,
+        )
+        assert complete_body["order"]["items"]
+        assert projected_complete.source.operation_result_digest == complete_meta["result_digest"]
+        assert _candidate(dsn, scope=snapshot.scope, source=projected_complete.source,
+                          receipt_id=complete_receipt,
+                          fingerprint=complete_proof.request_fingerprint,
+                          status=200, body=projected_complete.body_bytes) == 1
+        assert client.post("/internal/v1/execute", json=complete_wire).status_code == 503
+        _, duplicate_receipt, _, duplicate_wire = prepare_request(
+            b"", route="/store/carts/" + binding.resource_id + "/complete", method="POST",
+        )
+        assert client.post("/internal/v1/execute", json=duplicate_wire).status_code == 503
+        with pytest.raises(ProtectedGrantError, match="source_missing"):
+            add_projector.project_medusa_add_success(duplicate_receipt)
+    with psycopg.connect(dsn) as connection:
+        assert connection.execute(
+            "SELECT operation,status FROM world_operations WHERE commit_attempt_id=%s",
+            (complete_meta["commit_attempt_id"],),
+        ).fetchone() == ("cart.complete", "committed")
+    # M-07 只能讀真正由 M-06 建立的 Order，不得拿假 Order 或 Creator 能力代替。
+    order_id = complete_body["order"]["id"]
     order_binding = store.resource_binding(
         order_id, environment_id=binding.environment_id,
         deployment_id=binding.deployment_id, now=now,

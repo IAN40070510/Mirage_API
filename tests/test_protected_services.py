@@ -1183,6 +1183,84 @@ def test_g3b_medusa_delete_validator_requires_exact_deleted_item_and_commit(monk
         asyncio.run(client.project_medusa_add_success(**{**args, "expected_line_item_id": None}))
 
 
+def test_g3b_medusa_complete_validator_denies_unverified_order(monkeypatch):
+    """M-06 原生完成回應只能是受保護真 Order，不能把未付款誤稱已付款。"""
+    from deception.security import protected_rpc
+    from deception.security.operation_binding import _receipt_uuid4
+
+    receipt, cart_id, order_id = uuid4(), "cart_" + uuid4().hex, "order_" + uuid4().hex
+    headers = (("content-type", "application/json"),)
+    order = {"id": order_id, "status": "pending", "payment_status": "not_paid",
+             "fulfillment_status": "not_fulfilled", "items": [{"id": "item_" + uuid4().hex}]}
+    body = json.dumps({"type": "order", "order": order},
+                      sort_keys=True, separators=(",", ":")).encode()
+    baseline = {
+        "receipt_id": str(receipt), "operation_id": "PostCartsIdComplete",
+        "scope": {"environment_id": "env", "deployment_id": "deploy",
+                  "session_id": "session", "world_generation_id": "world"},
+        "request_fingerprint": "a" * 64, "status_code": 200,
+        "headers": [["content-type", "application/json"]],
+        "body_b64": base64.b64encode(body).decode(),
+        "envelope_hash": response_hashes(200, headers, body)[0],
+        "source": {"kind": "committed_operation", "world_generation_id": "world",
+                   "operation_result_digest": "b" * 64,
+                   "committed_state_version": 3, "committed_state_hash": "c" * 64},
+        "trusted_send": "disabled",
+    }
+    projected = deepcopy(baseline)
+
+    class StubAsyncClient:
+        """受控獨立 Validator 的固定 Receipt 投影。"""
+
+        def __init__(self, **kwargs):
+            """禁止環境 Proxy。"""
+            assert kwargs["trust_env"] is False
+
+        async def __aenter__(self):
+            """開啟連線。"""
+            return self
+
+        async def __aexit__(self, *_):
+            """關閉連線。"""
+            return False
+
+        async def post(self, url, *, json):
+            """Caller 只可指定受保護 Receipt。"""
+            assert url == "https://validator.invalid:8445/internal/v1/project-medusa-add-success"
+            assert json == {"receipt_id": str(receipt)}
+            return httpx.Response(200, json=projected)
+
+    monkeypatch.setattr(protected_rpc.httpx, "AsyncClient", StubAsyncClient)
+    client = object.__new__(FixedNativeValidatorMTLSClient)
+    client._origin, client._tls = "https://validator.invalid:8445", object()
+    args = dict(receipt_id=receipt, operation_id="PostCartsIdComplete",
+                resource_id=cart_id, request_fingerprint="a" * 64,
+                expected_environment_id="env", expected_deployment_id="deploy",
+                expected_session_id="session", expected_commit_attempt_id=str(
+                    _receipt_uuid4(receipt, b"medusa-m06-complete")),
+                expected_result_digest="b" * 64, expected_state_version=3,
+                expected_state_hash="c" * 64)
+    assert asyncio.run(client.project_medusa_add_success(**args))["status_code"] == 200
+    for invalid in (
+            {"type": "cart", "order": order},
+            {"type": "order", "order": {**order, "id": "order_attacker"}},
+            {"type": "order", "order": {**order, "status": "completed"}},
+            {"type": "order", "order": {**order, "payment_status": "captured"}},
+            {"type": "order", "order": {**order, "items": []}},
+    ):
+        forged = json.dumps(invalid, sort_keys=True, separators=(",", ":")).encode()
+        projected.update(body_b64=base64.b64encode(forged).decode(),
+                         envelope_hash=response_hashes(200, headers, forged)[0])
+        with pytest.raises(ProtectedRpcConfigurationError, match="medusa_add_validator_binding_mismatch"):
+            asyncio.run(client.project_medusa_add_success(**args))
+    projected.clear()
+    projected.update(deepcopy(baseline))
+    with pytest.raises(ProtectedRpcConfigurationError, match="operation_unapproved"):
+        asyncio.run(client.project_medusa_add_success(**{
+            **args, "expected_commit_attempt_id": str(uuid4()),
+        }))
+
+
 def test_g3b_executor_rpc_refuses_ambiguous_result_json(monkeypatch):
     """Executor 的內部 200 不等於可信資料；重複 Key／NaN 不得傳給 Verifier。"""
     from deception.security import protected_rpc
@@ -1231,6 +1309,7 @@ def test_g3b_executor_rpc_refuses_ambiguous_result_json(monkeypatch):
      + "/line-items/item_" + "b" * 32, 3),
     ("DeleteCartsIdLineItemsLine_id", "/store/carts/cart_" + "a" * 32
      + "/line-items/item_" + "b" * 32, 4),
+    ("PostCartsIdComplete", "/store/carts/cart_" + "a" * 32 + "/complete", 3),
 ])
 def test_g3b_executor_medusa_mutation_result_is_route_bound(
     monkeypatch, operation, path, minimum,

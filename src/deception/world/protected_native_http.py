@@ -1188,6 +1188,10 @@ class PostgresProtectedNativeProjector(_ProtectedConnection):
                         "cart.remove",
                         r"/store/carts/(cart_[0-9a-f]{32})/line-items/(item_[0-9a-f]{32})",
                     ),
+                    "PostCartsIdComplete": (
+                        "medusa-native-cart", "POST", "/store/carts/{id}/complete",
+                        "cart.complete", r"/store/carts/(cart_[0-9a-f]{32})/complete",
+                    ),
                 }
                 medusa_handler = medusa_handlers.get(operation_id) if medusa else None
                 selected = (_SYNTHETIC_MUTATION_HANDLERS.get(operation_id) if not medusa else
@@ -1288,7 +1292,7 @@ class PostgresProtectedNativeProjector(_ProtectedConnection):
                             raise ProtectedGrantError("protected_synthetic_success_order_identity_denied")
                         entity = result
                     if medusa:
-                        from deception.domains.ecommerce.medusa_cart_projection import cart_view
+                        from deception.domains.ecommerce.medusa_cart_projection import cart_view, order_view
                         from .models import canonical_state_hash
 
                         cursor.execute(
@@ -1307,7 +1311,10 @@ class PostgresProtectedNativeProjector(_ProtectedConnection):
                                     for field in ("region_id", "sales_channel_id", "email", "metadata"))):
                             raise ProtectedGrantError("protected_medusa_add_context_unverifiable")
                         try:
-                            native_cart = cart_view(entity, context_row[0])
+                            if operation_id == "PostCartsIdComplete":
+                                payload = {"type": "order", "order": order_view(entity, context_row[0])}
+                            else:
+                                native_cart = cart_view(entity, context_row[0])
                             if operation_id == "DeleteCartsIdLineItemsLine_id":
                                 deleted_item_id = match[2]
                                 if any(item.get("id") == deleted_item_id
@@ -1315,7 +1322,7 @@ class PostgresProtectedNativeProjector(_ProtectedConnection):
                                     raise ValueError("deleted item remains in committed cart")
                                 payload = {"id": deleted_item_id, "object": "line-item",
                                            "deleted": True, "parent": native_cart}
-                            else:
+                            elif operation_id != "PostCartsIdComplete":
                                 payload = {"cart": native_cart}
                         except (ValueError, TypeError, KeyError, OverflowError) as exc:
                             raise ProtectedGrantError("protected_medusa_add_projection_invalid") from exc
@@ -1327,11 +1334,14 @@ class PostgresProtectedNativeProjector(_ProtectedConnection):
                             "urn:mirage:medusa-contract", Resource.from_contents(
                                 self._medusa_specification, default_specification=DRAFT4),
                         )
-                        schema = ({"$ref": "urn:mirage:medusa-contract#/paths/"
-                                   "~1store~1carts~1{id}~1line-items~1{line_id}/delete/"
-                                   "responses/200/content/application~1json/schema"}
-                                  if operation_id == "DeleteCartsIdLineItemsLine_id" else
-                                  {"$ref": "urn:mirage:medusa-contract#/components/schemas/StoreCartResponse"})
+                        if operation_id in {"DeleteCartsIdLineItemsLine_id", "PostCartsIdComplete"}:
+                            pointer = ("~1store~1carts~1{id}~1complete/post" if
+                                       operation_id == "PostCartsIdComplete" else
+                                       "~1store~1carts~1{id}~1line-items~1{line_id}/delete")
+                            schema = {"$ref": "urn:mirage:medusa-contract#/paths/" + pointer
+                                      + "/responses/200/content/application~1json/schema"}
+                        else:
+                            schema = {"$ref": "urn:mirage:medusa-contract#/components/schemas/StoreCartResponse"}
                         if not OAS30Validator(schema, registry=registry).is_valid(payload):
                             raise ProtectedGrantError("protected_medusa_add_contract_invalid")
                     else:

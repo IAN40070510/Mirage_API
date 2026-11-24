@@ -221,6 +221,9 @@ class FixedExecutorMTLSClient:
                 "DeleteCartsIdLineItemsLine_id": (
                     rb"/store/carts/cart_[0-9a-f]{32}/line-items/item_[0-9a-f]{32}", 4,
                 ),
+                "PostCartsIdComplete": (
+                    rb"/store/carts/cart_[0-9a-f]{32}/complete", 3,
+                ),
             }
             allowed = medusa_mutations.get(operation_id)
             if (allowed is None or re.fullmatch(allowed[0], raw_path) is None
@@ -654,7 +657,7 @@ class FixedNativeValidatorMTLSClient:
         expected_state_version: int, expected_state_hash: str,
         expected_line_item_id: str | None = None,
     ) -> dict[str, object]:
-        """mTLS 核對 M-03～M-05 的固定 Medusa 200 候選，絕不賦予 Send 權限。"""
+        """mTLS 核對 M-03～M-06 的固定 Medusa 200 候選，絕不賦予 Send 權限。"""
         from deception.world.transmission import response_hashes
         from deception.security.operation_binding import _receipt_uuid4
 
@@ -662,9 +665,11 @@ class FixedNativeValidatorMTLSClient:
             "PostCartsIdLineItems": b"medusa-m03-add",
             "PostCartsIdLineItemsLine_id": b"medusa-m04-update",
             "DeleteCartsIdLineItemsLine_id": b"medusa-m05-delete",
+            "PostCartsIdComplete": b"medusa-m06-complete",
         }
         marker = markers.get(operation_id)
         deleting = operation_id == "DeleteCartsIdLineItemsLine_id"
+        completing = operation_id == "PostCartsIdComplete"
         if (marker is None
                 or not isinstance(resource_id, str)
                 or re.fullmatch(r"cart_[0-9a-f]{32}", resource_id) is None
@@ -696,9 +701,10 @@ class FixedNativeValidatorMTLSClient:
             if (not isinstance(scope, dict) or set(scope) != {
                     "environment_id", "deployment_id", "session_id", "world_generation_id"}
                     or not isinstance(payload, dict)
-                    or (not deleting and (set(payload) != {"cart"}
-                                          or not isinstance(payload["cart"], dict)
-                                          or payload["cart"].get("id") != resource_id))
+                    or (not deleting and not completing and (
+                        set(payload) != {"cart"}
+                        or not isinstance(payload["cart"], dict)
+                        or payload["cart"].get("id") != resource_id))
                     or (deleting and (
                         set(payload) != {"id", "object", "deleted", "parent"}
                         or payload.get("id") != expected_line_item_id
@@ -710,6 +716,17 @@ class FixedNativeValidatorMTLSClient:
                         or any(not isinstance(item, dict)
                                or item.get("id") == expected_line_item_id
                                for item in payload["parent"]["items"])))
+                    or (completing and (
+                        set(payload) != {"type", "order"}
+                        or payload.get("type") != "order"
+                        or not isinstance(payload.get("order"), dict)
+                        or not isinstance(payload["order"].get("id"), str)
+                        or re.fullmatch(r"order_[0-9a-f]{32}", payload["order"]["id"]) is None
+                        or payload["order"].get("status") != "pending"
+                        or payload["order"].get("payment_status") != "not_paid"
+                        or payload["order"].get("fulfillment_status") != "not_fulfilled"
+                        or not isinstance(payload["order"].get("items"), list)
+                        or not payload["order"]["items"]))
                     or source != {
                         "kind": "committed_operation",
                         "world_generation_id": scope["world_generation_id"],
@@ -1505,13 +1522,19 @@ def create_direct_verifier_app(
                                     detail="direct_verifier_native_projection_unverifiable") from exc
         elif (isinstance(outcome, dict) and outcome.get("kind") == "medusa_mutation"
               and operation.operation_id in {"PostCartsIdLineItems", "PostCartsIdLineItemsLine_id",
-                                             "DeleteCartsIdLineItemsLine_id"}):
+                                             "DeleteCartsIdLineItemsLine_id", "PostCartsIdComplete"}):
             if native_validator_client is None:
                 raise HTTPException(status_code=503,
                                     detail="direct_verifier_medusa_validator_not_wired")
-            pattern = (r"/store/carts/(cart_[0-9a-f]{32})/line-items" if
-                       operation.operation_id == "PostCartsIdLineItems" else
-                       r"/store/carts/(cart_[0-9a-f]{32})/line-items/item_[0-9a-f]{32}")
+            patterns = {
+                "PostCartsIdLineItems": r"/store/carts/(cart_[0-9a-f]{32})/line-items",
+                "PostCartsIdLineItemsLine_id": (
+                    r"/store/carts/(cart_[0-9a-f]{32})/line-items/item_[0-9a-f]{32}"),
+                "DeleteCartsIdLineItemsLine_id": (
+                    r"/store/carts/(cart_[0-9a-f]{32})/line-items/item_[0-9a-f]{32}"),
+                "PostCartsIdComplete": r"/store/carts/(cart_[0-9a-f]{32})/complete",
+            }
+            pattern = patterns[operation.operation_id]
             match = re.fullmatch(pattern, normalized.path)
             if match is None:
                 raise HTTPException(status_code=503,

@@ -724,6 +724,119 @@ def _gateway() -> None:
             "source": "protected_world_commit_sources", "validated_native_status": 200,
             "state_version": 4, "native_business_response": False, "trusted_send": "off",
         }, sort_keys=True))
+        # M-06 不可替空 Cart 猜測原生 4xx，真 Item 全刪後須先固定 503。
+        empty_complete_id = "g3b-ci-medusa-empty-cart-complete-denied"
+        empty_complete = gateway.build_request(
+            "POST", origin + "/store/carts/" + medusa_cart_id + "/complete",
+            content=b"", headers={"x-request-id": empty_complete_id,
+                                  "content-type": "application/json",
+                                  "x-publishable-api-key": "pk_g3b_ci_only"},
+        )
+        empty_complete.headers["x-trusted-session"] = _sign(
+            key, fingerprint=fingerprint_httpx_request(empty_complete, empty_complete_id),
+            session=medusa_cart_session, mode="cart", resource_id=medusa_cart_id,
+        )
+        if gateway.send(empty_complete).status_code != 503:
+            raise RuntimeError("g3b_ci_medusa_empty_complete_not_failed_closed")
+        # 沿用真 Derived Cart，經另一張受保護 M-03 Receipt 回填品項版本 5。
+        medusa_readd_id = "g3b-ci-medusa-readd-after-delete-200"
+        medusa_readd = gateway.build_request(
+            "POST", origin + "/store/carts/" + medusa_cart_id + "/line-items",
+            content=b'{"variant_id":"known","quantity":1}',
+            headers={"x-request-id": medusa_readd_id, "content-type": "application/json",
+                     "x-publishable-api-key": "pk_g3b_ci_only"},
+        )
+        medusa_readd.headers["x-trusted-session"] = _sign(
+            key, fingerprint=fingerprint_httpx_request(medusa_readd, medusa_readd_id),
+            session=medusa_cart_session, mode="cart", resource_id=medusa_cart_id,
+        )
+        readded_response = gateway.send(medusa_readd)
+        if readded_response.status_code != 200:
+            raise RuntimeError("g3b_ci_medusa_readd_rpc_unverifiable")
+        readd_meta = readded_response.json().get("executor_result", {})
+        readd_projection = readded_response.json().get("native_projection", {})
+        readd_cart = json.loads(base64.b64decode(
+            readd_projection.get("body_b64", ""), validate=True)).get("cart", {})
+        if (readd_meta.get("operation") != "PostCartsIdLineItems"
+                or readd_meta.get("state_version") != 5
+                or readd_meta.get("status") != "committed"
+                or readd_projection.get("status_code") != 200
+                or readd_projection.get("delivery") != "candidate_only_no_send_authorization"
+                or readd_cart.get("id") != medusa_cart_id
+                or readd_cart.get("total") != 1.0
+                or len(readd_cart.get("items", [])) != 1
+                or gateway.send(medusa_readd).status_code != 403):
+            raise RuntimeError("g3b_ci_medusa_readd_source_mismatch")
+        # M-06 真下單（未付款／未履約），唯讀 Validator 必須核對官方 oneOf
+        # type=order 成功封套；成功不能被偽裝成 Client Send 已授權。
+        medusa_complete_id = "g3b-ci-medusa-derived-complete-200"
+        medusa_complete = gateway.build_request(
+            "POST", origin + "/store/carts/" + medusa_cart_id + "/complete",
+            content=b"", headers={"x-request-id": medusa_complete_id,
+                                  "content-type": "application/json",
+                                  "x-publishable-api-key": "pk_g3b_ci_only"},
+        )
+        medusa_complete.headers["x-trusted-session"] = _sign(
+            key, fingerprint=fingerprint_httpx_request(medusa_complete, medusa_complete_id),
+            session=medusa_cart_session, mode="cart", resource_id=medusa_cart_id,
+        )
+        complete_response = gateway.send(medusa_complete)
+        if complete_response.status_code != 200:
+            detail = complete_response.json().get("detail") if (
+                complete_response.headers.get("content-type", "").startswith("application/json")) else None
+            raise RuntimeError("g3b_ci_medusa_complete_rpc_unverifiable:"
+                               + str(complete_response.status_code) + ":" + str(detail)[:90])
+        complete_json = complete_response.json()
+        complete_meta = complete_json.get("executor_result", {})
+        complete_projection = complete_json.get("native_projection", {})
+        complete_bytes = base64.b64decode(
+            complete_projection.get("body_b64", ""), validate=True,
+        )
+        complete_payload = json.loads(complete_bytes)
+        complete_source = complete_projection.get("source", {})
+        order = complete_payload.get("order", {})
+        if (complete_meta.get("kind") != "medusa_mutation"
+                or complete_meta.get("operation") != "PostCartsIdComplete"
+                or complete_meta.get("status") != "committed"
+                or complete_meta.get("state_version") != 6
+                or complete_source.get("kind") != "committed_operation"
+                or complete_source.get("operation_result_digest")
+                    != complete_meta.get("result_digest")
+                or complete_source.get("committed_state_version") != 6
+                or complete_source.get("committed_state_hash") != complete_meta.get("state_hash")
+                or complete_projection.get("status_code") != 200
+                or complete_payload.get("type") != "order"
+                or not isinstance(order.get("id"), str)
+                or re.fullmatch(r"order_[0-9a-f]{32}", order["id"]) is None
+                or order.get("status") != "pending"
+                or order.get("payment_status") != "not_paid"
+                or order.get("fulfillment_status") != "not_fulfilled"
+                or order.get("total") != 1.0
+                or len(order.get("items", [])) != 1
+                or complete_projection.get("delivery")
+                    != "candidate_only_no_send_authorization"
+                or complete_projection.get("envelope_hash") != response_hashes(
+                    200, read_headers, complete_bytes)[0]
+                or gateway.send(medusa_complete).status_code != 403):
+            raise RuntimeError("g3b_ci_medusa_complete_candidate_source_mismatch")
+        duplicate_complete_id = "g3b-ci-medusa-completed-cart-denied"
+        duplicate_complete = gateway.build_request(
+            "POST", origin + "/store/carts/" + medusa_cart_id + "/complete",
+            content=b"", headers={"x-request-id": duplicate_complete_id,
+                                  "content-type": "application/json",
+                                  "x-publishable-api-key": "pk_g3b_ci_only"},
+        )
+        duplicate_complete.headers["x-trusted-session"] = _sign(
+            key, fingerprint=fingerprint_httpx_request(duplicate_complete, duplicate_complete_id),
+            session=medusa_cart_session, mode="cart", resource_id=medusa_cart_id,
+        )
+        if gateway.send(duplicate_complete).status_code != 503:
+            raise RuntimeError("g3b_ci_medusa_completed_cart_not_failed_closed")
+        print("G3B_ROUTE_MEDUSA_COMPLETE_CANDIDATE " + json.dumps({
+            "operation_id": "PostCartsIdComplete", "source": "protected_world_commit_sources",
+            "validated_native_status": 200, "state_version": 6,
+            "native_business_response": False, "trusted_send": "off",
+        }, sort_keys=True))
         forbidden_body = b'{"email":"ci@example.invalid","items":[{"variant_id":"known","quantity":1}]}'
         forbidden_request_id = "g3b-ci-medusa-create-items-denied"
         forbidden_create = gateway.build_request(
@@ -1655,7 +1768,7 @@ def _audit(root: Path) -> None:
             raise RuntimeError("g3b_ci_cross_role_secret_exposure:" + name)
     with psycopg.connect("postgresql://mirage_ci_owner:mirage_ci_only@127.0.0.1:55433/"
                          "mirage_g3b_ci?connect_timeout=5") as admin:
-        if admin.execute("SELECT count(*) FROM protected_world_commit_sources").fetchone()[0] != 11:
+        if admin.execute("SELECT count(*) FROM protected_world_commit_sources").fetchone()[0] != 13:
             raise RuntimeError("g3b_ci_inventory_commit_evidence_missing")
         if admin.execute("SELECT count(*) FROM protected_medusa_rejection_sources").fetchone()[0] != 2:
             raise RuntimeError("g3b_ci_medusa_rejection_evidence_missing")
@@ -1684,9 +1797,10 @@ def _audit(root: Path) -> None:
                 # M-01：合法一張、非空 items 一張、六個 Executor 503；
                 # 第七個 Query 在 Verifier 403，不允許鑄造 Operation Proof。
                 "PostCarts": 8,
-                "PostCartsIdLineItems": 3,
+                "PostCartsIdLineItems": 4,
                 "PostCartsIdLineItemsLine_id": 2,
                 "DeleteCartsIdLineItemsLine_id": 2,
+                "PostCartsIdComplete": 3,
         }:
             raise RuntimeError("g3b_ci_operation_proof_count_mismatch")
         # Owner fixture、synthetic HTTP 與受限 Medusa M-01 各建立一筆；
