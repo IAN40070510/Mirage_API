@@ -51,7 +51,7 @@ docker compose up --build -d --wait --wait-timeout 180
 
 使用者已要求擴充 Medusa `/store` 映射。首組原生購物車、品項增刪改、完成及訂單查詢已接到同一合成引擎，原生回應不包含內部 CAS／hash 欄位；來源、金額轉換、匿名有效投影與支援範圍見[原生映射說明](docs/medusa-carts.md)。這項能力須另外明確啟用，尚未切換 staging，也不代表整套 Store／付款配送 API 都已支援。
 
-Gateway 部署組裝、Trusted Session JWS 簽發和 Gateway→SOC 傳遞已移回 [MSDSS](https://github.com/IAN40070510/MSDSS) 的 `src/msdss/gateway_integration/`；Mirage 本倉庫只保留原生入站驗章、World、稽核與 Witness，以及舊匯入相容入口。正式部署／導流仍未啟用；詳細交接見[整合權責](docs/gateway-bootstrap.md)。
+Gateway 部署組裝、Trusted Session JWS 簽發和 Gateway→SOC 傳遞已移回 [MSDSS](https://github.com/IAN40070510/MSDSS) 的 `src/msdss/gateway_integration/`；Mirage 上游保留原生入站驗章、World、稽核與舊匯入相容入口。Signed Witness 目前實作於 MSDSS 的 Mirage vendored subtree。正式部署／導流仍未啟用；詳細交接見[整合權責](docs/gateway-bootstrap.md)。
 
 ## 系統架構
 

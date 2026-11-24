@@ -1,11 +1,11 @@
 """確保 Mirage 的獨立 HTTP 入口不會載入 MSDSS。"""
 
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 
-def test_standalone_trusted_http_does_not_import_msdss():
+def test_standalone_trusted_http_does_not_import_msdss() -> None:
     """封鎖 MSDSS 匯入時仍可載入 Mirage 可信 HTTP 入口。"""
     root = Path(__file__).resolve().parents[1]
     script = '''
@@ -28,6 +28,7 @@ sys.path.insert(0, sys.argv[1])
 from deception.domains.ecommerce.trusted_http import create_app
 assert callable(create_app)
 '''
+    # Run the fixed probe with the current interpreter and the local source path.
     result = subprocess.run(
         [sys.executable, "-I", "-c", script, str(root / "src")],
         cwd=root, capture_output=True, text=True, timeout=30, check=False,

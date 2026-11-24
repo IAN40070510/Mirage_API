@@ -14,11 +14,10 @@ Gateway 證據／唯讀戰情室程式，都由
 `docs/GATEWAY_INTEGRATION_OWNERSHIP.md` 與
 `ops/compat/requirements.gateway-compatibility.txt`。
 
-**Mirage_API 的責任不變：** 驗證 Trusted Session JWS、消費 JTI
-防重放、執行 Admission／World 交易、記錄原生 Request／Response
-Audit 與出具來源端可驗簽的 Signed Witness。
-來源端稽核／Witness 必須在 Mirage 內完成，不能移到看不到
-真實 Grant COMMIT 的 Gateway。
+Mirage 上游驗證 Trusted Session JWS、消費 JTI 防重放、執行
+Admission／World 交易，並記錄原生 Request／Response Audit。
+Signed Witness 與交易內 outbox 目前在 MSDSS 的 Mirage vendored
+subtree，與 Mirage 的 Grant 一起持久化。上游此版本尚未納入該實作。
 
 `integrations/msdss/gateway_bootstrap.py` 和
 `integrations/msdss/trusted_session_dispatch.py` **只保留薄相容轉接**，
