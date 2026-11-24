@@ -277,6 +277,11 @@ def _identity_material(root: Path, dsns: dict[str, str]) -> None:
         make_conninfo(**host_runtime), encoding="utf-8")
     override = {"secrets": {name: {"file": str(root / "secrets" / name), "external": False}
                             for name in material | {"g3b_verifier_keys": ""}}}
+    # CI-only override: record an opaque failure class from the disposable Cart
+    # Executor, not arbitrary SQL, candidate bodies or sensitive credentials.
+    override["services"] = {"cart-executor": {"environment": {
+        "MIRAGE_G3B_CI_DIAGNOSTIC": "opaque-failure-classes",
+    }}}
     override["secrets"].update({
         "g3b_cart_initial_state": {"file": str(root / "secrets" / "g3b_cart_initial_state"),
                                    "external": False},

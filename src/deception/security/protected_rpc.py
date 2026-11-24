@@ -953,6 +953,16 @@ def create_fixed_executor_app(*, executor) -> FastAPI:
             )
         except Exception as exc:
             # 不泄露受保護 DB／業務／重試細節；不可把未知 COMMIT 當安全重試。
+            if os.environ.get("MIRAGE_G3B_CI_DIAGNOSTIC") == "opaque-failure-classes":
+                reason = str(exc)
+                if re.fullmatch(r"[a-z][a-z0-9_]{0,99}", reason) is None:
+                    reason = "redacted"
+                sqlstate = getattr(exc, "sqlstate", None)
+                if not isinstance(sqlstate, str) or not re.fullmatch(r"[0-9A-Z]{5}", sqlstate):
+                    sqlstate = None
+                print("G3B_EXECUTOR_FAIL_CLOSED " + json.dumps({
+                    "class": type(exc).__name__, "code": sqlstate, "reason": reason,
+                }, sort_keys=True), flush=True)
             raise HTTPException(status_code=503, detail="fixed_executor_unverifiable") from exc
 
     return app
