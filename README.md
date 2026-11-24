@@ -22,15 +22,15 @@ cd Mirage_API
 docker compose up --build -d --wait --wait-timeout 180
 ```
 
-開啟 `http://127.0.0.1:8000/demo/info` 取得商品 ID，再呼叫 `/api/products/{id}`。預設備援模式不需要模型或 MSDSS；[安裝與第一次使用](docs/getting-started.md)包含 Python 啟動、API 呼叫、驗證、資料保存與故障排除。
+開啟 `http://127.0.0.1:8000/demo/info` 取得商品 ID，再呼叫 `/api/products/{id}`。預設備援模式不需要模型或 外部判定服務；[安裝與第一次使用](docs/getting-started.md)包含 Python 啟動、API 呼叫、驗證、資料保存與故障排除。
 
-本版 Mirage 模組實作與隔離驗收已完成。依目前確認範圍，MSDSS 正式接線、部署金鑰與對外網址設定留待整合階段，不作為 Mirage 模組驗收的阻塞條件；staging 維持未切換。
+本版 Mirage 模組實作與隔離驗收已完成。依目前確認範圍，外部判定服務正式接線、部署金鑰與對外網址設定留待整合階段，不作為 Mirage 模組驗收的阻塞條件；staging 維持未切換。
 
 2026-11-18 程式與隔離驗收基線為 **1221 passed、7 個明列 opt-in skipped**，逐一核對全部 1228 個測試身份與未變更的來源；容器四項與還原一項另在本輪 ARM64 通過，Medusa 身份／實際 Gateway 的最近兩項實測保留原日期。Windows 執行 pytest、Gateway 與 Mirage 子程序，SSH Ubuntu 執行隔離 PostgreSQL 及 ARM64 映像。暫存測試資源已清理，正式部署設定／導流尚未啟用；完整結果、限制與後續所需輸入見[進度](docs/implementation-progress.md)及[證據矩陣](docs/conformance-evidence.md)。
 
-**2026-11-20 補充整合驗收：原先明列的 7 項 opt-in 案例已在 Oracle Ubuntu ARM64 的全新隔離環境逐項執行，結果為 7 passed、0 failed、0 skipped。** 範圍是 Medusa 顧客身份／登出、MSDSS Gateway 經雙向 TLS 到獨立 Mirage、四項容器合成交易／撤銷，以及 PostgreSQL 備份還原完整性比對。這是**另外執行的七項實機驗收**，不改寫 2026-11-18 整套測試基線，也不冒稱 GitHub Actions 已重跑。
+**2026-11-20 補充整合驗收：原先明列的 7 項 opt-in 案例已在 Oracle Ubuntu ARM64 的全新隔離環境逐項執行，結果為 7 passed、0 failed、0 skipped。** 範圍是 Medusa 顧客身份／登出、外部判定服務 Gateway 經雙向 TLS 到獨立 Mirage、四項容器合成交易／撤銷，以及 PostgreSQL 備份還原完整性比對。這是**另外執行的七項實機驗收**，不改寫 2026-11-18 整套測試基線，也不冒稱 GitHub Actions 已重跑。
 
-驗收使用專用 PostgreSQL、Redis、Medusa、Mirage、合成帳號與短期金鑰，沒有使用 staging 的資料卷或秘密；測試用服務與秘密已清除，臨時 Gateway SSH 授權亦已撤銷，原本的 Windows SSH 登入經使用者驗證正常。mTLS 案例在 Python 3.13／OpenSSL 嚴格憑證檢查下，需用**隔離測試專用**的 OpenSSL 設定替臨時 CA 加上 `keyUsage=critical,keyCertSign,cRLSign`，當次驗收沒有修改測試執行邏輯。逐項測試名稱、環境、失敗與重驗證據、重跑前置條件及限制見[2026-11-20 隔離整合驗收紀錄](docs/implementation-progress.md#2026-11-20-七項隔離整合驗收)。正式 MSDSS 導流、staging 切換及 GitHub Release／Tag 更新仍未由本次驗收執行。
+驗收使用專用 PostgreSQL、Redis、Medusa、Mirage、合成帳號與短期金鑰，沒有使用 staging 的資料卷或秘密；測試用服務與秘密已清除，臨時 Gateway SSH 授權亦已撤銷，原本的 Windows SSH 登入經使用者驗證正常。mTLS 案例在 Python 3.13／OpenSSL 嚴格憑證檢查下，需用**隔離測試專用**的 OpenSSL 設定替臨時 CA 加上 `keyUsage=critical,keyCertSign,cRLSign`，當次驗收沒有修改測試執行邏輯。逐項測試名稱、環境、失敗與重驗證據、重跑前置條件及限制見[2026-11-20 隔離整合驗收紀錄](docs/implementation-progress.md#2026-11-20-七項隔離整合驗收)。正式外部判定服務導流、staging 切換及 GitHub Release／Tag 更新仍未由本次驗收執行。
 
 目前另有需明確啟用的合成業務服務：先建立訪客購物車、增減商品，再下合成訂單、預留合成庫存與取消回補，詳見[購物車](docs/carts.md)與[庫存交易](docs/inventory.md)。訪客持有伺服器產生的 cart.id／order.id 即可延續該資源狀態；不要求帳號或新 Cookie。這些 ID 是存取憑證，不能寫入公開日誌。匿名商品查詢使用固定唯讀合成資料，IP＋UA＋短期限只輔助分組，不授予庫存寫入權。
 
@@ -53,7 +53,7 @@ docker compose up --build -d --wait --wait-timeout 180
 | Renderer 與 Transmission | 驗證最終 HTTP 候選，領取一次發送權並記錄完成或部分失敗；完成不代表客戶端已收到。 |
 | [固定安全錯誤 Renderer](docs/security-errors.md) | 必要來源故障時只回內建拒絕模板，送出前核對原請求與精確封套，不讀私人世界或回退商店。 |
 
-本機 Windows 執行程式、pytest、Gateway 測試及獨立 Mirage 子程序；SSH Ubuntu 提供隔離 PostgreSQL 與 Medusa。測試不等於遠端 staging 已部署；跨 MSDSS 模組修改須另外取得使用者決定。驗證進度以[最新總覽](docs/implementation-progress.md)為準，歷史紀錄保留當時結果。
+本機 Windows 執行程式、pytest、Gateway 測試及獨立 Mirage 子程序；SSH Ubuntu 提供隔離 PostgreSQL 與 Medusa。測試不等於遠端 staging 已部署；跨外部判定服務模組修改須另外取得使用者決定。驗證進度以[最新總覽](docs/implementation-progress.md)為準，歷史紀錄保留當時結果。
 
 使用者已要求擴充 Medusa `/store` 映射。首組原生購物車、品項增刪改、完成及訂單查詢已接到同一合成引擎，原生回應不包含內部 CAS／hash 欄位；來源、金額轉換、匿名有效投影與支援範圍見[原生映射說明](docs/medusa-carts.md)。這項能力須另外明確啟用，尚未切換 staging，也不代表整套 Store／付款配送 API 都已支援。
 
@@ -232,7 +232,7 @@ PostgreSQL 則讓兩個入口共用一次性授權紀錄，同一張授權只能
 本次 Trusted Session 接線另提供 [部署與驗證說明](docs/trusted-session.md)：
 `TrustedDeploymentSettings` 像部署設定表，把核准身份、公鑰與 PostgreSQL 接到入口；
 `TrustedSessionDispatcher` 像 Gateway 的簽發員，只替核准的欺敵決策簽章，並送出同一份 HTTP 請求。
-發送器保存在 `integrations/msdss/`，目前僅完成本機原始碼，尚未安裝到遠端 Gateway。
+舊版外部發送器已移交消費端；Mirage 不提供其部署入口，也不存放簽章私鑰。
 入口會先核對環境／部署才耗用一次性授權，Replay 保留至有效期加 clock skew，避免寬限期間重放。
 
 | 圖中節點 | 白話功能 | 目前實作狀態 |
@@ -557,7 +557,7 @@ HTTP 驗證器執行 16 個一般及攻擊特徵請求，檢查 `200 → 404 →
 
 ### Gateway 與獨立 Mirage 程序的 HTTPS 驗收
 
-MSDSS proxy 根據分類與決策政策選擇 dispatcher。可信 middleware 把 SessionBinding 放到單一請求的 ASGI state。dispatcher 核對環境及部署，再對最後送出的 HTTP 請求簽章。獨立 Uvicorn 接收程序以 Mirage 正規化與驗章元件核對收到的 bytes。測試涵蓋訪客自填身份及缺少綁定，重跑方式見 [Trusted Session 文件](docs/trusted-session.md)。
+外部判定服務 proxy 根據分類與決策政策選擇 dispatcher。可信 middleware 把 SessionBinding 放到單一請求的 ASGI state。dispatcher 核對環境及部署，再對最後送出的 HTTP 請求簽章。獨立 Uvicorn 接收程序以 Mirage 正規化與驗章元件核對收到的 bytes。測試涵蓋訪客自填身份及缺少綁定，重跑方式見 [Trusted Session 文件](docs/trusted-session.md)。
 
 ### Gateway 與完整商品回應的驗收
 
@@ -613,7 +613,7 @@ Gateway 使用伺服器提供的合成 SessionBinding 簽發 JWS。Mirage 的可
 | 本機 Windows | pytest 執行獨立 Mirage 控制器、安排交易順序，並比對准入筆數、狀態與 revision。 |
 | SSH 伺服器 Ubuntu | 隔離 PostgreSQL 16 執行資料列鎖與交易。測試透過 SSH 隧道觀察哪條連線在等鎖。 |
 
-上述控制屬於 Mirage 的 World Runtime。MSDSS Gateway 負責上游可信請求，本次驗收從已建立的 Mirage 世代與已核准的契約開始。測試步驟見 [World Runtime 說明](docs/world-runtime.md)。
+上述控制屬於 Mirage 的 World Runtime。外部判定服務 Gateway 負責上游可信請求，本次驗收從已建立的 Mirage 世代與已核准的契約開始。測試步驟見 [World Runtime 說明](docs/world-runtime.md)。
 
 ### 緊急撤銷與發送授權的邊界
 

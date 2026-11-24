@@ -61,10 +61,10 @@ python -m pytest tests/test_ingress_audit.py -q
 python tools/check_documentation.py
 ```
 
-PostgreSQL 與雙 TLS 程序案例須設定專用 MIRAGE_POSTGRES_TEST_DSN，並具備現有本機 MSDSS checkout 與 openssl。未設定造成的 skip 不算通過。測試包含新連線讀回、正常請求零拒絕事件、不同程序的驗章與資源錯配事件、回應 bytes 一致、世界及准入筆數不變，以及機密 canary 不出現在 DB／故障告警。
+PostgreSQL 與雙 TLS 程序案例須設定專用 MIRAGE_POSTGRES_TEST_DSN，並具備現有OpenSSL（舊版跨倉驗收環境已移交消費端）。未設定造成的 skip 不算通過。測試包含新連線讀回、正常請求零拒絕事件、不同程序的驗章與資源錯配事件、回應 bytes 一致、世界及准入筆數不變，以及機密 canary 不出現在 DB／故障告警。
 
 另以真正簽章並消費 Replay 的請求，在世界解析與讀取准入注入故障，核對實際階段；內層 pipeline 不拋錯而直接回固定 503 時也須保存。這些故障是隔離測試注入，不是生產故障的證明。
 
 ## 授權與限制
 
-自有程式採 Apache-2.0，沿用 psycopg、PostgreSQL 與 Python logging，沒有新模型或第三方實作，詳見[授權表](licensing.md)。目前是應用程式只新增的紀錄，DB owner 仍可改寫資料，不能宣稱防竄改。大量拒絕會增加資料庫連線、儲存及延遲；正式部署仍需限流、保留政策、容量與告警接收設定。這些部署措施未由本工具自動啟用，也不修改 MSDSS 其他模組。
+自有程式採 Apache-2.0，沿用 psycopg、PostgreSQL 與 Python logging，沒有新模型或第三方實作，詳見[授權表](licensing.md)。目前是應用程式只新增的紀錄，DB owner 仍可改寫資料，不能宣稱防竄改。大量拒絕會增加資料庫連線、儲存及延遲；正式部署仍需限流、保留政策、容量與告警接收設定。這些部署措施未由本工具自動啟用，也不修改 外部判定服務其他模組。
