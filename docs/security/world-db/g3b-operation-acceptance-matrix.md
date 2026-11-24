@@ -475,7 +475,7 @@ Rejection Source 合計 4。**僅這組 I-01→I-02 正向／重複取消候選�
 | M-01 | POST `/store/carts` | 隔離 PASS | 僅部署固定 USD／Email、空 items 的原始 HTTP→Executor Creator→Derived Cart、獨立 Validator Medusa 200 候選與 Promotion／Grant 再驗；`cbf6009` 真 PG 165 tests／四服務 #97 PASS，新增 `19a1a3d` 四服務 #101 確認非法 Email／幣別／額外 Inventory／重複 JSON／Idempotency-Key／錯 Key 503，Query 在 Verifier 403，非空 items 503，真 DB 不增加 Cart | OPEN：Client 200／400／404／409，非空 items、其他建立欄位與所有故障 |
 | M-02 | GET `/store/carts/{id}` | 隔離 PASS | 原生 GET→Receipt／Key／Capability→ReadAdmission，`eb2c6ce` 真 PG／四服務隔離 PASS；唯讀 Validator 固定契約 Cart 200 候選 `3230ffa`、真四服務 #94／PG17.6 隔離 PASS | OPEN：Client 200／400／404／409 |
 | M-03 | POST `/store/carts/{id}/line-items` | 隔離 PASS | 特定 400／404 受保護拒絕來源；已知 Variant 真 Commit／獨立 200 候選 `a9eda2d` 真四服務 #45396264049 PASS，缺少 Validator Native Context SELECT 必須拒絕啟動、`3055a1d` 真 PG #45396777965 PASS | OPEN：正式 Client HTTP 200／400／404／409、CAS／ACK／競態及其餘拒絕 |
-| M-04 | POST `/store/carts/{id}/line-items/{line_id}` | 隔離 PASS | 尚未執行 Native update | OPEN：200／400／404／409 |
+| M-04 | POST `/store/carts/{id}/line-items/{line_id}` | 隔離 PASS | 固定 [`b2d0b84`](https://github.com/IAN40070510/Mirage_API/commit/b2d0b849f5753f3c333557abdaaecb6803eac915) 真四服務 [#45430189698](https://github.com/IAN40070510/Mirage_API/actions/runs/45430189698) `success`：M-03 真新增 Item→M-04 同 Derived Scope 數量更新，真 Commit 版本 2→3、獨立 Validator 固定 `StoreCartResponse` 200 候選、重放 403、缺 Item 503 fail-closed，四容器角色／網路／ACL 稽核成功 | **指定 M-04 200 候選隔離子項 PASS**；Client HTTP 200／400／404／409、其他業務拒絕、CAS／ACK／競態仍 OPEN |
 | M-05 | DELETE `/store/carts/{id}/line-items/{line_id}` | 隔離 PASS | 尚未執行 Native delete | OPEN：200／400／404／409 |
 | M-06 | POST `/store/carts/{id}/complete` | 隔離 PASS | 尚未執行 Native complete | OPEN：200／400／404／409 |
 | M-07 | GET `/store/orders/{id}` | 隔離 PASS | 原生 GET→Receipt／Key／Capability→ReadAdmission，`eb2c6ce` 真 PG／四服務隔離 PASS；唯讀 Validator 固定契約 Order 200 候選（匿名 `customer_id=null`）`3230ffa`、真四服務 #94／PG17.6 隔離 PASS | OPEN：Client 200／400／404／409 |
@@ -631,6 +631,39 @@ C-03～C-06／C-08 七條已核准的 Synthetic Mutation 使用。
 及精確 Envelope。此路徑要求完整成功來源，不接受補造未知操作、
 失敗結果或 Runtime 自稱成功；目前所有七條仍須個別真 PG
 成功／業務拒絕／故障情境驗收，對外原生 HTTP 與 G4 Sender 保持封閉。
+
+**Medusa M-04 真四服務更新子項（2026-11-24，候選 PASS／整路由 OPEN）**：
+在純 Mirage 的 G3b 容器 CI，沿 M-01 真 Cart、M-03 真品項的同一
+Derived Session，以全新 JWS／Receipt／原始路徑及 `NativeQuantityBody`
+在真 PostgreSQL 上執行 `cart.update`，核對獨立 Read Source、不可變
+Commit Source／Receipt、原生 Native Context、`StoreCartResponse` 200
+JSON、版本 2→3 及新 Quantity／Total；一次 JWS 重播回 403，合法
+JWS 指向缺失品項僅回不透明 503，絕不猜測尚無簽章來源的業務 404。
+
+**紅綠紀錄**：
+[`405c780`](https://github.com/IAN40070510/Mirage_API/commit/405c780c3c67b06a09bdbd90e9d00e37373aaa4a)
+的 [四服務 #45429048407](https://github.com/IAN40070510/Mirage_API/actions/runs/45429048407)
+首次在 Verifier 內部固定回應白名單遇 M-04 回 `503`（FAIL），未當作 PASS；
+[`ffe7730`](https://github.com/IAN40070510/Mirage_API/commit/ffe77300df34d35e16db77cc2cdf602a48c8a4c5)
+已讓 Verifier 以原始 M-04 Path、Method、State Version 及固定 Attempt ID
+嚴格核對，真四服務成功產生 M-04 200 候選，但
+[四服務 #45429709245](https://github.com/IAN40070510/Mirage_API/actions/runs/45429709245)
+因稽核仍預期舊的 9 筆 Commit 而 FAIL；同版另有新測試方法文件檢查
+FAIL，皆未掩蓋。
+[`b2d0b84`](https://github.com/IAN40070510/Mirage_API/commit/b2d0b849f5753f3c333557abdaaecb6803eac915)
+同步精確稽核為 10 筆 Commit、M-04 2 張 Operation Proof，補齊測試函數
+Docstring 後，[真四服務 #45430189698](https://github.com/IAN40070510/Mirage_API/actions/runs/45430189698)
+`success`，含 `G3B_ROUTE_MEDUSA_UPDATE_CANDIDATE`、
+`G3B_GATEWAY_PASS`、`G3B_CONTAINER_AUDIT_PASS` 三項原始日誌；
+[真 PG17.6 #45430209674](https://github.com/IAN40070510/Mirage_API/actions/runs/45430209674)
+受保護合約 `168 passed`、真 mTLS `5 passed`、G5 密碼學 `9 passed`、
+獨立 Fence 真 PG `7 passed`；
+[完整 Python #45430209612](https://github.com/IAN40070510/Mirage_API/actions/runs/45430209612)
+`1455 passed / 12 skipped / 2 warnings`，
+[容器 #45430209834](https://github.com/IAN40070510/Mirage_API/actions/runs/45430209834)
+亦為 `success`。Skipped 案例未被當成 PASS。
+**這仍只是內部候選 200 與封閉故障；未簽收 Client 實收原生 HTTP，
+更不能解封 G3b／G4 Sender。**
 
 **I-03 未知操作 409 候選（固定 SHA `88d286f` 真 PG／mTLS 隔離 PASS）**：獨立 Validator 只有在受保護
 GET Receipt／ReadAdmission 已通過，且指定 UUID4 在同世代
