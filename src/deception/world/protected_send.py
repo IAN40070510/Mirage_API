@@ -78,6 +78,15 @@ class PostgresProtectedSender(_ProtectedConnection):
                         or row[2] != row[9] or row[4] != receipt_id
                         or row[5] != request_fingerprint):
                     return None
+                # 必須先取得 Admission FOR UPDATE，**另發第二條 SQL** 才讀
+                # 物理 Purge Fence；同一 SELECT 的 MVCC Snapshot 可能早於競爭
+                # GC Commit。Fence 不是新一輪 Policy/Emergency 授權判斷。
+                cursor.execute(
+                    "SELECT 1 FROM protected_authorized_snapshot_purge_fences "
+                    "WHERE admission_id=%s", (admission_id,),
+                )
+                if cursor.fetchone() is not None:
+                    return None
                 pinned = bytes(row[7])
                 admission = ResponseAdmission.model_validate(row[3])
                 verified_hashes = _verified_envelope_hashes(pinned)
@@ -162,6 +171,47 @@ class PostgresProtectedSender(_ProtectedConnection):
                      else "asgi_send_failed", row[4], outcome.value),
                 )
                 return AdmissionOperationResult.SUCCESS
+
+
+class PostgresProtectedSnapshotPurger(_ProtectedConnection):
+    """專用 GC Login 在 DB 中不可逆封閉 Snapshot 執行資格；不修改原授權紀錄。"""
+
+    def fence_snapshot(self, *, admission_id: str, gc_operation_id: UUID,
+                       purge_reason: str) -> bool:
+        """以唯一 GC Operation 建立 Fence，未知 COMMIT 只能按原 ID 查核對帳。
+
+        DB Trigger 必須在 INSERT 前鎖 Admission，再核對活躍／未知 Send Lease；
+        Fence 成功不表示 bytes 已被刪除，後續 GC 必須另行通過保留期驗收。
+        此 primitive 尚未接上正式 Restore Fence 或任何 Runtime 路由。
+        """
+        if (not isinstance(admission_id, str) or not 1 <= len(admission_id) <= 128
+                or not isinstance(gc_operation_id, UUID) or gc_operation_id.version != 4
+                or not isinstance(purge_reason, str)
+                or purge_reason not in {"retention_expired", "snapshot_corrupt"}):
+            raise ProtectedGrantError("protected_snapshot_purge_request_invalid")
+        with self._connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SET LOCAL lock_timeout='3s'")
+                cursor.execute("SELECT current_setting('transaction_isolation')")
+                if cursor.fetchone()[0] != "read committed":
+                    raise ProtectedGrantError("protected_snapshot_purge_requires_read_committed")
+                cursor.execute(
+                    "SELECT gc_operation_id,purge_reason "
+                    "FROM protected_authorized_snapshot_purge_fences "
+                    "WHERE admission_id=%s", (admission_id,),
+                )
+                existing = cursor.fetchone()
+                if existing is not None:
+                    if existing != (gc_operation_id, purge_reason):
+                        raise ProtectedGrantError("protected_snapshot_purge_rebound")
+                    return True
+                cursor.execute(
+                    """INSERT INTO protected_authorized_snapshot_purge_fences (
+                           admission_id,gc_operation_id,purge_reason)
+                       VALUES (%s,%s,%s)""",
+                    (admission_id, gc_operation_id, purge_reason),
+                )
+        return True
 
 
 @dataclass

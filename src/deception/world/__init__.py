@@ -44,7 +44,8 @@ from .store import (
 )
 from .event_store import EventWorldStore, PostgresEventWorldStore
 from .protected_world import PostgresProtectedWorldExecutor
-from .protected_send import PostgresProtectedSender, ProtectedSendLease, ProtectedLeaseTransmission
+from .protected_send import (PostgresProtectedSender, PostgresProtectedSnapshotPurger,
+                             ProtectedSendLease, ProtectedLeaseTransmission)
 
 __all__ = [
     "AdmissionControl",
@@ -70,6 +71,7 @@ __all__ = [
     "PostgresProtectedAuthorizer",
     "PostgresProtectedWorldExecutor",
     "PostgresProtectedSender",
+    "PostgresProtectedSnapshotPurger",
     "ProtectedSendLease",
     "ProtectedLeaseTransmission",
     "ProtectedGrantError",
