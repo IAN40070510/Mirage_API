@@ -46,6 +46,33 @@ BEGIN
            OR NEW.sequence <> OLD.sequence + 1 THEN
             RAISE EXCEPTION 'restore_anchor_head_not_monotonic' USING ERRCODE = '42501';
         END IF;
+        -- The new Head must refer to the checkpoint just appended in this
+        -- transaction, not an arbitrary digest chosen by the Publisher login.
+        IF NOT EXISTS (
+            SELECT 1 FROM mirage_restore_fence.checkpoints next_cp
+            JOIN mirage_restore_fence.checkpoints previous_cp
+              ON previous_cp.namespace = next_cp.namespace
+             AND previous_cp.epoch = next_cp.epoch
+             AND previous_cp.sequence = OLD.sequence
+            WHERE next_cp.namespace = NEW.namespace AND next_cp.epoch = NEW.epoch
+              AND next_cp.sequence = NEW.sequence
+              AND next_cp.checkpoint_digest = NEW.checkpoint_digest
+              AND next_cp.previous_digest = OLD.checkpoint_digest
+              AND next_cp.first_event = previous_cp.last_event + 1
+        ) THEN
+            RAISE EXCEPTION 'restore_anchor_head_checkpoint_mismatch' USING ERRCODE = '42501';
+        END IF;
+    ELSIF TG_OP = 'INSERT' THEN
+        IF NEW.sequence <> 1 OR NOT EXISTS (
+            SELECT 1 FROM mirage_restore_fence.checkpoints first_cp
+            WHERE first_cp.namespace = NEW.namespace AND first_cp.epoch = NEW.epoch
+              AND first_cp.sequence = 1
+              AND first_cp.checkpoint_digest = NEW.checkpoint_digest
+              AND first_cp.previous_digest = repeat('0', 64)
+              AND first_cp.first_event = 1
+        ) THEN
+            RAISE EXCEPTION 'restore_anchor_initial_head_checkpoint_mismatch' USING ERRCODE = '42501';
+        END IF;
     ELSE
         RAISE EXCEPTION 'restore_anchor_head_immutable' USING ERRCODE = '42501';
     END IF;
@@ -54,7 +81,7 @@ END
 $$;
 
 CREATE TRIGGER head_monotonic
-BEFORE UPDATE OR DELETE ON mirage_restore_fence.heads
+BEFORE INSERT OR UPDATE OR DELETE ON mirage_restore_fence.heads
 FOR EACH ROW EXECUTE FUNCTION mirage_restore_fence.protect_head();
 
 CREATE TRIGGER head_no_truncate

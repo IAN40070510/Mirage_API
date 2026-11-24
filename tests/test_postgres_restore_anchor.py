@@ -165,6 +165,66 @@ def test_fence_lab_reader_cannot_write_or_forge_latest_head(fence_lab):
         )
 
 
+def test_fence_lab_publisher_cannot_advance_head_without_linked_checkpoint(fence_lab):
+    """Even the Publisher's legitimate UPDATE grant cannot forge Head progress."""
+    dsns, roles = fence_lab
+    namespace = f"isolated-{uuid4().hex}"
+    key = Ed25519PrivateKey.generate()
+    publisher = PostgresAnchorPublisher(
+        dsns["publisher"], expected_login=roles["publisher"],
+        publisher_public_key=_public(key),
+    )
+    first = _checkpoint(key, namespace=namespace, sequence=1,
+                        prior="0" * 64, first=1, last=3)
+
+    # A Head without an immutable first checkpoint must not even be created.
+    with psycopg.connect(dsns["publisher"]) as conn:
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            conn.execute(
+                "INSERT INTO mirage_restore_fence.heads "
+                "(namespace,epoch,sequence,checkpoint_digest) VALUES (%s,%s,1,%s)",
+                (namespace, "epoch-test", "f" * 64),
+            )
+    assert publisher.append(first) == first.chain_digest()
+
+    # A sequence increment by itself cannot reference a nonexistent chain link.
+    with psycopg.connect(dsns["publisher"]) as conn:
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            conn.execute(
+                "UPDATE mirage_restore_fence.heads "
+                "SET sequence=2,checkpoint_digest=%s WHERE namespace=%s",
+                ("f" * 64, namespace),
+            )
+
+    # Direct SQL may append a syntactically valid signed checkpoint with a bad
+    # predecessor; the database must reject promoting that orphan to Head.
+    orphan = _checkpoint(key, namespace=namespace, sequence=2,
+                         prior="e" * 64, first=4, last=5)
+    with psycopg.connect(dsns["publisher"]) as conn:
+        conn.execute(
+            """INSERT INTO mirage_restore_fence.checkpoints (
+                   namespace,epoch,sequence,previous_digest,world_digest,events_digest,
+                   first_event,last_event,publication_id,status,signature,checkpoint_digest)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+            (orphan.namespace, orphan.epoch, orphan.sequence, orphan.previous_digest,
+             orphan.world_digest, orphan.events_digest, orphan.first_event,
+             orphan.last_event, orphan.publication_id, orphan.status,
+             orphan.signature, orphan.chain_digest()),
+        )
+    with psycopg.connect(dsns["publisher"]) as conn:
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            conn.execute(
+                "UPDATE mirage_restore_fence.heads "
+                "SET sequence=2,checkpoint_digest=%s WHERE namespace=%s",
+                (orphan.chain_digest(), namespace),
+            )
+    with psycopg.connect(dsns["reader"]) as conn:
+        assert conn.execute(
+            "SELECT sequence,checkpoint_digest FROM mirage_restore_fence.heads "
+            "WHERE namespace=%s", (namespace,),
+        ).fetchone() == (1, first.chain_digest())
+
+
 def test_fence_lab_two_publishers_compete_for_one_next_head(fence_lab):
     """兩個獨立 DB 連線同時發布同一下一節，只能成功一次且無重複 Ledger。"""
     dsns, roles = fence_lab
