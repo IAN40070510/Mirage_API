@@ -99,3 +99,28 @@ Payload 與未知 ACK 單次毒化測試仍通過。
 CI 中的 PostgreSQL 不是部署環境的獨立 Sender 登入驗收；G5 獨立 Restore
 Fence、真實 Sender 對外 ASGI、跨 DB 故障注入、G6 及最終 Owner Release
 仍 **OPEN／NO-GO**，Trusted Send 保持 **OFF**。
+
+## 2026-11-25 Snapshot Purge Fence 隔離子項證據（同 DB 邊界 PASS）
+
+`029_protected_snapshot_purge_fences.sql` 為同一不可變 Snapshot 建立**獨立
+不可逆執行資格 Fence**，不改 `SEND_AUTHORIZED` 原授權歷史、保留原始
+Envelope bytes 與 Hash。`PostgresProtectedSnapshotPurger` 僅用專用 GC
+Login 及 UUIDv4 `gc_operation_id` 插入；原操作 ID 可查既有記錄，其他
+ID／Reason 不可重綁。資料庫 Trigger 先鎖同一 Admission，再核對活躍／未知
+Send Lease；活躍 Sender 不得被 GC 切斷所需的 Pin。
+
+Sender 必須先取得 `response_admissions FOR UPDATE`，**在另一條 SQL**
+讀取是否已有 Purge Fence，才可起送。這個 Read Committed 邊界用來防止
+「原本 SELECT 的 MVCC Snapshot 早於競爭 GC Commit」，不是在授權後
+重新判斷 Policy／Emergency。Fence 及 Lease 的競爭須保證只允許一方先
+提交；原 Snapshot、授權 Audit 及不可重送歷史皆留存。所有正式 Sender
+入口和 Runtime 對 GC Fence 的 DML 必須保持拒絕。
+
+此增量只覆蓋同一 PG 的執行資格 Fence，**不**負責已物理刪除的外部 Blob、
+GC 故障／跨 DB 恢復、Purge Retention、G5 外部 Quarantine／Head、真實
+低權限 GC 角色與正式 Sender 網路隔離。資料庫原 BYTEA 尚在；不能把
+Fence INSERT 當作 Object GC 完成或 G4／G5 Release PASS。
+
+- 固定修補 Commit [`f626f45`](https://github.com/IAN40070510/Mirage_API/commit/f626f45f7c191026a7088c2319ff3027c8ae845f)、[PG17.6 #45488811957](https://github.com/IAN40070510/Mirage_API/actions/runs/45488811957) `success`：真 PG `172 passed`，包含先 Fence 阻止 Start、Active/Unknown Lease 禁止清理、終態後保留 Lease 可 Fence、兩方並行只能一方提交、不可改寫 Fence；獨立 mTLS `5 passed`、G5 模擬 `9 passed`、隔離 Fence `7 passed`。
+- [容器示範 #45488812056](https://github.com/IAN40070510/Mirage_API/actions/runs/45488812056) `success`；文件檢查 `1961 functions／69 guides` PASS。
+- 以上只簽收**同一 PostgreSQL 的 Purge Fence／StartSend 競態指定子項**；正式 Role／GC／Object Pin／Restore／混版未通過，Trusted Send 繼續 **OFF**。

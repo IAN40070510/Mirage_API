@@ -4,6 +4,15 @@ on:
   push:
     branches:
       - fix/mir-sec-world-001-resume-20261122
+  pull_request:
+    branches:
+      - fix/mir-sec-world-001-resume-20261122
+    paths:
+      - .github/workflows/g3b-four-service-isolated.yml
+      - deploy/security-lab/**
+      - src/deception/**
+      - tests/test_protected_world_executor.py
+      - tests/test_protected_services.py
   workflow_dispatch:
 
 permissions:

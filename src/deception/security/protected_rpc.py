@@ -218,6 +218,12 @@ class FixedExecutorMTLSClient:
                 "PostCartsIdLineItemsLine_id": (
                     rb"/store/carts/cart_[0-9a-f]{32}/line-items/item_[0-9a-f]{32}", 3,
                 ),
+                "DeleteCartsIdLineItemsLine_id": (
+                    rb"/store/carts/cart_[0-9a-f]{32}/line-items/item_[0-9a-f]{32}", 4,
+                ),
+                "PostCartsIdComplete": (
+                    rb"/store/carts/cart_[0-9a-f]{32}/complete", 3,
+                ),
             }
             allowed = medusa_mutations.get(operation_id)
             if (allowed is None or re.fullmatch(allowed[0], raw_path) is None
@@ -649,19 +655,27 @@ class FixedNativeValidatorMTLSClient:
         expected_deployment_id: str, expected_session_id: str,
         expected_commit_attempt_id: str, expected_result_digest: str,
         expected_state_version: int, expected_state_hash: str,
+        expected_line_item_id: str | None = None,
     ) -> dict[str, object]:
-        """mTLS 核對 M-03／M-04 Commit 的固定 Medusa 200 候選，絕不賦予 Send 權限。"""
+        """mTLS 核對 M-03～M-06 的固定 Medusa 200 候選，絕不賦予 Send 權限。"""
         from deception.world.transmission import response_hashes
         from deception.security.operation_binding import _receipt_uuid4
 
         markers = {
             "PostCartsIdLineItems": b"medusa-m03-add",
             "PostCartsIdLineItemsLine_id": b"medusa-m04-update",
+            "DeleteCartsIdLineItemsLine_id": b"medusa-m05-delete",
+            "PostCartsIdComplete": b"medusa-m06-complete",
         }
         marker = markers.get(operation_id)
+        deleting = operation_id == "DeleteCartsIdLineItemsLine_id"
+        completing = operation_id == "PostCartsIdComplete"
         if (marker is None
                 or not isinstance(resource_id, str)
                 or re.fullmatch(r"cart_[0-9a-f]{32}", resource_id) is None
+                or (deleting and (not isinstance(expected_line_item_id, str)
+                                  or re.fullmatch(r"item_[0-9a-f]{32}", expected_line_item_id) is None))
+                or (not deleting and expected_line_item_id is not None)
                 or expected_commit_attempt_id != str(
                     _receipt_uuid4(receipt_id, marker))):
             raise ProtectedRpcConfigurationError("medusa_add_validator_operation_unapproved")
@@ -686,9 +700,33 @@ class FixedNativeValidatorMTLSClient:
             source, scope = result["source"], result["scope"]
             if (not isinstance(scope, dict) or set(scope) != {
                     "environment_id", "deployment_id", "session_id", "world_generation_id"}
-                    or not isinstance(payload, dict) or set(payload) != {"cart"}
-                    or not isinstance(payload["cart"], dict)
-                    or payload["cart"].get("id") != resource_id
+                    or not isinstance(payload, dict)
+                    or (not deleting and not completing and (
+                        set(payload) != {"cart"}
+                        or not isinstance(payload["cart"], dict)
+                        or payload["cart"].get("id") != resource_id))
+                    or (deleting and (
+                        set(payload) != {"id", "object", "deleted", "parent"}
+                        or payload.get("id") != expected_line_item_id
+                        or payload.get("object") != "line-item"
+                        or payload.get("deleted") is not True
+                        or not isinstance(payload.get("parent"), dict)
+                        or payload["parent"].get("id") != resource_id
+                        or not isinstance(payload["parent"].get("items"), list)
+                        or any(not isinstance(item, dict)
+                               or item.get("id") == expected_line_item_id
+                               for item in payload["parent"]["items"])))
+                    or (completing and (
+                        set(payload) != {"type", "order"}
+                        or payload.get("type") != "order"
+                        or not isinstance(payload.get("order"), dict)
+                        or not isinstance(payload["order"].get("id"), str)
+                        or re.fullmatch(r"order_[0-9a-f]{32}", payload["order"]["id"]) is None
+                        or payload["order"].get("status") != "pending"
+                        or payload["order"].get("payment_status") != "not_paid"
+                        or payload["order"].get("fulfillment_status") != "not_fulfilled"
+                        or not isinstance(payload["order"].get("items"), list)
+                        or not payload["order"]["items"]))
                     or source != {
                         "kind": "committed_operation",
                         "world_generation_id": scope["world_generation_id"],
@@ -1425,6 +1463,7 @@ def create_direct_verifier_app(
         from deception.api.ingress import normalize_request, resolve_request_id
         from deception.security.ingress_receipt import PostgresIngressReceiptWriter
         from deception.security.operation_binding import derive_verified_operation
+        import psycopg
 
         if request.scope.get("scheme") != "https":
             raise HTTPException(status_code=503, detail="direct_verifier_tls_required")
@@ -1451,6 +1490,10 @@ def create_direct_verifier_app(
             )
         except ValueError as exc:
             raise HTTPException(status_code=403, detail="direct_verifier_request_denied") from exc
+        except psycopg.Error as exc:
+            # 無法判定 Replay／Receipt 的 Commit 結果，禁止回傳 500 或盲目重試 JTI。
+            raise HTTPException(status_code=503,
+                                detail="direct_verifier_ingress_storage_unverifiable") from exc
         # 已建立 Receipt 後的 RPC 結果不明，不能重新消費 JTI 或盲目重執行。
         outcome = None
         selected_client = (fixed_clients.get(operation.platform) if fixed_clients else executor_client)
@@ -1483,13 +1526,20 @@ def create_direct_verifier_app(
                 raise HTTPException(status_code=503,
                                     detail="direct_verifier_native_projection_unverifiable") from exc
         elif (isinstance(outcome, dict) and outcome.get("kind") == "medusa_mutation"
-              and operation.operation_id in {"PostCartsIdLineItems", "PostCartsIdLineItemsLine_id"}):
+              and operation.operation_id in {"PostCartsIdLineItems", "PostCartsIdLineItemsLine_id",
+                                             "DeleteCartsIdLineItemsLine_id", "PostCartsIdComplete"}):
             if native_validator_client is None:
                 raise HTTPException(status_code=503,
                                     detail="direct_verifier_medusa_validator_not_wired")
-            pattern = (r"/store/carts/(cart_[0-9a-f]{32})/line-items" if
-                       operation.operation_id == "PostCartsIdLineItems" else
-                       r"/store/carts/(cart_[0-9a-f]{32})/line-items/item_[0-9a-f]{32}")
+            patterns = {
+                "PostCartsIdLineItems": r"/store/carts/(cart_[0-9a-f]{32})/line-items",
+                "PostCartsIdLineItemsLine_id": (
+                    r"/store/carts/(cart_[0-9a-f]{32})/line-items/item_[0-9a-f]{32}"),
+                "DeleteCartsIdLineItemsLine_id": (
+                    r"/store/carts/(cart_[0-9a-f]{32})/line-items/item_[0-9a-f]{32}"),
+                "PostCartsIdComplete": r"/store/carts/(cart_[0-9a-f]{32})/complete",
+            }
+            pattern = patterns[operation.operation_id]
             match = re.fullmatch(pattern, normalized.path)
             if match is None:
                 raise HTTPException(status_code=503,
@@ -1506,6 +1556,9 @@ def create_direct_verifier_app(
                     expected_result_digest=outcome["result_digest"],
                     expected_state_version=outcome["state_version"],
                     expected_state_hash=outcome["state_hash"],
+                    expected_line_item_id=(normalized.path.rsplit("/", 1)[-1]
+                                           if operation.operation_id == "DeleteCartsIdLineItemsLine_id"
+                                           else None),
                 )
             except Exception as exc:
                 raise HTTPException(status_code=503,

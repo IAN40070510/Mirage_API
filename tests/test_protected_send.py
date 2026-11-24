@@ -12,7 +12,8 @@ from deception.api.fingerprint import fingerprint_request
 from deception.core.renderer import ResponseRenderer
 from deception.world import (
     AdmissionOperationResult, AdmissionState, PostgresProtectedAuthorizer,
-    PostgresProtectedSender, ProtectedLeaseTransmission, ProtectedSendLease,
+    PostgresProtectedSender, PostgresProtectedSnapshotPurger,
+    ProtectedGrantError, ProtectedLeaseTransmission, ProtectedSendLease,
 )
 from deception.world.transmission import TransmissionError, response_envelope, response_hashes
 from test_protected_grant import _grant, _login, _promote, _seed
@@ -70,6 +71,140 @@ def test_single_send_lease_claims_exact_snapshot_and_never_rearms(isolated_test_
             "SELECT sequence,event_name FROM response_audit WHERE admission_id=%s ORDER BY sequence",
             (admission.admission_id,),
         ).fetchall() == [(0, "send_started"), (1, "response_send_attempted"), (2, "asgi_send_completed")]
+
+
+def test_irreversible_snapshot_purge_fence_denies_new_send_without_rewriting_grant(isolated_test_dsn):
+    """先有 GC Fence 後 StartSend 必須拒絕，但原 Authorization／Bytes／Audit 不可被覆寫。"""
+    import psycopg
+
+    admission, owner, envelope, seeded = _authorized_pin(isolated_test_dsn)
+    purger = PostgresProtectedSnapshotPurger(isolated_test_dsn,
+                                             expected_login=_login(isolated_test_dsn))
+    sender = PostgresProtectedSender(isolated_test_dsn, expected_login=_login(isolated_test_dsn))
+    operation = uuid4()
+    assert purger.fence_snapshot(admission_id=admission.admission_id, gc_operation_id=operation,
+                                 purge_reason="retention_expired")
+    assert purger.fence_snapshot(admission_id=admission.admission_id, gc_operation_id=operation,
+                                 purge_reason="retention_expired")
+    with pytest.raises(ProtectedGrantError, match="purge_rebound"):
+        purger.fence_snapshot(admission_id=admission.admission_id, gc_operation_id=uuid4(),
+                              purge_reason="snapshot_corrupt")
+    assert sender.start_send(admission_id=admission.admission_id, receipt_id=seeded[3],
+                             owner=owner, request_fingerprint=admission.request_binding_digest,
+                             expected_envelope=envelope) is None
+    with psycopg.connect(isolated_test_dsn) as connection:
+        assert connection.execute(
+            "SELECT state FROM response_admissions WHERE admission_id=%s",
+            (admission.admission_id,),
+        ).fetchone() == ("SEND_AUTHORIZED",)
+        assert bytes(connection.execute(
+            "SELECT envelope_bytes FROM protected_authorized_http_snapshots WHERE admission_id=%s",
+            (admission.admission_id,),
+        ).fetchone()[0]) == envelope
+        assert connection.execute(
+            "SELECT gc_operation_id,purge_reason FROM protected_authorized_snapshot_purge_fences "
+            "WHERE admission_id=%s", (admission.admission_id,),
+        ).fetchone() == (operation, "retention_expired")
+        assert connection.execute("SELECT count(*) FROM protected_send_leases").fetchone() == (0,)
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            connection.execute(
+                "DELETE FROM protected_authorized_snapshot_purge_fences WHERE admission_id=%s",
+                (admission.admission_id,),
+            )
+
+
+def test_active_send_lease_prevents_snapshot_purge_fence(isolated_test_dsn):
+    """Sender 已開始或 ACK 未知時 GC 不能在其 Pin 之下刪除執行資格。"""
+    import psycopg
+
+    admission, owner, envelope, seeded = _authorized_pin(isolated_test_dsn)
+    sender = PostgresProtectedSender(isolated_test_dsn, expected_login=_login(isolated_test_dsn))
+    purger = PostgresProtectedSnapshotPurger(isolated_test_dsn,
+                                             expected_login=_login(isolated_test_dsn))
+    lease = sender.start_send(admission_id=admission.admission_id, receipt_id=seeded[3],
+                              owner=owner, request_fingerprint=admission.request_binding_digest,
+                              expected_envelope=envelope)
+    assert lease is not None
+    with pytest.raises(psycopg.errors.InsufficientPrivilege,
+                       match="protected_snapshot_purge_active_or_unknown_send"):
+        purger.fence_snapshot(admission_id=admission.admission_id, gc_operation_id=uuid4(),
+                              purge_reason="retention_expired")
+    with psycopg.connect(isolated_test_dsn) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM protected_authorized_snapshot_purge_fences",
+        ).fetchone() == (0,)
+        assert connection.execute(
+            "SELECT state FROM response_admissions WHERE admission_id=%s",
+            (admission.admission_id,),
+        ).fetchone() == ("SEND_STARTED",)
+
+
+def test_terminal_send_allows_retention_fence_without_rearming_lease(isolated_test_dsn):
+    """真實 ASGI 終態落盤後可建立清理 Fence，但不可撤銷過去 Lease 或重送。"""
+    import psycopg
+
+    admission, owner, envelope, seeded = _authorized_pin(isolated_test_dsn)
+    sender = PostgresProtectedSender(isolated_test_dsn, expected_login=_login(isolated_test_dsn))
+    purger = PostgresProtectedSnapshotPurger(isolated_test_dsn,
+                                             expected_login=_login(isolated_test_dsn))
+    args = dict(admission_id=admission.admission_id, receipt_id=seeded[3],
+                owner=owner, request_fingerprint=admission.request_binding_digest,
+                expected_envelope=envelope)
+    lease = sender.start_send(**args)
+    assert lease is not None
+    assert sender.finish_send(admission_id=admission.admission_id, owner=owner,
+                              lease_id=lease.lease_id, outcome=AdmissionState.SEND_COMPLETED,
+                              attempted=True) is AdmissionOperationResult.SUCCESS
+    assert purger.fence_snapshot(admission_id=admission.admission_id,
+                                 gc_operation_id=uuid4(), purge_reason="retention_expired")
+    assert sender.start_send(**args) is None
+    with psycopg.connect(isolated_test_dsn) as connection:
+        assert connection.execute(
+            "SELECT state FROM response_admissions WHERE admission_id=%s",
+            (admission.admission_id,),
+        ).fetchone() == ("SEND_COMPLETED",)
+        assert connection.execute("SELECT count(*) FROM protected_send_leases").fetchone() == (1,)
+        assert connection.execute(
+            "SELECT count(*) FROM protected_authorized_snapshot_purge_fences",
+        ).fetchone() == (1,)
+
+
+def test_concurrent_snapshot_purge_and_start_send_are_serialized(isolated_test_dsn):
+    """GC／Sender 競爭只能 Fence 或 StartSend 擇一成功，不能同時提交。"""
+    import psycopg
+
+    admission, owner, envelope, seeded = _authorized_pin(isolated_test_dsn)
+    sender = PostgresProtectedSender(isolated_test_dsn, expected_login=_login(isolated_test_dsn))
+    purger = PostgresProtectedSnapshotPurger(isolated_test_dsn,
+                                             expected_login=_login(isolated_test_dsn))
+
+    def attempt_purge():
+        """以專用 GC 身份寫入同筆 Admission 的不可逆 Fence。"""
+        try:
+            return purger.fence_snapshot(admission_id=admission.admission_id,
+                                         gc_operation_id=uuid4(),
+                                         purge_reason="retention_expired")
+        except psycopg.errors.InsufficientPrivilege:
+            return False
+
+    def attempt_send():
+        """以唯一 Sender 身份嘗試消費同筆 Admission。"""
+        return sender.start_send(admission_id=admission.admission_id,
+                                 receipt_id=seeded[3], owner=owner,
+                                 request_fingerprint=admission.request_binding_digest,
+                                 expected_envelope=envelope)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        purge_future, send_future = pool.submit(attempt_purge), pool.submit(attempt_send)
+        fenced, lease = purge_future.result(), send_future.result()
+    assert int(fenced) + int(lease is not None) == 1
+    with psycopg.connect(isolated_test_dsn) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM protected_authorized_snapshot_purge_fences",
+        ).fetchone() == (int(fenced),)
+        assert connection.execute(
+            "SELECT count(*) FROM protected_send_leases",
+        ).fetchone() == (int(lease is not None),)
 
 
 def test_send_lease_insert_error_rolls_back_send_started(isolated_test_dsn):
