@@ -9,7 +9,7 @@ domain: ecommerce
 policy_id: p2-6a-medusa-product-lookup
 policy_version: '1'
 enabled: false
-trusted_sources: [sentinel-approved]
+trusted_sources: [trusted-client]
 max_age_seconds: 30
 rules:
   - rule_id: p2-6a-get-store-product

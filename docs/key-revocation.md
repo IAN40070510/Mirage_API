@@ -68,8 +68,6 @@ python -m pytest tests/test_key_revocation.py tests/test_trusted_session.py test
 python tools/check_documentation.py
 ```
 
-資料庫案例須提供專用 MIRAGE_POSTGRES_TEST_DSN；雙服務案例另需本機 MSDSS checkout 及 openssl。skip 不是通過。案例包含有效簽章後撤銷、不消費 Replay、真正鎖等待的兩種順序、讀寫隔離拒絕、真實 TCP COMMIT 回覆遺失、重建／同 kid 換公鑰仍拒絕，以及兩個真正 TLS 業務服務不重啟輪替並保留原世界。合成測試私鑰只留本機，不用於正式環境。
-
 另以真實 TCP 代理丟棄**合併後單一 Ingress Key／Replay 交易**的 COMMIT 回覆：驗證必須拋錯，已提交 JTI 仍只一筆且後續拒絕重放；再測試 Replay INSERT 後故障的整筆回滾、Replay 禁止開第二連線、不同 DSN 事前拒絕。隔離映像的最後一項 opt-in 測試與停止寫入後的備份還原檢查見[運維說明](runtime-operations.md)。
 
 ## 授權與目前限制

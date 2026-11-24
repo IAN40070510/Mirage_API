@@ -499,7 +499,7 @@ Rejection Source 合計 4。**僅這組 I-01→I-02 正向／重複取消候選�
    一般強制條件，但獨立 Validator／受保護來源不能省略。不能把 mTLS readiness、
    200 internal RPC、PG test `passed` 當成客戶端回應授權。
 
-G3b 整體狀態 `OPEN`。`MIR-SEC-WORLD-001=OPEN`、`MSDSS P2=NO-GO`；
+G3b 整體狀態 `OPEN`。`MIR-SEC-WORLD-001=OPEN`、`Mirage release=NO-GO`；
 正式 Trusted Send `OFF`，不合併 main、不部署 staging 或 production。
 
 **I-03 增量（待真 PG／四服務 CI）**：新增 `/internal/v1/project-inventory-operation`

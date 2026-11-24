@@ -243,11 +243,6 @@ pytest 父程序啟動服務，不等於正式容器彼此不可見的 Secret／
 隔離資料庫的 404 另以可信 Cart catalog 缺失和 Candidate Promotion 驗證，
 尚未涵蓋全部原生 Medusa 路由。
 
-仍須獨立完成：部署級 Gateway→Verifier 原始 HTTP 來源證明、
-Service Caller 認證政策、角色與憑證隔離、完整業務 RPC、未知 COMMIT 對帳、
-Snapshot／Send Lease／外部 Restore Fence、真容器網路及故障注入。以上
-未通過前 `MIR-SEC-WORLD-001=OPEN`、`MSDSS P2=NO-GO`。
-
 ## 套件與授權
 
 本專案程式 Apache-2.0；使用既有 FastAPI、Uvicorn、HTTPX、Cryptography

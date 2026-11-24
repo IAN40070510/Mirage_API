@@ -1,5 +1,7 @@
 # MIR-SEC-WORLD-001 — 威脅能力與控制覆蓋
 
+> 本文件以 Mirage 原生授權契約為維護範圍。歷史跨專案整合證據已移交保存，原生安全要求與驗收狀態維持原紀錄。
+
 **v0.2 — Proposed**。舊 T1／T1.5／T2 只是對話簡稱，正式 ADR 使用可直接測試的能力 R1–R5。
 
 | 能力 | 最強假設 | 本輪安全主張 |
@@ -59,9 +61,9 @@
 
 ## Freeze v1 和資料庫身份界線（v0.2 文件提案）
 
-**來源與採納分離**：MSDSS 固定 SHA `5a1ee26dcf79f04cf29345a0403e3f3f8082358b` 的 Freeze v1 是**目標協定**；Mirage 固定 upstream `88dc2008fd35a2d3873949a769653dc9f18e8980` 的 `start_send()` 有已觀察到的二次 Emergency 差異。Mirage Owner **2026-11-21 採納 ACCEPTED（D-68）**，native `WORLD-PROTOCOL-01/02` 完整符合性 **NOT_RUN**；下列是設計要求，不是已部署保障。
+**契約與驗收分離**。Mirage Protocol Freeze v1 由本 ADR 定義。Owner 採納見 D-68，native WORLD-PROTOCOL-01／02 的完整符合性以隔離測試核對，設計要求本身不構成已部署保障。
 
 - `mirage_http_runtime` 的 `SESSION_USER` 只證明 DB LOGIN，不證明 Tenant／Claim Owner／部署版本。特權函式須沿 Ingress Receipt → Operation Identity → Subject/Scope → Binding 驗證，拒絕跨 admission/owner/scope 的參數越權；`SET LOCAL app.tenant_id` 或版本字串非安全證據。
 - `SECURITY DEFINER` Owner 為獨立 NOLOGIN，可信 fixed search_path（pg_temp 最後），撤銷 PUBLIC EXECUTE、一般 Runtime 的直接 protected DML／membership／SET ROLE 能力。DB R1 防護不等於能阻止已被完全控制的 R4 HTTP Sender。
 - Policy／Emergency／Epoch／Key **只在 SEND_AUTHORIZED COMMIT 前**可否決新授權；StartSend 只檢查 Snapshot／deadline／owner／single-use／Purge Fence。原 Candidate 已 Purge 但 Snapshot 完整不構成新撤銷。
-- 真 PostgreSQL ACL／多 Backend／External Object／Restore／Mixed Binary 新測試一律 `NOT_RUN`；MSDSS P2 `NO-GO`，production DECEIVE `OFF`。
+- 真 PostgreSQL ACL／多 Backend／External Object／Restore／Mixed Binary 新測試一律 `NOT_RUN`；Mirage release `NO-GO`，production DECEIVE `OFF`。

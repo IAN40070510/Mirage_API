@@ -28,7 +28,7 @@ The Restore Anchor MUST be outside the World DB backup and restore domain. Its c
 
 ## 2026-11-24 one-time Oracle Arm64 lab preflight — bounded PASS, G5 OPEN
 
-On `msdss-oracle-arm64-test`, authenticated Gateway sudo access inspected two **already
+On `isolated-arm64-lab`, authenticated Gateway sudo access inspected two **already
 existing** `postgres:17.6-alpine` containers:
 `mir-sec-world001-pg` (World Lab, separate `mir-sec-world001-pgdata` volume,
 `mir_sec_owner` login) and `mir-sec-world001-fence-pg` (Fence Lab, separate
@@ -105,7 +105,7 @@ No production or staging service is connected to this helper.
 
 ## 2026-11-24 actual pg_dump/pg_restore against separate lab Fence — bounded PASS
 
-An additional **host-only disposable test** on `msdss-oracle-arm64-test`
+An additional **host-only disposable test** on `isolated-arm64-lab`
 used the existing `mir-sec-world001-pg` World Lab and the separate
 `mir-sec-world001-fence-pg` PostgreSQL 17.6 Fence Lab (distinct containers,
 data volumes, and administrator logins). It never touched a staging or
@@ -208,4 +208,4 @@ Quarantine 原子自動解禁、正式 Restore／Send／Purge 競態。任何符
 
 Use only the dedicated `mir-sec-world001-lab` resources for implementation and tests. Do not attach the existing staging networks, restart the seven existing containers, reuse production secrets, merge the Draft PR, or enable trusted send.
 
-Decision: **Option B approved**. Implementation: **IN PROGRESS**. G5: **NOT RUN**. MIR-SEC-WORLD-001: **OPEN**. MSDSS P2: **NO-GO**.
+Decision: **Option B approved**. Implementation: **IN PROGRESS**. G5: **NOT RUN**. MIR-SEC-WORLD-001: **OPEN**. Mirage release: **NO-GO**.

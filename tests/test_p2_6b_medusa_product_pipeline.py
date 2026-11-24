@@ -120,7 +120,7 @@ def _selected(stack: dict, product_id: str, *, request_id: str = "medusa-synthet
     )
     now = datetime.now(timezone.utc)
     assessment = AttackAssessment(
-        assessment_id=request.request_id, source_id="sentinel-approved",
+        assessment_id=request.request_id, source_id="trusted-client",
         request_id=request.request_id, request_fingerprint=fingerprint_request(request),
         **stack["runtime"].model_dump(), site_id=stack["scope"].site_id,
         verdict="malicious", attack_types=["sql-injection"],

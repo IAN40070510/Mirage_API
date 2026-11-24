@@ -326,11 +326,6 @@ tests/test_protected_rpc_mtls.py tests/test_ingress_receipts.py`。真 PostgreSQ
 17.6 CI 得到 `92 passed`，獨立 mTLS 子集 `4 passed`；這仍不是
 正式 Compose 容器實體 Secret／Network Policy 的部署級 ACL 證據。
 
-尚待驗收：正式 Gateway 端原始網路連線、Secret 不可見性、pg_hba、兩個
-Executor 都可用的真容器端到端正反面、20 條原生 HTTP 200／400／404／409
-兼容、獨立 Validator 的真容器部署簽收、故障注入與正式簽核。上述任一欠缺，
-`MIR-SEC-WORLD-001=OPEN`、`MSDSS P2=NO-GO`，Trusted Send `OFF`。
-
 ## 套件與授權
 
 自有程式採 Apache-2.0；使用專案既有 FastAPI／Uvicorn／HTTPX、

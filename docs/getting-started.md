@@ -2,7 +2,9 @@
 
 ## 用途與邊界
 
-Mirage 是可獨立執行的合成 API 服務。預設展示入口提供合成商品查詢與固定備援文字，不需要 MSDSS、帳號、模型或 API 金鑰。可信入口另提供 PostgreSQL 世界、訪客購物車、合成訂單與庫存事件；須明確設定服務端身份與簽章，見[可信服務](trusted-session.md)。所有交易均為合成資料。
+Mirage 可獨立執行合成商品、世界、購物車與受保護的欺敵 HTTP 流程。
+預設展示入口使用固定合成資料與備援文字。可信交易入口由部署者配置
+本服務的公開金鑰、服務範圍與隔離 PostgreSQL。
 
 ## Docker Compose 啟動
 
@@ -79,7 +81,3 @@ python3 -m venv .venv
 python tools/check_documentation.py
 python -m pytest -q
 ```
-
-未設定專用 `MIRAGE_POSTGRES_TEST_DSN` 時，資料庫案例會明確 skip；不要指向真實 Medusa 資料庫。GitHub Actions 會提供獨立 PostgreSQL 跑資料庫案例及 Node 固定向量。需要實際 MSDSS checkout／Medusa 服務的整合案例仍明確 skip，其測試條件見[證據矩陣](conformance-evidence.md)。
-
-自有程式採 Apache-2.0，依賴、固定來源與模型授權見[授權表](licensing.md)。不提供真實付款、配送、退款、任意 Medusa 路由、正式攻擊偵測器或 L3 真實資料匯入。MSDSS 正式導流、TLS 與秘密管理由部署整合處理，本應用不自動修改其他服務。

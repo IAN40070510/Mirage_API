@@ -9,6 +9,7 @@ from urllib.parse import unquote, urlsplit
 ROOT = Path(__file__).resolve().parents[1]
 FUNCTION_ROOTS = ("src/deception", "mirage_validator", "tests", "tools", "integrations", "deploy/security-lab")
 GUIDES = {
+    "standalone": ("src/deception/security/trusted_deployment.py", "docs/standalone.md"),
     "protected_rpc_mtls": ("src/deception/security/protected_rpc.py", "docs/protected-rpc.md"),
     "protected_g3b_service_bootstrap": ("src/deception/security/protected_services.py", "docs/protected-services.md"),
     "protected_g3b_service_topology": ("deploy/security-lab/g3b-compose.yaml", "docs/protected-services.md"),
@@ -38,8 +39,6 @@ GUIDES = {
     "medusa_cart_http": ("src/deception/domains/ecommerce/medusa_cart_http.py", "docs/medusa-carts.md"),
     "medusa_cart_projection": ("src/deception/domains/ecommerce/medusa_cart_projection.py", "docs/medusa-carts.md"),
     "native_resource_time": ("src/deception/domains/ecommerce/native_time.py", "docs/medusa-carts.md"),
-    "gateway_compatibility": ("integrations/msdss/requirements.compatibility-test.txt", "docs/gateway-bootstrap.md"),
-    "gateway_bootstrap": ("integrations/msdss/gateway_bootstrap.py", "docs/gateway-bootstrap.md"),
     "runtime_archive": ("tools/package_runtime.py", "docs/runtime-operations.md"),
     "schema_migration": ("tools/apply_migrations.py", "docs/runtime-operations.md"),
     "migration_engine": ("src/deception/world/migrations.py", "docs/runtime-operations.md"),
@@ -54,7 +53,6 @@ GUIDES = {
     "resource_identity": ("src/deception/security/resource_identity.py", "docs/carts.md"),
     "inventory_events": ("src/deception/domains/ecommerce/inventory.py", "docs/inventory.md"),
     "trusted_session": ("src/deception/security/trusted_deployment.py", "docs/trusted-session.md"),
-    "trusted_gateway": ("integrations/msdss", "docs/trusted-session.md"),
     "ingress": ("src/deception/api", "docs/ingress.md"),
     "identification": ("src/deception/discovery", "docs/identifier.md"),
     "orchestration": ("src/deception/core/orchestrator.py", "docs/orchestration.md"),
@@ -213,13 +211,13 @@ def check_world_adr_contract(root: Path) -> list[str]:
         "ADR": (
             "Architecture", "Proposed", "SEND_AUTHORIZED",
             "Protocol Freeze v1", "NOT_RUN", "MIR-SEC-WORLD-001",
-            "MSDSS P2", "OperationSnapshotBinding", "decision_time",
+            "Mirage release", "OperationSnapshotBinding", "decision_time",
             "SNAPSHOT_BINDING_CONFLICT", "WORLD_COMMITTED_ADMISSION_UNAVAILABLE",
             "Protocol baseline", "Mirage Owner adoption", "Mirage native conformance",
         ),
         "verification": (
             "NOT_RUN", "WORLD_COMMITTED_ADMISSION_UNAVAILABLE",
-            "SEND_STARTED", "MIR-SEC-WORLD-001", "MSDSS P2",
+            "SEND_STARTED", "MIR-SEC-WORLD-001", "Mirage release",
         ),
         "decisions": (
             "NOT_RUN", "WORLD_COMMITTED_ADMISSION_UNAVAILABLE",

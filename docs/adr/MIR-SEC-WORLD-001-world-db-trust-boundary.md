@@ -1,5 +1,7 @@
 # MIR-SEC-WORLD-001 — World DB 信任邊界與受保護發送授權（Architecture Draft）
 
+> 本文件以 Mirage 原生授權契約為維護範圍。歷史跨專案整合證據已移交保存，原生安全要求與驗收狀態維持原紀錄。
+
 > **後續決策優先適用（2026-11-21）**：[獨立 Restore Anchor Option B](../security/world-db/restore-anchor-option-b.md) 已核准、[BD-05 自動驗證解禁](../security/world-db/bd-05-restore-quarantine-release.md) 已採納、[BD-11 鎖後 Deadline 語意](../security/world-db/bd-11-deadline-semantics.md) 已決定。本文後續若仍將 BD-05／BD-11 寫成 OPEN 或要求每次 Operator Release Certificate，視為歷史草稿未同步；**以上專用決策文件較新並優先**。完整修復與效能議題另見 [整合總表](../security/world-db/remediation-and-performance-register.md)。上述決策皆不代表已實作或已驗收。
 
 > **2026-11-24 新人員驗收制度（D-73）**：Mirage Owner `IAN40070510` 已採納
@@ -7,7 +9,7 @@
 > 本文歷史上要求 DBA／Security／Release Approver **四方人工簽核**的敘述，
 > 改由 Owner 在 G3b～G6 全部技術證據 PASS 後作可追溯最終核准；
 > 外部獨立人工審查為建議項。**獨立 DB Role／Validator／Fence、全部技術 Gate、
-> MSDSS P2 個別驗收仍必須遵守；採納制度不等於放行。**
+> Mirage release 個別驗收仍必須遵守；採納制度不等於放行。**
 
 | 欄位 | 值 |
 | --- | --- |
@@ -19,22 +21,21 @@
 | Production DECEIVE | **OFF**（政策要求；正式部署強制證據尚缺） |
 | Architecture | **Proposed；尚未完成完整技術驗收及特定 Release 的 Owner 最終核准**（人員責任依 D-73） |
 | Security weakness | **MIR-SEC-WORLD-001 — OPEN／尚未修復** |
-| 關聯驗收 | **MSDSS P2 — NO-GO**；P2 是 MSDSS 的驗收代號，不是 Mirage 的漏洞識別碼 |
-| Protocol baseline（MSDSS Freeze v1） | **ACCEPTED as MSDSS baseline**；MSDSS `main` `5a1ee26dcf79f04cf29345a0403e3f3f8082358b` 的 `docs/P2_SEND_AUTHORIZATION_FREEZE.md`；本欄**不是** Mirage Owner 簽核 |
+| 關聯驗收 | Mirage release — NO-GO，等待原生安全矩陣與 Owner 對固定版本驗收 |
+| Protocol baseline（Mirage Protocol Freeze v1） | 以本 ADR 的授權、Snapshot、deadline 與恢復契約為準，原生符合性依固定 SHA 獨立驗收 |
 | Implementation baseline（Mirage source） | **固定原始碼分析 SHA**：Mirage upstream `main` `88dc2008fd35a2d3873949a769653dc9f18e8980`；正式 Owner 採納時須另外核准適用版本。文件前置 HEAD `003c918f142296588d2fe14b70fafe3cc5cf8458` 不是 Mirage source baseline |
-| Mirage Owner adoption | **ACCEPTED（2026-11-21）**；使用者已正式選擇授權一致性優先及採納 MSDSS Protocol Freeze v1，見 [D-68](../security/world-db/decisions-log.md)；**不代表**原生符合性或 DBA／Security 簽核 |
+| Mirage Owner adoption | **ACCEPTED（2026-11-21）**；使用者已正式選擇授權一致性優先及採納 Mirage Protocol Freeze v1，見 [D-68](../security/world-db/decisions-log.md)；**不代表**原生符合性或 DBA／Security 簽核 |
 | G1 Verifier／Authorizer 部署隔離選擇 | **同機獨立容器／OS 身分（D-69，2026-11-21）**；每服務不同 SCRAM DB Role／Secret／DSN，禁止共池或 Runtime `SET ROLE`；仍須實測與部署簽核，R5 主機控制不涵蓋 |
 | Candidate 授權遷移策略 | **Clean Cutover（D-70，2026-11-21）**；保留原生 Candidate 生成器，但舊的 `candidate_records → grant()` 不得作為正式可信發送的授權入口；新路徑尚未完成，**NOT_IMPLEMENTED** |
 | Mirage native conformance | **NOT_RUN**（`WORLD-PROTOCOL-MATRIX-01`／`WORLD-PROTOCOL-01`）；固定 `start_send()` 有**已觀察到的局部差異**，不得以該單點推論完整合約測試已執行或已有全域符合性結論 |
 | 來源 | 多輪安全審查及兩個不同 Repo/SHA 的唯讀核對；**非已實作／通過的安全驗證** |
 | 變更界線 | 文件提案；**不代表已修改 Runtime、資料庫 ACL、staging、金鑰或 production 開關** |
-| 審核責任 | **D-73 已採納**：Owner `IAN40070510` 承擔 DBA／Security／Release 技術責任並在全部技術 Gate PASS 後獨立作最終決議；外部人工 Reviewer 建議但非本個人專案一般阻擋條件。MSDSS P2 若有獨立服務／契約門檻仍須另驗。 |
+| 審核責任 | **D-73 已採納**：Owner `IAN40070510` 承擔 DBA／Security／Release 技術責任並在全部技術 Gate PASS 後獨立作最終決議；外部人工 Reviewer 建議但非本個人專案一般阻擋條件。Mirage release 若有獨立服務／契約門檻仍須另驗。 |
 
 > **一句話決策方向**：採方案 B，讓 PostgreSQL／獨立可信角色強制關鍵授權狀態轉移；每個不可分割的安全狀態轉移使用同一個 PostgreSQL 交易，但**不假裝整個 HTTP、World Mutation 與外部副作用能共用一個交易**。
 
 ## 1. 問題、實證與未實證主張
 
-MSDSS 的 [Draft PR #23](https://github.com/IAN40070510/MSDSS/pull/23) 報告：在 PostgreSQL 17.6 的隔離環境中，持有既有 World Runtime DB 身分者可直接修改發送授權狀態、倒退 Session epoch，或提早刪除尚未過期的 JWS Replay 墓碑。**該 PR 的測試結果（13/13、回歸與 CI）來自先前驗收紀錄；撰寫本 ADR 時未重新執行該實驗。** 其 3 項重現案例是缺口的證據，**不是修復通過**。
 
 上游原始碼所見的既有行為：
 
@@ -140,7 +141,7 @@ start_send_deadline = min(
 
 `approved_grace`、window、clock skew、比較精度與是否准許 Token 到期後開始傳輸仍為 **Owner＋Security Blocking Policy Decision**；沒有核准即採 `approved_grace=0` 的保守政策。不得接受 Runtime 傳入的任意 world expiry。
 
-**Deadline Matrix**（MSDSS Freeze v1 現行實作）：Claim 檢查 `authorization_deadline`；AuthorizeSend 及 StartSend 檢查 `transmission_deadline`；每段 ASGI 發送仍受 transmission deadline 限制。每個受保護交易取得必要鎖後**只從 DB 取得一次 decision_time**，同一交易全部期限／GC／Lease 使用同一值並持久化。`decision_time < deadline` 是判定時間有效，**不是** COMMIT 保證早於 deadline；SEND_AUTHORIZED 的 COMMIT 仍是唯一授權生效點。未知 COMMIT、DB 時鐘倒退／不可驗證、跨 DB skew 均 Fail-Closed；Runtime 提供的 now 僅可診斷。
+**Deadline Matrix**（Mirage Protocol Freeze v1 目標契約）：Claim 檢查 `authorization_deadline`；AuthorizeSend 及 StartSend 檢查 `transmission_deadline`；每段 ASGI 發送仍受 transmission deadline 限制。每個受保護交易取得必要鎖後**只從 DB 取得一次 decision_time**，同一交易全部期限／GC／Lease 使用同一值並持久化。`decision_time < deadline` 是判定時間有效，**不是** COMMIT 保證早於 deadline；SEND_AUTHORIZED 的 COMMIT 仍是唯一授權生效點。未知 COMMIT、DB 時鐘倒退／不可驗證、跨 DB skew 均 Fail-Closed；Runtime 提供的 now 僅可診斷。
 
 ### 6.4 Admission 與 HTTP 傳輸結果
 
@@ -153,7 +154,7 @@ start_send_deadline = min(
 
 ## 6.5 v0.2 Contract Freeze：決定性受保護合約（其餘舊措辭不得抵觸）
 
-本節是 **Proposed／整體安全修補 NOT_IMPLEMENTED** 的 v0.2 規範性內容，並以 MSDSS `main` `5a1ee26dcf79f04cf29345a0403e3f3f8082358b` 的 Protocol Freeze v1 為控制邊界。**不得**以 Mirage 上游 `main` `88dc2008fd35a2d3873949a769653dc9f18e8980` 的舊實作推定本合約已修復、已核准或已部署。**已觀察到來源差異**：該 Mirage 上游版 `postgres_admission.start_send()` 仍讀取 Generation/Profile Emergency；MSDSS Freeze v1 則將其移至最後的 `authorize_send()`，授權後不二次查核。Mirage Owner 已於 2026-11-21 正式採納此目標（D-68）；原生修正及完整安全回歸尚需獨立驗證，**不能只修改 ADR 就算兩邊同版**。
+本節是 v0.2 規範性授權契約。SEND_AUTHORIZED 的 COMMIT 是授權生效點，之後不再以 Policy／Emergency 作第二次授權。StartSend 仍須核對 owner、deadline、single-use、Snapshot 與不可逆 execution-ineligibility fence。Mirage Owner 採納見 D-68，原生符合性與安全修補以固定版本測試證明。
 
 ### 6.5.1 Policy、Revocation、Deadlines 和 Send Freeze
 
@@ -319,8 +320,8 @@ start_send_deadline = min(
 - 驗收 Python Context 與資料庫授權**分層**：Context 不穿越低信任邊界；Runtime 不能以 SQL／特權函式參數偽造來源。測試 `pg_auth_members` `SET/INHERIT/ADMIN` 路徑、`SET SESSION AUTHORIZATION` 與 schema／function 有效權限，不只查 `NOINHERIT`。
 - Replay+Receipt 必須同一 PostgreSQL database、同一 physical connection、同一 IngressTx；Grant 的 Binding+Admission 同交易；已綁 Receipt 不可重用於其他 Candidate。鎖循環檢查、Epoch/Key rotation/revocation 的並行勝負、期限跨鎖等待及 Envelope mismatch 實測。
 - 未知 COMMIT、World 成功但 Admission 失敗、SEND_STARTED 之後失聯、GC／Restore Quarantine、Schema／ACL 不相容與故障恢復實測。
-- Mirage 固定來源 `start_send()` 與 MSDSS Freeze v1 的**差異分析**、Mirage Owner 正式採納紀錄及 `WORLD-PROTOCOL-01/02`；未修改 Mirage 原生實作前不得宣稱 conformant。
-- `WORLD-PROTOCOL-MATRIX-01` 分三份證據測試：**MSDSS Protocol baseline ACCEPTED／Mirage Owner adoption ACCEPTED（2026-11-21，D-68）／Mirage native conformance NOT_RUN**。Native 符合性須逐項查 `SEND_AUTHORIZED` COMMIT 線性化、前後 Policy/Emergency、owner、deadline、single-use、Snapshot/ASGI bytes、未知 COMMIT 與 HTTP 結果分類；`start_send()` 修補只是一個切面，不是整套測試的判決。
+- Mirage 固定來源 `start_send()` 與 Mirage Protocol Freeze v1 的**差異分析**、Mirage Owner 正式採納紀錄及 `WORLD-PROTOCOL-01/02`；未修改 Mirage 原生實作前不得宣稱 conformant。
+- `WORLD-PROTOCOL-MATRIX-01` 分三份證據測試：**Mirage Protocol baseline ACCEPTED／Mirage Owner adoption ACCEPTED（2026-11-21，D-68）／Mirage native conformance NOT_RUN**。Native 符合性須逐項查 `SEND_AUTHORIZED` COMMIT 線性化、前後 Policy/Emergency、owner、deadline、single-use、Snapshot/ASGI bytes、未知 COMMIT 與 HTTP 結果分類；`start_send()` 修補只是一個切面，不是整套測試的判決。
 - World DB 舊備份不含後續 Candidate Tombstone 時，以**還原範圍外**之受保護錨點攔截舊身分復活；Anchor 不可讀／不可驗時持續 Quarantine（`WORLD-RESTORE-TOMBSTONE-01`）。
 - `WORLD-RESTORE-FENCE-01` 使用過期／重播／未涵蓋後續 Candidate Tombstone、Binding、Operation 的錨點；`WORLD-RESTORE-PUBLISH-01` 獨立測 DB-first／Anchor-first 故障；`WORLD-PURGE-BOUNDARY-01` 驗證 Snapshot eligibility 與 Admission authorization 互不覆寫；`WORLD-SNAPSHOT-SEPARATION-01` 測底層共用 Blob 的 Pin/GC；`WORLD-PURGE-RETRY-01` 測 Fence 已提交但 GC 失敗。全部未實作前維持 NOT_RUN。
 - 失效**可由系統偵測**者立即 Fail-Closed；Secret 外洩、容器掛載錯誤、主機權限遭侵害等**需監控／人工判定**者應停止正式發送、撤銷／輪替憑證、隔離、保留證據，不可謊稱應用能自動證明未外洩。
@@ -353,11 +354,11 @@ start_send_deadline = min(
 | BD-09 | Candidate Validator 的可信身分／政策來源、長耗時驗證的交易外證據、短 PromotionTx 與 Revision 撤銷／升級規則 | Mirage Owner＋Security＋DBA | OPEN |
 | BD-10 | 正式發送 DISABLED 的實際控制面、Runtime 權限、Restore 後不可倒退的隔離機制 | 依 D-73 由 Owner 承擔 Release／Security／Operations 的實測責任與最終核准 | OPEN |
 | BD-11 | `decision_time` 有效但 `SEND_AUTHORIZED` COMMIT 晚於 deadline 的政策；可驗證 DB 時鐘下界、可接受交易延遲與判斷點，**不得默默改 Freeze v1**。未定案：僅允許鎖後單一 DB `decision_time` 邏輯判定，**不宣稱** COMMIT-before-deadline；若產品必須保證後者，正式發送保持禁用；未知 Commit 不得開始新傳輸，已實際提交的授權不回溯改寫 | Mirage Owner＋Security＋DBA | **OPEN — 預設 Fail-Closed／no production send** |
-| BD-12 | Mirage Owner 是否正式採納 MSDSS Freeze v1 以及對應原生 `start_send()` 相容修正／回歸；現行差異不能只靠改 ADR 消除 | Mirage Owner＋Security＋MSDSS Contract Owner | **Owner 採納已決（D-68）；原生修正、Security 相容審查與完整驗收仍 OPEN／NOT_RUN** |
+| BD-12 | Mirage Owner 是否正式採納 Mirage Protocol Freeze v1 以及對應原生 `start_send()` 相容修正／回歸；現行差異不能只靠改 ADR 消除 | Mirage Owner＋Security＋Mirage Contract Owner | **Owner 採納已決（D-68）；原生修正、Security 相容審查與完整驗收仍 OPEN／NOT_RUN** |
 
 **關閉條件**：上述政策決策經審查、部署／密鑰邊界經驗證、負面與正向真實 PG 測試及恢復證據完整、Owner/Security/Release 核准；之後才能考慮將 `MIR-SEC-WORLD-001` 由 OPEN 轉為已修復。PR 合併、CI 綠燈或沒有外部攻擊回報**均不足以關閉**。
 
-**維持**：`Architecture: Proposed | MSDSS Freeze v1 Protocol baseline: ACCEPTED in MSDSS | Mirage Owner adoption: ACCEPTED (D-68, 2026-11-21) | Mirage native conformance: NOT_RUN | MIR-SEC-WORLD-001: OPEN | World DB authority remediation: NOT_IMPLEMENTED | New security acceptance: NOT_RUN | MSDSS P2: NO-GO | Production DECEIVE: OFF (policy requirement; enforcement evidence pending)`。
+**維持** Architecture Proposed、Mirage Owner adoption ACCEPTED（D-68）、Mirage native conformance NOT_RUN、MIR-SEC-WORLD-001 OPEN、Mirage release NO-GO。以各 Gate 的固定版本證據更新個別狀態，正式 Trusted Send 保持 OFF。
 
 ## 11. 文件及版本追溯
 
@@ -367,19 +368,18 @@ start_send_deadline = min(
 - [威脅能力與覆蓋矩陣](../security/world-db/threat-capability-matrix.md)
 - [測試／驗收計畫](../security/world-db/verification-plan.md)
 - [Mirage World Runtime 現有行為](../world-runtime.md)；[Trusted Session](../trusted-session.md)；[Key Revocation](../key-revocation.md)；[World Operation Result](../commit-results.md)
-- [MSDSS P2 權限審查證據：PR #23](https://github.com/IAN40070510/MSDSS/pull/23)（跨服務驗收；不代表 Mirage 已修復）
 
 ### 版本歷史
 
-**版本欄位與 Git 證據分開**：ADR v0.2 是文件契約版本；分支名 `v0.1` 是歷史名稱而非版本權威；`main` Source SHA 與 MSDSS Freeze SHA 是兩份不同基準；**當前**文件 Commit 必須以 Git/PR Metadata 擷取，並連同 `python tools/check_documentation.py` 結果、測試 ID 清單及變更檔案列表寫入提交／PR 驗證紀錄，不能在同一追蹤檔中嵌入自己的 SHA。安全修補 `NOT_IMPLEMENTED` 和新驗收 `NOT_RUN` 保持獨立。
+**版本證據**。契約版本、原生程式 SHA、Owner 採納及 native conformance 分別記錄。當前 SHA 由 Git／PR Metadata 取得，新增安全驗收維持原有 NOT_RUN 狀態，歷史證據不能直接升格為新版本通過。
 
 | 版本 | 日期 | 內容 |
 | --- | --- | --- |
 | v0.1 | 2026-11-21 | 首次將前幾輪審查整理成可審查 Architecture Draft；所有 proposed 控制、未決政策與未執行測試均明確標示 |
 | v0.2 | 2026-11-21 | 收斂 Trusted Request 語意 A、Verifier Context／單一連線協調、Candidate 驗證與 Promotion、Rollback／Unknown COMMIT、角色矩陣與正式發送停用控制；**仍為 Proposed** |
 | v0.2 審查增補 | 2026-11-21 | VerifiedContext 程序／DB 分界、Role SET membership、受限 Promotion 證據與政策撤銷、完整 Scope FK／原始 Payload 保留、全域鎖 DAG、Ingress rollback／已消費／未知 Commit 重試分類；無新實作或測試結果 |
-| **v0.2 Contract Freeze candidate** | 2026-11-21 | 與 MSDSS Freeze v1 對齊、Operation/Snapshot Write-Once、時間、兩種 Purge、完整鎖圖、外部效果、Mixed Runtime；**僅文件，全部新驗收 NOT_RUN** |
-| v0.2 收斂補遺 | 2026-11-21 | 核對 Mirage upstream 與 MSDSS Freeze 差異、完整 Candidate Version Identity／不可重用邏輯鍵、Restore 後 Tombstone 不復活、明確 Rollback＋零外部效果重試前提、Deadline COMMIT 時點與 Git 自引用追溯限制；**仍未實作或驗收** |
+| **v0.2 Contract Freeze candidate** | 2026-11-21 | 與 Mirage Protocol Freeze v1 對齊、Operation/Snapshot Write-Once、時間、兩種 Purge、完整鎖圖、外部效果、Mixed Runtime；**僅文件，全部新驗收 NOT_RUN** |
+| v0.2 收斂補遺 | 2026-11-21 | 核對 Mirage upstream 與 原生目標協定 差異、完整 Candidate Version Identity／不可重用邏輯鍵、Restore 後 Tombstone 不復活、明確 Rollback＋零外部效果重試前提、Deadline COMMIT 時點與 Git 自引用追溯限制；**仍未實作或驗收** |
 | v0.2 審查補錄 | 2026-11-21 | 明列 Mirage Freeze v1 採納狀態、外部防倒退錨點必要性、BD-11 未定前保守停用、Purge Fence 不作任意二次授權、文件靜態檢查與真實安全驗收分流、Recovery A～F 獨立驗收；**仍為 Proposed／NOT_RUN** |
-| v0.2 三軸狀態與恢復錨點補錄 | 2026-11-21 | 分離 MSDSS baseline／Mirage Owner 採納／Mirage native conform；Anchor 增不可重播外部 head＋digest 覆蓋規格；拆 Candidate retention／Authorized Snapshot eligibility／Admission state；加入 3 項測試與 NOT_RUN→BLOCKED→PASS/FAIL/STALE 的證據閘門；**未實作、未安全驗收** |
+| v0.2 三軸狀態與恢復錨點補錄 | 2026-11-21 | 分離 契約版本基準／Mirage Owner 採納／Mirage native conform；Anchor 增不可重播外部 head＋digest 覆蓋規格；拆 Candidate retention／Authorized Snapshot eligibility／Admission state；加入 3 項測試與 NOT_RUN→BLOCKED→PASS/FAIL/STALE 的證據閘門；**未實作、未安全驗收** |
 | v0.2 儲存物件及故障次序補錄 | 2026-11-21 | Snapshot／Candidate 物件與 Pin 分離；雙 Purge Fence；DB-first／Anchor-first 發布不一致 Quarantine；Fence 後 GC 冪等重試；實測證據狀態機；新增 3 案，**全部 NOT_RUN** |

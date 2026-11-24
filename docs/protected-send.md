@@ -2,15 +2,6 @@
 
 ## 用途與安全邊界
 
-`src/deception/world/protected_send.py` 建立獨立 Sender 才可使用的原子
-`StartSendTx`。`PostgresProtectedAuthorizer` 必須事先在同一 PostgreSQL 交易
-完成 `SEND_AUTHORIZED` 與 `protected_authorized_http_snapshots` 不可變 HTTP
-Envelope Pin。後續 Sender 使用**另一個實體資料庫 Login**，只檢查原 Pin 的
-Receipt、完整 scope／candidate、Owner、Request Fingerprint、實際 Envelope
-bytes、DB Deadline 與一次性狀態。依 MSDSS Freeze v1，不重查事後發生的
-Policy／Key／Emergency 撤銷；它們的最終授權判定點是較早的
-`SEND_AUTHORIZED COMMIT`。
-
 `migrations/025_protected_send_leases.sql` 加入永久一對一 Lease 表與不可變
 觸發器。成功的 `start_send()` 在同一資料庫交易把 Admission 從
 `SEND_AUTHORIZED` 改為 `SEND_STARTED`，並寫入唯一 `lease_id`、Scope

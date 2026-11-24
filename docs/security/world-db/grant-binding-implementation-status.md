@@ -2,7 +2,7 @@
 
 **修補分支**：前置 `fix/mir-sec-world-001-protected-grant`；續作 `fix/mir-sec-world-001-resume-20261122`（皆與 `main` 隔離）。
 
-**2026-11-22 狀態**：`IMPLEMENTATION IN PROGRESS / NOT ACCEPTED`。這份文件保留本輪實作選擇及阻礙，**不是 G3 PASS**。`MIR-SEC-WORLD-001=OPEN`、`MSDSS P2=NO-GO`、正式 Trusted Send／Production DECEIVE **OFF**；原有 `from_environment()` 的 Release Fuse 不移除。
+**2026-11-22 狀態**：`IMPLEMENTATION IN PROGRESS / NOT ACCEPTED`。這份文件保留本輪實作選擇及阻礙，**不是 G3 PASS**。`MIR-SEC-WORLD-001=OPEN`、`Mirage release=NO-GO`、正式 Trusted Send／Production DECEIVE **OFF**；原有 `from_environment()` 的 Release Fuse 不移除。
 
 ## 2026-11-22 G3b HTTP 邊界最新補充（下方舊紀錄按當時 SHA 保留）
 
@@ -35,7 +35,7 @@ G3b 仍 `OPEN`：正式 HTTP Runtime／Ingress Gateway 實體路由、獨立
 Verifier/Executor SCRAM 身分與 TLS 根信任隔離、完整 Inventory／Cart／Order／
 Medusa 成功與錯誤回應相容、Validator／Sender 鏈與未知 COMMIT 對帳均待驗收。
 G4 Sender mTLS、G5 獨立 Restore Fence、G6 故障注入與正式簽核均未完成。
-`MIR-SEC-WORLD-001=OPEN`、`MSDSS P2=NO-GO`，Trusted Send **OFF**。
+`MIR-SEC-WORLD-001=OPEN`、`Mirage release=NO-GO`，Trusted Send **OFF**。
 
 ## 本輪已寫入獨立分支的變更（部分獨立 PostgreSQL 驗證已通過）
 

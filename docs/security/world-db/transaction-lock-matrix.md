@@ -1,5 +1,7 @@
 # MIR-SEC-WORLD-001 — 交易、鎖與錯誤契約
 
+> 本文件以 Mirage 原生授權契約為維護範圍。歷史跨專案整合證據已移交保存，原生安全要求與驗收狀態維持原紀錄。
+
 **v0.2／Proposed／OPEN**。目的：避免把「單一安全狀態轉移交易」誤寫成「整個請求單一交易」，以及防止為了新增 Epoch／Key Freshness 而引入死鎖。本矩陣的**現有路徑**來自 Mirage `main` `88dc2008fd35a2d3873949a769653dc9f18e8980`；**目標交易**仍待實作及測試。
 
 ## 1. 現有鎖證據與循環風險
@@ -9,7 +11,7 @@
 | `PostgresSessionWorlds._resolve_in_transaction` | `session_heads FOR UPDATE` → 舊 `generation_controls UPDATE` → Session Binding／World Snapshot | Epoch cutover 會封存舊世代；有時新 Generation 初始化 |
 | `PostgresSessionWorlds.admit_read` | `session_heads FOR SHARE` → `session_world_bindings FOR UPDATE` → `generation_controls FOR SHARE` → snapshot share | 檢查 Head／Generation／Snapshot 與 watermark |
 | `PostgresAdmissionControl.grant` | `generation_controls FOR UPDATE` → Projection Registry 受保護操作 → 新 Admission INSERT | 已有單交易 Grant，但依賴 Runtime 提供的 observation，沒有擬議可信 Receipt+Binding |
-| `claim`／`authorize_send`／`start_send`（**區分上游舊版與 MSDSS Freeze v1**） | Mirage 上游 `main` 的原生實作仍須逐項核實；MSDSS Freeze v1 的 Authorize：Session Head FOR SHARE → Binding → Admission FOR UPDATE → Generation FOR UPDATE → Profile；StartSend：Admission FOR UPDATE，**不取 Head/Revocation 鎖** | 舊上游 Source 不能假裝已支援新 Freeze；新 v0.2 修補不得讓 StartSend 重新授權 |
+| `claim`／`authorize_send`／`start_send`（**區分上游舊版與 Mirage Protocol Freeze v1**） | Mirage 上游 `main` 的原生實作仍須逐項核實；Mirage Protocol Freeze v1 的 Authorize：Session Head FOR SHARE → Binding → Admission FOR UPDATE → Generation FOR UPDATE → Profile；StartSend：Admission FOR UPDATE，**不取 Head/Revocation 鎖** | 舊上游 Source 不能假裝已支援新 Freeze；新 v0.2 修補不得讓 StartSend 重新授權 |
 | `KeyRevocationRegistry.guard/revoke` | Key namespace 的 transaction advisory lock → Tombstone read/write | 新 Ingress／Authorize 需納入 Key guard；**StartSend 不重新取 Key/Policy Revocation 鎖** |
 | Profile Revocation | Profile namespace 的 transaction advisory lock、受保護狀態讀寫 | 需與 Admission／Generation／Session 交互動態查核，沿用現有鍵演算法 |
 | `TrustedSessionVerifier.verify`／`PostgresReplayStore.consume`／`KeyRevocationRegistry.guard` | Mirage 固定原生基準：Verifier 呼叫 Replay consume；Replay 與 Key Guard **各自開 DB connection**；獨立修補分支改為 PostgreSQL 專用 `consume_guarded_replay`，Key Guard＋Replay INSERT 同一 connection/transaction | 局部收斂不包含 Receipt writer；**尚不滿足**「Key Guard＋Replay＋Receipt 同一 physical connection／transaction」；外層單加 BEGIN 無效 |

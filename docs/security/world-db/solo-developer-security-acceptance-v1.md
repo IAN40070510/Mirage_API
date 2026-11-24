@@ -6,7 +6,7 @@ G3b～G6 acceptance governance. Owner: GitHub `IAN40070510`.
 本規範取代前述草稿中「Owner／DBA／Security／Release Approver 必須由四方
 個別人工簽核」的**人員配置要求**。這是獨立開發專案的責任分工調整，
 **不是安全測試豁免，也不是正式發送／部署核准**。若外部契約、法規或
-MSDSS P2 自己的驗收另有必要簽核，仍須各自遵守，不能由本規範代替。
+Mirage release 自己的驗收另有必要簽核，仍須各自遵守，不能由本規範代替。
 
 ## 角色與核准權
 
@@ -60,7 +60,7 @@ DB Role、輸入／預期、實際退出狀態、SQLSTATE／故障日誌、證�
 
 - **移除人力阻塞**：不再為四位不同人工審核者的 GitHub 帳號等待。
 - **不更動技術 Gate**：G3b～G6 仍 `OPEN`；`MIR-SEC-WORLD-001=OPEN`、
-  `MSDSS P2=NO-GO`、正式 Trusted Send `OFF`。
+  `Mirage release=NO-GO`、正式 Trusted Send `OFF`。
 - **不冒充完成驗收**：使用者於 2026-11-24 核准此**流程制度**，
   尚未核准任何最終版本／Release，亦沒有外部獨立審查完成紀錄。
 

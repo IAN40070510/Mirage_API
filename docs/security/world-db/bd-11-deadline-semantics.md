@@ -1,8 +1,10 @@
 # BD-11 — Deadline decision (owner adopted, 2026-11-21)
 
+> 本文件以 Mirage 原生授權契約為維護範圍。歷史跨專案整合證據已移交保存，原生安全要求與驗收狀態維持原紀錄。
+
 **Decision: Option A — authoritative deadline check time controls eligibility; SEND_AUTHORIZED COMMIT controls authorization effect.**
 
-This decision belongs to MSDSS Protocol Freeze v1 and does not authorize enabling trusted send.
+This decision belongs to Mirage Protocol Freeze v1 and does not authorize enabling trusted send.
 
 ## Normative behavior
 
@@ -21,4 +23,4 @@ This decision belongs to MSDSS Protocol Freeze v1 and does not authorize enablin
 - Successful COMMIT: `12:00:01` (authorization takes effect)
 - `StartSend` at `12:00:02`: independently rejected if its execution deadline has elapsed.
 
-**MIR-SEC-WORLD-001 OPEN · G3/G6 NOT RUN · MSDSS P2 NO-GO · Production trusted send OFF.**
+**MIR-SEC-WORLD-001 OPEN · G3/G6 NOT RUN · Mirage release NO-GO · Production trusted send OFF.**

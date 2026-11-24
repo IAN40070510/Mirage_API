@@ -1,5 +1,7 @@
 # MIR-SEC-WORLD-001 — 真實 PostgreSQL 驗收與安全負面測試計畫
 
+> 本文件以 Mirage 原生授權契約為維護範圍。歷史跨專案整合證據已移交保存，原生安全要求與驗收狀態維持原紀錄。
+
 **v0.2 — Test Plan Only；全部新案例狀態 `NOT_RUN`，不能因本文件被提交而改為 PASS。**
 
 ## 1. 測試環境、身份與證據
@@ -68,9 +70,9 @@
 | `WORLD-SNAPSHOT-ACL-01` | 不同 Role 讀 Snapshot、備份與 Debug Log 中敏感 bytes、保留期／密鑰刪除／取回 Hash | 未授權 Role 無全文權限，Audit 無敏感 bytes，有限 retention/backup/secure purge 及真 bytes hash 驗證必須留下證據 | NOT_RUN |
 | `WORLD-SNAPSHOT-SEPARATION-01` | **Given**：Candidate Payload Object 與已 `SEND_AUTHORIZED` 的 Snapshot Object 有獨立 immutable id/version，測試獨立實體儲存與去重共用 Blob＋受保護 Pin 兩種配置。**Action**：Candidate GC／外部 Object Delete 與 StartSend 併發；攻擊者竄改快照 Metadata Hash 或實際 bytes。 | **Expected**：Candidate 刪除後仍能按合法 owner/deadline/single-use 從原 Snapshot 實際 bytes 成功 StartSend；共享 Blob 不能在 Snapshot Pin 有效時遭刪；Hash 不符必拒絕，SEND_AUTHORIZED 不指回原 Candidate Payload；不可只靠不同邏輯 ID 判 PASS。 | NOT_RUN |
 | `WORLD-POLICY-02` | Emergency 在 SEND_AUTHORIZED 前／後提交，另 NO_NEW_GRANTS 與既有 Grant、REVOKED 後再 ACTIVE | 前者拒絕 Authorize；後者已授權保留、Start 不再重查；NO_NEW_GRANTS 禁新 Grant，REVOKED 不可直接復活 | NOT_RUN |
-| `WORLD-PROTOCOL-01` | **Given**：固定 Mirage upstream `88dc2008…` `start_send()` 含 Generation/Profile Emergency 二次查核，MSDSS `5a1ee26…` Freeze v1 以 SEND_AUTHORIZED COMMIT 為最終授權點。**Action**：比較行為，再以正式修補後 Mirage 原生交易、並行撤銷與 owner/deadline/single-use/Snapshot 測試實測 | **Expected**：舊 upstream 明確標為已知差異、非 compliant；**新版未實作前 NOT_RUN，不能宣稱已 PASS**。正式採納版不二次 Policy/Emergency 授權，仍攔截 owner、期限、single-use、Snapshot 不符 | NOT_RUN |
+| `WORLD-PROTOCOL-01` | **Given**：固定 Mirage upstream `88dc2008…` `start_send()` 含 Generation/Profile Emergency 二次查核，原生契約 `5a1ee26…` Freeze v1 以 SEND_AUTHORIZED COMMIT 為最終授權點。**Action**：比較行為，再以正式修補後 Mirage 原生交易、並行撤銷與 owner/deadline/single-use/Snapshot 測試實測 | **Expected**：舊 upstream 明確標為已知差異、非 compliant；**新版未實作前 NOT_RUN，不能宣稱已 PASS**。正式採納版不二次 Policy/Emergency 授權，仍攔截 owner、期限、single-use、Snapshot 不符 | NOT_RUN |
 | `WORLD-PROTOCOL-02` | **Given**：SEND_AUTHORIZED 已提交且 Snapshot 完整，後續 Policy/Emergency 改變。**Action**：Runtime 或控制面嘗試自填／任意覆寫 Purge/Execution Fence；另觸發真實受保護 Snapshot purge/corruption | **Expected**：前者不得藉偽造 Fence 否決已提交授權；後者按執行不可用性 Fail-Closed，保留授權歷史與不可重送證據；兩者皆不得引入第二個政策授權點 | NOT_RUN |
-| `WORLD-PROTOCOL-MATRIX-01` | **Given**：MSDSS Freeze v1 固定 `5a1ee26...`，Mirage source 固定 `88dc2008...`，Owner 已於 2026-11-21 明確採納（D-68）；只有 `start_send()` 局部差異已被觀察。**Action**：獨立取出 MSDSS Protocol baseline 狀態、Mirage Owner 決策紀錄、Mirage native 端到端合約測試（SEND_AUTHORIZED COMMIT、授權前後 Policy/Emergency、owner、deadline、single-use、Snapshot/ASGI、未知 COMMIT、傳輸分類） | **Expected**：三欄只能分別填 `ACCEPTED`（MSDSS baseline）／`ACCEPTED`（Mirage Owner）／`NOT_RUN`（Mirage native），不可互代；局部差異須列修正項但不能冒稱完整 conformance PASS/FAIL 已實測 | NOT_RUN |
+| `WORLD-PROTOCOL-MATRIX-01` | **Given** 本 ADR 的 Protocol Freeze v1、Owner 採納與固定 Mirage source。**Action** 執行 SEND_AUTHORIZED COMMIT、授權前後 Policy／Emergency、owner、deadline、single-use、Snapshot／ASGI、未知 COMMIT 與傳輸分類的原生符合性測試 | **Expected** Protocol baseline、Mirage Owner adoption 與 Mirage native conformance 各自記錄，文件採納不可代替原生實測，局部通過不升格為完整驗收 | NOT_RUN |
 
 ## 3. Freshness、鎖、時間與輪替
 
@@ -137,18 +139,17 @@
 
 | 類別 | 現有證據的正確說法 |
 | --- | --- |
-| MSDSS [Draft PR #23](https://github.com/IAN40070510/MSDSS/pull/23) | 先前報告的 13/13 PostgreSQL 與 3 種**成功重現權限缺口**；不是 ACL 修復 PASS |
 | Mirage `main` 既有測試 | 可當作功能／契約 regression baseline；未曾以新角色證明本 ADR 的安全強制 |
 | 此 ADR v0.2 的新 `WORLD-*` | **全部 NOT_RUN**；只有設計好的 scenario／expected result，無執行結果 |
 | 未來 Draft PR 與 CI 綠燈 | 需分別保留 DB 角色測試、並行、Unknown Commit、Restore、Transport/ASGI snapshot、版本相容和 Owner Signoff |
 
 ## 6. 關閉與部署限制
 
-測試報告、ACL Dump、容器秘密掛載、真實 Postgres 版本、Key Trust Registry、Restore 手冊、完整 G3b～G6 技術驗收和 Owner 對固定 SHA／環境的最終核准**缺一不可**。人工責任依已採納的 [Solo Developer Security Acceptance v1](solo-developer-security-acceptance-v1.md) 由 Owner 承擔；外部獨立人工審查建議但非本個人專案的一般強制門檻，未執行不得稱為已受第三方審核。未完成時：`MIR-SEC-WORLD-001: OPEN`、`MSDSS P2: NO-GO`、`production trusted-send mode: DISABLED`（**政策要求；真實強制控制尚待查核**）。沒有 HTTP 攻擊回報或 PR 合併不能取代證據。
+測試報告、ACL Dump、容器秘密掛載、真實 Postgres 版本、Key Trust Registry、Restore 手冊、完整 G3b～G6 技術驗收和 Owner 對固定 SHA／環境的最終核准**缺一不可**。人工責任依已採納的 [Solo Developer Security Acceptance v1](solo-developer-security-acceptance-v1.md) 由 Owner 承擔；外部獨立人工審查建議但非本個人專案的一般強制門檻，未執行不得稱為已受第三方審核。未完成時：`MIR-SEC-WORLD-001: OPEN`、`Mirage release: NO-GO`、`production trusted-send mode: DISABLED`（**政策要求；真實強制控制尚待查核**）。沒有 HTTP 攻擊回報或 PR 合併不能取代證據。
 
 ## 7. v0.2 契約完成／狀態交付規則
 
-- 本計畫所有新增或改寫之 `WORLD-*` case 均為 **NOT_RUN**；Mirage API `main` `88dc2008fd35a2d3873949a769653dc9f18e8980` 的 Native baseline 與 MSDSS `main` `5a1ee26dcf79f04cf29345a0403e3f3f8082358b` 的 Freeze v1 **不可混同**，也不能推論新保護已採納。
+- 本計畫新增安全案例仍為 NOT_RUN。契約版本、程式 SHA、Owner 採納與原生符合性分別驗證，固定 main 舊版不構成新保護的通過證據。
 - 真 PG 測試需使用獨立角色與多 Backend；驗證 `FOR UPDATE/SHARE/KEY SHARE`、FK implicit locks、lock_timeout、40P01、40001、真正的 role membership／SET ROLE、DB-derived decision_time、外部 Snapshot/Object Storage version、quarantine/mixed binary、各層 ACK lost。
 - `WORLD_COMMITTED_ADMISSION_UNAVAILABLE` 仍只是 reconciliation classification，**不是 Admission／World 狀態**。所有測試報告必須固定 commit SHA／schema／DB 角色／容器與 source hash，且分開記錄實際 PASS／FAIL／SKIP／NOT_RUN。
-- Mirage Owner 尚未對固定版本作最終核准，或真實 ACL／Policy race／Payload Purge／Restore／Mixed Runtime 任一強制技術子項尚未通過時：`Architecture: Proposed | MIR-SEC-WORLD-001: OPEN | MSDSS P2: NO-GO | Production DECEIVE: OFF`。不得以 D-73 的流程採納補簽任何測試。
+- Mirage Owner 尚未對固定版本作最終核准，或真實 ACL／Policy race／Payload Purge／Restore／Mixed Runtime 任一強制技術子項尚未通過時：`Architecture: Proposed | MIR-SEC-WORLD-001: OPEN | Mirage release: NO-GO | Production DECEIVE: OFF`。不得以 D-73 的流程採納補簽任何測試。
