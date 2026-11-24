@@ -52,3 +52,17 @@
 - 本次 Oracle 實驗只能支撐自己測到的 G3b/G4 子項；不能自動變更
   [Solo Owner 驗收文件](solo-developer-security-acceptance-v1.md)中的 G3b～G6
   `OPEN`、發布 `NO-GO` 或正式 Trusted Send `OFF`。
+
+## 2026-11-25 初次隔離實測／修補紀錄
+
+- Oracle 固定服務映像對應整合 SHA `ea6e6d0e0529feb5f55e6bdb599d44d77b8fa38b`；
+  Gateway 工作 `job_01M87QNTQK00QTJMRSNPFYSP66` 通過，20/20 路由及重播／
+  匿名／跨網路拒絕；獨立 Audit 工作 `job_01M87QSTAB001130H3C3FMA586`
+  通過：四服務、三網路、專屬 Secret、物理 ACL、Trusted Send OFF。
+- 首次停止**本次一次性 DB**，工作 `job_01M87QX7BJ00QVEG9QBVFWHH7B`
+  發現已簽章讀取回傳 `500` 而非預期 `503`，因此故障驗收 **FAIL**。
+  DB 已由工作 `job_01M87QXQS300ZTF1BQMW4F3XND` 啟動；
+  Replay／Receipt 數量在故障前後維持 `49 → 49`。
+- 根因為 `create_direct_verifier_app.verify_original` 未將 IngressTx 的
+  `psycopg.Error` 轉為固定拒絕狀態。修補後應以新映像重跑，同時驗證
+  `503`、回復 `200`、重放 `403` 與 Receipt 不重複，未通過不可簽收。

@@ -1463,6 +1463,7 @@ def create_direct_verifier_app(
         from deception.api.ingress import normalize_request, resolve_request_id
         from deception.security.ingress_receipt import PostgresIngressReceiptWriter
         from deception.security.operation_binding import derive_verified_operation
+        import psycopg
 
         if request.scope.get("scheme") != "https":
             raise HTTPException(status_code=503, detail="direct_verifier_tls_required")
@@ -1489,6 +1490,10 @@ def create_direct_verifier_app(
             )
         except ValueError as exc:
             raise HTTPException(status_code=403, detail="direct_verifier_request_denied") from exc
+        except psycopg.Error as exc:
+            # 無法判定 Replay／Receipt 的 Commit 結果，禁止回傳 500 或盲目重試 JTI。
+            raise HTTPException(status_code=503,
+                                detail="direct_verifier_ingress_storage_unverifiable") from exc
         # 已建立 Receipt 後的 RPC 結果不明，不能重新消費 JTI 或盲目重執行。
         outcome = None
         selected_client = (fixed_clients.get(operation.platform) if fixed_clients else executor_client)

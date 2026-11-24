@@ -184,6 +184,39 @@ def test_verified_http_operation_is_atomic_with_ingress_receipt(isolated_test_ds
         assert connection.execute("SELECT count(*) FROM protected_http_operation_bindings").fetchone()[0] == 1
 
 
+def test_direct_https_verifier_db_outage_returns_503_without_data(monkeypatch):
+    """獨立 Verifier 的真簽章遇到 DB 連線故障要回 503，不可洩漏 SQL 或誤報成功。"""
+    import psycopg
+    from fastapi.testclient import TestClient
+
+    private_key = Ed25519PrivateKey.generate()
+    unused_dsn = "postgresql://isolated.invalid/mirage_ci"
+    app = create_direct_verifier_app(
+        verifier=verifier(unused_dsn, {"old": private_key}),
+        postgres_dsn=unused_dsn, environment_id="env", deployment_id="deploy",
+        expected_issuer="gateway", expected_audience="mirage",
+    )
+
+    def database_down(*_args, **_kwargs):
+        """模擬實體 PG 尚未決定 Replay／Receipt 是否提交的連線中斷。"""
+        raise psycopg.OperationalError("isolated_oracle_db_unreachable_internal")
+
+    monkeypatch.setattr(psycopg, "connect", database_down)
+    with TestClient(app, base_url="https://mirage.test") as client:
+        request = client.build_request(
+            "GET", "/synthetic/inventory/sku-1",
+            headers={"x-request-id": "oracle-fault-contract"},
+        )
+        request.headers["x-trusted-session"] = signed(
+            private_key, jti=uuid4().hex, access_mode="inventory",
+            fingerprint=fingerprint_httpx_request(request, "oracle-fault-contract"),
+        )
+        response = client.send(request)
+    assert response.status_code == 503
+    assert response.json() == {"detail": "direct_verifier_ingress_storage_unverifiable"}
+    assert b"isolated_oracle_db_unreachable_internal" not in response.content
+
+
 def test_direct_https_verifier_captures_actual_request_and_mints_atomic_proof(isolated_test_dsn):
     """真 PostgreSQL：ASGI 原始 HTTP 進入獨立 Verifier 才能原子寫 Replay／Proof。"""
     import psycopg
