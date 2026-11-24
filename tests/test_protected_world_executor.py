@@ -542,7 +542,7 @@ def test_inventory_get_receipt_admits_real_protected_read_without_native_http(
 
 
 def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolated_test_dsn, request, tmp_path):
-    """真 PG：只有驗證原始 Medusa headers/Body 並查過世界的 400/404 能 Promote。"""
+    """真 PG：核對 M-03 原生 400/404 來源及一次已知 Variant 受保護 Commit。"""
     import base64
     import psycopg
     from psycopg import sql
@@ -722,6 +722,48 @@ def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolat
         # GET ReadAdmission 不可憑同 Receipt 盲目重做：第一次來源不可變，
         # 第二次必須固定 503，而不是多簽第二筆來源。
         assert client.post("/internal/v1/execute", json=get_wire).status_code == 503
+        # M-03 已知 Variant：同張真 HTTP Proof／受保護派生 Cart 只可提交一次。
+        native_add, add_receipt, add_proof, add_wire = prepare_request(
+            b'{"variant_id":"known","quantity":2}',
+        )
+        assert add_proof.operation_id == "PostCartsIdLineItems"
+        assert client.post("/internal/v1/execute", json={
+            **add_wire, "raw_body_b64": base64.b64encode(
+                b'{"variant_id":"known","quantity":3}',
+            ).decode(),
+        }).status_code == 503
+        valid_add = client.post("/internal/v1/execute", json=add_wire)
+        if valid_add.status_code != 200:
+            executor.execute_verified_http(
+                receipt_id=add_receipt, raw_path=native_add.raw_path,
+                raw_body=native_add.body, original_http=native_add,
+            )
+        assert valid_add.status_code == 200
+        add_metadata = valid_add.json()
+        assert (add_metadata["kind"], add_metadata["operation"],
+                add_metadata["status"], add_metadata["state_version"]) == (
+            "medusa_mutation", "PostCartsIdLineItems", "committed", 2,
+        )
+        assert "body" not in add_metadata and "send_authorized" not in add_metadata
+        # 重複 ReadAdmission 的相同 Receipt 直接封閉；不可第二次更新數量。
+        assert client.post("/internal/v1/execute", json=add_wire).status_code == 503
+        with psycopg.connect(dsn) as connection:
+            assert connection.execute(
+                "SELECT operation,status FROM world_operations WHERE commit_attempt_id=%s",
+                (add_metadata["commit_attempt_id"],),
+            ).fetchone() == ("cart.add", "committed")
+            assert connection.execute(
+                "SELECT count(*) FROM protected_world_commit_sources WHERE receipt_id=%s",
+                (add_receipt,),
+            ).fetchone()[0] == 1
+            assert connection.execute(
+                "SELECT state->'cart'->'items' FROM world_snapshots "
+                "WHERE world_generation_id=%s", (snapshot.scope.world_generation_id,),
+            ).fetchone()[0] != {}
+            assert connection.execute(
+                "SELECT version FROM world_snapshots WHERE world_generation_id=%s",
+                (snapshot.scope.world_generation_id,),
+            ).fetchone()[0] == 2
         _, denied_receipt, _, denied_wire = prepare_request(
             b"", route="/store/carts/" + binding.resource_id,
             method="GET", key="incorrect_public_key",
@@ -811,15 +853,10 @@ def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolat
         assert connection.execute("SELECT status_code,reason_code,read_admission_id IS NOT NULL "
                                   "FROM protected_medusa_rejection_sources ORDER BY status_code").fetchall() == [
             (400, "native_bad_item_body", True), (404, "native_variant_absent", True)]
-        assert connection.execute("SELECT count(*) FROM protected_world_read_sources ").fetchone()[0] == 3
-        assert connection.execute("SELECT count(*) FROM world_events").fetchone()[0] == 0
-    # M-07 必須讀到真 Cart→Order 事件後的同一 World Generation；不可拿假的
-    # order_ ID 或 Creator Cart Capability 代替。先讓 M-03 舊 Read Source 完成投影。
-    added = store.mutate_cart(binding, action="add", command={
-        "variant_id": "known", "quantity": 1,
-    }, expected_version=1, idempotency_key="native-test-add",
-        commit_attempt_id=uuid4(), now=now)
-    assert added.status == "committed"
+        assert connection.execute("SELECT count(*) FROM protected_world_read_sources ").fetchone()[0] == 4
+        assert connection.execute("SELECT count(*) FROM world_events").fetchone()[0] == 1
+    # M-07 沿用本次受保護 M-03 真加入品項的世界版本 2；
+    # 不可拿假的 order_ ID 或 Creator Cart Capability 代替。
     completed = store.mutate_cart(binding, action="complete", command={},
         expected_version=2, idempotency_key="native-test-complete",
         commit_attempt_id=uuid4(), now=now)

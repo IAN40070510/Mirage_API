@@ -72,7 +72,8 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
         不接受 Caller 自填 Handler、Binding、Scope、期限或世界初始資料。
         在任何 ReadAdmission／World 副作用前驗證固定路由及內容，僅支援已
         保護的 Inventory／合成 Cart 路徑；Medusa 特許受保護的 M-02／M-07
-        GET ReadAdmission 和 M-03 400／404 拒絕來源，不執行原生成功交易。
+        GET ReadAdmission、M-03 400／404 拒絕來源及固定已知 Variant 的
+        M-03 受保護 Cart Commit；仍不產生可發送的原生 HTTP 回應。
         內部回傳不是 Validator 的候選核准或發送授權。
         """
         from deception.domains.ecommerce.carts import SyntheticCarts
@@ -296,8 +297,9 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
     ) -> dict[str, object]:
         """以原始 Fingerprint+固定 Body Model/World 判定 Medusa 400 或 404。
 
-        此隔離增量只涵蓋 Cart line-items 加入：原生 header/body 400 和
-        固定 Cart catalog 缺少 variant 的 404；所有其餘原生操作維持 503。
+        此隔離增量涵蓋 Cart line-items 加入：原生 header/body 400、
+        固定 Cart catalog 缺少 variant 的 404，以及已知 variant 的受保護 Commit。
+        所有其餘原生操作維持 503；成功 Commit 不代表 Client 已獲准接收 200。
         400／404 都須有同一 Receipt 的可信 Read Source；拒絕表
         與既有 Runtime SecurityErrorSource 完全隔離且資料不可更新。
         """
@@ -367,13 +369,59 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
         if reason is None:
             native = NativeItemBody.model_validate_json(raw_body)
             if native.variant_id in read.snapshot.state["catalog"]:
-                raise ProtectedGrantError("verified_medusa_success_not_approved")
+                if any(name.lower() == "idempotency-key" for name, _ in candidate.headers):
+                    raise OperationBindingError("verified_medusa_client_commit_key_denied")
+                return self._commit_verified_medusa_add(
+                    receipt_id=receipt_id, binding=binding, proof=proof,
+                    read=read, native=native,
+                )
             reason = "native_variant_absent"
         return self._record_verified_medusa_rejection(
             receipt_id=receipt_id, binding=binding, fingerprint=proof.request_fingerprint,
             operation_id=proof.operation_id, reason=reason,
             read_admission_id=read.source.read_admission_id,
         )
+
+    def _commit_verified_medusa_add(
+        self, *, receipt_id: UUID, binding: SessionBinding,
+        proof: VerifiedOperationBinding, read: WorldRead, native: object,
+    ) -> dict[str, object]:
+        """M-03 已知 Variant 只依原始 Receipt 與受保護 Snapshot 版本提交一次。
+
+        驗證派生 Cart Lineage，並用同張 Receipt 派生不可由 Client 選擇的
+        Idempotency Key／Attempt；CAS、結果不明或業務拒絕一律不得報成功。
+        這個內部 Metadata 不包含原生 HTTP 回應，也不賦予 Sender 權限。
+        """
+        from deception.security.operation_binding import _receipt_uuid4
+
+        with self._connection() as connection:
+            lineage = connection.execute(
+                """SELECT 1 FROM protected_cart_creations
+                   WHERE environment_id=%s AND deployment_id=%s
+                     AND derived_session_id=%s AND derived_world_generation_id=%s
+                     AND resource_id=%s""",
+                (binding.environment_id, binding.deployment_id, binding.session_id,
+                 read.snapshot.scope.world_generation_id, binding.resource_id),
+            ).fetchone()
+        if lineage is None:
+            raise ProtectedGrantError("verified_medusa_add_derived_lineage_missing")
+        result = self.commit_event(
+            receipt_id=receipt_id, binding=binding,
+            request_fingerprint=proof.request_fingerprint,
+            authorized_scope=read.snapshot.scope, operation="cart.add",
+            command={"resource_id": binding.resource_id,
+                     "variant_id": native.variant_id, "quantity": native.quantity},
+            expected_version=read.snapshot.version,
+            idempotency_key="medusa-m03-" + receipt_id.hex,
+            commit_attempt_id=_receipt_uuid4(receipt_id, b"medusa-m03-add"),
+        )
+        if result.status not in {"committed", "already_committed"}:
+            raise ProtectedGrantError("verified_medusa_add_commit_not_verified")
+        return {"kind": "medusa_mutation", "operation": proof.operation_id,
+                "commit_attempt_id": str(result.commit_attempt_id),
+                "status": result.status, "state_version": result.committed_state_version,
+                "state_hash": result.committed_state_hash,
+                "result_digest": result.result_digest}
 
     def _record_verified_medusa_rejection(
         self, *, receipt_id: UUID, binding: SessionBinding, fingerprint: str,

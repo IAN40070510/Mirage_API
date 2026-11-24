@@ -54,6 +54,17 @@ Session 逐欄比對，保留已驗證的 `native_projection.status_code`、
 由 Runtime 自選 Body、Status 或 Template。不得把 `body_b64` 直接交給 Gateway
 發送，須先建立合法 Promotion／Authorized Snapshot／獨立 Sender Lease 與 G5 Fence。
 
+M-03 已知 Variant 的受保護 Executor Commit 已接線供隔離驗證：原始
+`POST /store/carts/{id}/line-items` 必須有與 JWS Fingerprint 完全一致的
+Publishable Key、JSON Body、Derived Cart Capability 和 Creator→Derived
+不可變 Lineage；`variant_id` 與 `quantity` 僅從 NativeItemBody 取值，
+預期世界版本只從受保護 ReadAdmission 快照取得，冪等鍵與 Attempt 由 Receipt
+固定派生。一次 `cart.add` Commit 的內部結果只包含版本／Hash／Digest，不
+包含可發送 Body；重送相同 Receipt 因唯一 Read Source 固定拒絕，不能重複
+增加數量。此路徑**尚未完成獨立 Medusa 200 Validator、Candidate Promotion
+或 Client HTTP 200**；若 CAS／業務結果不確定，一律 fail closed。這項
+Executor 子切面仍須對照本分支真 PG CI 證據，不能據程式存在就簽 G3b。
+
 I-04 庫存 GET 新增另一個固定 mTLS 路徑
 `POST /internal/v1/project-inventory-snapshot`；Validator 唯讀重建原始
 `sku` 的 `200` JSON；若同一受保護快照**真正不存在此 SKU**，則新增固定
