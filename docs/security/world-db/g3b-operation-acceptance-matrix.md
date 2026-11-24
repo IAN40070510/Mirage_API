@@ -58,6 +58,17 @@ Runtime DML、實際 mTLS、可信 Inventory 一次 Commit、Medusa M-03 的
 四服務 Push 工作流程仍需獨立確認。本 SHA 的外層是內部對帳 200，
 **不是客戶端實收原生 HTTP**。
 
+**2026-11-24 最新分支驗收補記（固定 SHA `88d286fc5012cf169107796723dab20e359cf17a`）**：
+[PostgreSQL 17.6 合約 CI 45291573134](https://github.com/IAN40070510/Mirage_API/actions/runs/45291573134)
+成功，受保護合約 `127 passed`、實體 mTLS `5 passed`；
+[Python CI 45291574008](https://github.com/IAN40070510/Mirage_API/actions/runs/45291574008)
+及[容器 CI 45291575025](https://github.com/IAN40070510/Mirage_API/actions/runs/45291575025)
+均為 `success`。本地同 SHA 聚焦 Operation Binding／Protected Services／mTLS
+`86 passed`，文件檢查成功。I-03 與 C-09「真正不存在的歷史操作」固定 409
+來源及四服務子測試已包含在此 SHA 的隔離 CI，故其**候選子項**從「待 CI」
+更新為「隔離 PASS」。這沒有測得原生 Client 409，亦未證明 20 路由全部成功／
+拒絕相容、正式角色 Secret 隔離、G4 Sender 或 G5 Restore Fence。
+
 | G3b 子門檻 | 獨立實測結果 | 正式簽收 |
 | --- | --- | --- |
 | 真 HTTPS Gateway→Verifier→Executor、互異 Client CA、拒絕重播／竄改 | 隔離 CI PASS | 僅實驗室傳輸子項 PASS |
@@ -76,7 +87,7 @@ Runtime DML、實際 mTLS、可信 Inventory 一次 Commit、Medusa M-03 的
 | --- | --- | --- | --- | --- |
 | I-01 | POST `/synthetic/inventory/reservations` | 隔離 PASS | 受保護 reserve；單一 Receipt Commit；真 Handler `unknown_synthetic_sku` 409 候選四服務 PASS | OPEN：200、CAS conflict／其他 409、原生 HTTP |
 | I-02 | POST `/synthetic/inventory/reservations/{reservation_id}/cancel` | 隔離 PASS | 受保護 cancel；409 候選能力已有固定 Handler，個別情境未真容器逐條實測 | OPEN：200、CAS conflict／其他 409、原生 HTTP |
-| I-03 | GET `/synthetic/operations/{attempt}` | 隔離 PASS | 固定 UUID4／空 Body Proof → ReadAdmission；獨立 Validator 按同 Receipt 核對 WorldOperation Commit Result Digest、真 Commit Receipt、當前 Snapshot／Epoch／Key，重建歷史操作 `200` JSON 候選；固定 SHA `808d07f` 真 PG/mTLS CI PASS | OPEN：未知操作可信 409、客戶端原生 HTTP |
+| I-03 | GET `/synthetic/operations/{attempt}` | 隔離 PASS | 固定 UUID4／空 Body Proof → ReadAdmission；獨立 Validator 核對 WorldOperation、Commit Receipt、Snapshot／Epoch／Key，重建歷史 200 或確定不存在的 409 候選；固定 SHA `88d286f` 真 PG/mTLS CI PASS | OPEN：客戶端原生 200／409、競態與故障路徑 |
 | I-04 | GET `/synthetic/inventory/{sku}` | 隔離 PASS | 固定 SKU／空 Body Proof → Executor ReadAdmission → 獨立 Validator 200 成功／真正缺 SKU 409 候選；固定 SHA `808d07f` 真 PG/mTLS CI PASS | OPEN：URI 編碼、客戶端原生 200／409、G4 Send |
 | C-01 | POST `/synthetic/carts` | 隔離 PASS | 受保護 Creator→衍生 Cart | OPEN：200／409、原始成功封套 |
 | C-02 | GET `/synthetic/carts/{cart_id}` | 隔離 PASS | 受保護 ReadAdmission＋來源 ID；新增 Validator 按同 Receipt 的派生 Cart、目前 Snapshot 重建 200 JSON 候選，待本 SHA 真 PG／四服務 CI | OPEN：409 來源、客戶端原生 HTTP |
@@ -86,7 +97,7 @@ Runtime DML、實際 mTLS、可信 Inventory 一次 Commit、Medusa M-03 的
 | C-06 | POST `/synthetic/carts/{cart_id}/complete` | 隔離 PASS | 受保護 complete；409 候選固定 Handler 存在，個別情境尚待真容器測試 | OPEN：200、其餘 409、原生 HTTP |
 | C-07 | GET `/synthetic/orders/{order_id}` | 隔離 PASS | 新增獨立 Validator 按受保護派生 Order、ReadAdmission 重建 200 JSON 候選，待本 SHA 真 PG CI | OPEN：409 來源、客戶端原生 HTTP |
 | C-08 | POST `/synthetic/orders/{order_id}/cancel` | 隔離 PASS | 受保護 cancel_order；409 候選固定 Handler 存在，個別情境尚待真容器測試 | OPEN：200、其餘 409、原生 HTTP |
-| C-09 | GET `/synthetic/carts/{cart_id}/operations/{attempt}` | 隔離 PASS | **待 PG CI**：唯讀 Validator 核對歷史 committed WorldOperation、Protected Commit Source／Commit Receipt、當前 ReadAdmission 與快照，重建 200 候選 | OPEN：候選待 CI、未知操作 409、客戶端原生 HTTP |
+| C-09 | GET `/synthetic/carts/{cart_id}/operations/{attempt}` | 隔離 PASS | 唯讀 Validator 核對歷史 WorldOperation、Protected Commit Source／Commit Receipt、ReadAdmission 與快照，重建 200 或確定不存在的 409 候選；固定 SHA `88d286f` 真 PG/mTLS CI PASS | OPEN：客戶端原生 200／409、競態與故障路徑 |
 | M-01 | POST `/store/carts` | 隔離 PASS | 尚未執行 Native 建立 | OPEN：200／400／404／409 |
 | M-02 | GET `/store/carts/{id}` | 隔離 PASS | 尚未執行 Native 讀取 | OPEN：200／400／404／409 |
 | M-03 | POST `/store/carts/{id}/line-items` | 隔離 PASS | 特定 400／404 受保護拒絕來源／獨立 Validator mTLS 封套比對 | OPEN：正式 Client HTTP 400／404、200／409、其餘拒絕情形 |
@@ -151,13 +162,13 @@ C-03～C-06／C-08 七條已核准的 Synthetic Mutation 使用。
 失敗結果或 Runtime 自稱成功；目前所有七條仍須個別真 PG
 成功／業務拒絕／故障情境驗收，對外原生 HTTP 與 G4 Sender 保持封閉。
 
-**I-03 未知操作 409 候選（待真 PG CI）**：獨立 Validator 只有在受保護
+**I-03 未知操作 409 候選（固定 SHA `88d286f` 真 PG／mTLS 隔離 PASS）**：獨立 Validator 只有在受保護
 GET Receipt／ReadAdmission 已通過，且指定 UUID4 在同世代
 `world_operations` 確實不存在時，才按固定 Synthetic Inventory
 OpenAPI 回傳 `operation_not_found` 409 候選。已有記錄卻不可信不可
 降級成未知操作；對外仍禁止 Send。
 
-**C-09 未知操作 409 候選（待真 PG CI）**：只有受保護 Cart ReadAdmission
+**C-09 未知操作 409 候選（固定 SHA `88d286f` 真 PG／mTLS 隔離 PASS）**：只有受保護 Cart ReadAdmission
 及相同資源、世代、原始 GET Proof 俱全，且 WorldOperation 依 UUID4
 確實不存在時，獨立 Validator 才能產生固定 `operation_not_found`
 409 候選；已有但不可信的結果仍固定拒絕。須再驗證拒絕競態／客戶端
