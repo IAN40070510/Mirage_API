@@ -549,7 +549,8 @@ def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolat
     from psycopg.conninfo import conninfo_to_dict, make_conninfo
     from fastapi.testclient import TestClient
 
-    from deception.security.protected_rpc import create_fixed_executor_app
+    from deception.security.protected_rpc import (ProtectedRpcConfigurationError,
+                                                  create_fixed_executor_app)
     from deception.security.protected_services import create_native_validator_service
     from deception.world.protected_native_http import PostgresProtectedNativeProjector
 
@@ -818,7 +819,7 @@ def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolat
                 "read_admissions,session_heads,session_world_bindings,"
                 "generation_controls,trusted_key_revocations,world_snapshots,"
                 "world_commit_receipts,protected_world_commit_sources,synthetic_resources,"
-                "protected_cart_creations,guest_cart_creations TO {}"
+                "protected_cart_creations,guest_cart_creations,native_response_contexts TO {}"
             ).format(sql.Identifier(projector_login)))
 
         def cleanup_validator_role():
@@ -840,15 +841,28 @@ def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolat
                 "SELECT has_table_privilege('protected_cart_creations','SELECT'),"
                 "has_table_privilege('protected_cart_creations','INSERT'),"
                 "has_table_privilege('guest_cart_creations','SELECT'),"
-                "has_table_privilege('guest_cart_creations','INSERT')"
-            ).fetchone() == (True, False, True, False)
+                "has_table_privilege('guest_cart_creations','INSERT'),"
+                "has_table_privilege('native_response_contexts','SELECT'),"
+                "has_table_privilege('native_response_contexts','INSERT')"
+            ).fetchone() == (True, False, True, False, True, False)
         validator_dsn_file = tmp_path / "native-validator.dsn"
         validator_dsn_file.write_text(projector_dsn, encoding="utf-8")
-        assert create_native_validator_service({
+        validator_config = {
             "MIRAGE_G3B_VALIDATOR_DSN_FILE": str(validator_dsn_file),
             "MIRAGE_G3B_VALIDATOR_LOGIN": projector_login,
             "MIRAGE_G3B_WORLD_SCHEMA": schema,
-        }).state is not None
+        }
+        # 將唯一新增權限暫時撤除，證明 Preflight 因此拒絕啟動，然後恢復
+        # 此測試角色所需的純 SELECT。不能把角色權限缺失變成寬鬆投影。
+        with psycopg.connect(dsn, autocommit=True) as admin:
+            admin.execute(sql.SQL("REVOKE SELECT ON native_response_contexts FROM {}")
+                          .format(sql.Identifier(projector_login)))
+        with pytest.raises(ProtectedRpcConfigurationError, match="g3b_service_required_acl_missing"):
+            create_native_validator_service(validator_config)
+        with psycopg.connect(dsn, autocommit=True) as admin:
+            admin.execute(sql.SQL("GRANT SELECT ON native_response_contexts TO {}")
+                          .format(sql.Identifier(projector_login)))
+        assert create_native_validator_service(validator_config).state is not None
     projector = PostgresProtectedNativeProjector(
         projector_dsn, expected_login=projector_login, medusa_source=medusa_source,
     )
