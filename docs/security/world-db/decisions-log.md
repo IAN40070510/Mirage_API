@@ -1,6 +1,6 @@
 # MIR-SEC-WORLD-001 — 架構決策歷史與審查修正
 
-**Consolidated v0.2 — 2026-11-21；Architecture Proposed／Weakness OPEN／MSDSS P2 NO-GO。** 本表於同一文件分支依次 Commit，保留 v0.1 歷史。
+**Consolidated v0.2 — 2026-11-21；Architecture Proposed／Weakness OPEN／外部端權限驗收 NO-GO。** 本表於同一文件分支依次 Commit，保留 v0.1 歷史。
 
 本紀錄把先前多輪對話中的**結論、假設、已否決方向、仍待 Owner 核准的決策**整理為可版本控制的狀態；不是把每則聊天當作已正式簽核的會議紀錄。完整決策權屬於 [ADR](../../adr/MIR-SEC-WORLD-001-world-db-trust-boundary.md) 指定的 Mirage Owner／DBA／Security。
 
@@ -8,7 +8,7 @@
 
 | ID | 設計結論 | 原因／邊界 |
 | --- | --- | --- |
-| D-01 | 缺口正式識別 `MIR-SEC-WORLD-001`；MSDSS P2 是外部驗收代號 | 避免將專案階段號重複用作跨專案安全缺口 ID |
+| D-01 | 缺口正式識別 `MIR-SEC-WORLD-001`；外部端權限驗收 是外部驗收代號 | 避免將專案階段號重複用作跨專案安全缺口 ID |
 | D-02 | 選方案 B：DB／窄特權角色強制關鍵狀態轉移 | R1 Runtime DB 身分能繞過應用程式狀態機，不能以程式自行守規矩當成 DB ACL 保證 |
 | D-03 | 依 R1–R5 能力矩陣定義攻擊者；等價 SQL Injection 歸 R1 能力 | 不用攻擊名稱重複計算相同 DB 能力；R4/R5 另案 |
 | D-04 | Runtime、Verifier、Authorizer 用分離 DB 身分、DSN／連線池、秘密與來源 | 不在低信任 Pool 使用 `SET ROLE`；同容器／同 Module 不自動代表可信隔離 |
@@ -18,7 +18,7 @@
 | D-08 | 同一 PostgreSQL IngressTx 原子消費 JTI 並建立可信 Receipt | 不承諾跨 DB 原子性；已消費 JTI 不因後續 Grant 失敗而重新開放 |
 | D-09 | **IngressTx** 先建立 Replay Tombstone＋Receipt；**GrantTx** 僅鎖定並檢查既有 Receipt／Candidate／Generation／撤銷，原子建立唯一 Binding＋Admission，**不重新建立 Receipt** | 修正 v0.1 不精確措辭；兩階段在不同交易提交，不能假裝同一建立交易 |
 | D-10 | 授權使用 Envelope v1 的實際應用層 bytes，Candidate 受保護不可改 | Hash 不證明 ASGI／TLS 客戶端實際收到；任何後置內容變動使 Admission 失效 |
-| D-11 | **已由 D-32／Freeze v1 取代**：只在 AuthorizeTx 以受保護 Receipt／Binding 做最新 Epoch／Key／Policy 查核；StartSendTx 不二次授權 | 原敘述要求 StartSend 重查 Policy／Epoch，與 MSDSS Freeze v1 衝突，故明確廢止 |
+| D-11 | **已由 D-32／Freeze v1 取代**：只在 AuthorizeTx 以受保護 Receipt／Binding 做最新 Epoch／Key／Policy 查核；StartSendTx 不二次授權 | 原敘述要求 StartSend 重查 Policy／Epoch，與外部判定服務 Freeze v1 衝突，故明確廢止 |
 | D-12 | 不要求「整個 HTTP 請求單一交易」；僅要求「每個安全狀態轉移單一交易」 | World Commit／外部 side effect 與 Admission 分階段，有故障不一致，需對帳 |
 | D-13 | Operation ID＋Input Digest 供唯讀 reconciliation；COMMIT 未知不得盲目重試 | 查無 Receipt 無法排除仍在途或未知提交；不得用逾時推定失敗 |
 | D-14 | 不擴張 Admission State 表達稽核原因；失配前使用 `ABANDONED`＋原子 audit | SEND_STARTED 之後不能假設沒發送，不自動重送 |
@@ -67,7 +67,7 @@
 
 | ID | 具體修正 | 證據／限制 |
 | --- | --- | --- |
-| D-48 | Protocol Freeze v1 的**目標協定**以 MSDSS 固定 SHA 為準，但不能把 Mirage 上游舊版 `start_send` 的 Emergency 再查視為已符合 | Mirage `88dc2008...` 原生函式仍查 Generation/Profile Emergency；MSDSS `5a1ee26...` Freeze v1 授權提交後不二次查。需要 Mirage Owner 原生移交、相容測試，不能只改文件 |
+| D-48 | Protocol Freeze v1 的**目標協定**以 外部判定服務固定 SHA 為準，但不能把 Mirage 上游舊版 `start_send` 的 Emergency 再查視為已符合 | Mirage `88dc2008...` 原生函式仍查 Generation/Profile Emergency；外部判定服務 `5a1ee26...` Freeze v1 授權提交後不二次查。需要 Mirage Owner 原生移交、相容測試，不能只改文件 |
 | D-49 | Candidate 使用完整六欄 Version Identity，另永久保留不允許重用的五欄 Logical Key；Payload Purge Tombstone 必須受 Restore Quarantine 保護 | `migrations/001_world_runtime.sql` 現有五欄主鍵**沒有** `candidate_version`；新增版本／不可逆鍵保留是擬議 Migration，不能虛稱現有 ACL 已保證 |
 | D-50 | Rollback 重試須具 DB **明確 rollback 證明**、World/External/HTTP **零不可逆效果證明**、原 Operation Identity/Digest 未執行及全部權威期限／Scope 仍有效 | 查無 Receipt、JTI 尚未消費或換新 JWS 單獨都不夠；未知 COMMIT 維持 UNVERIFIABLE，不得自動重試 |
 | D-51 | ADR 版本、歷史分支名、兩份 Source SHA、當前文件 Commit、實作與新驗收狀態**分欄追溯** | 同一追蹤 Markdown 無法可靠內嵌自己的 HEAD SHA（寫入會改變 Commit）；實際 Document Commit／文件檢查結果由 Git/PR 外部證據提供 |
@@ -77,7 +77,7 @@
 
 | ID | 具體修正 | 證據／限制 |
 | --- | --- | --- |
-| D-53 | MSDSS Freeze v1 已是 MSDSS 目標基準；**Mirage Owner 未採納**且其固定 upstream `start_send()` 仍有已觀察到的二次 Emergency 差異 | `WORLD-PROTOCOL-01`／`WORLD-PROTOCOL-02` 需原生實作＋並行符合性測試；不能因文件對齊宣稱已 conformant |
+| D-53 | 外部判定服務 Freeze v1 已是 外部判定服務目標基準；**Mirage Owner 未採納**且其固定 upstream `start_send()` 仍有已觀察到的二次 Emergency 差異 | `WORLD-PROTOCOL-01`／`WORLD-PROTOCOL-02` 需原生實作＋並行符合性測試；不能因文件對齊宣稱已 conformant |
 | D-54 | Restore／Purge 的非復活證明必須錨定於 World DB **還原範圍外**、不可由 Runtime 改寫或同時倒退的控制面／Ledger／單調 checkpoint | 只驗還原庫內 Tombstone 存在、備份內表一致或自填 timestamp 不足；錨點缺失／不可驗持續 Quarantine；`WORLD-RESTORE-TOMBSTONE-01` NOT_RUN；實際選型 BD-05 OPEN |
 | D-55 | BD-11 未核准前固定鎖後單一 DB decision_time／未知 Commit 停止新起送／無法判定權威時間即 Fail-Closed | 不宣稱 commit-before-deadline；產品若要求 Commit 先於期限則保持正式發送關閉。已 COMMIT 的授權不回溯改成 rollback；Policy Race 仍須採納 Freeze v1 |
 | D-56 | 文件／ID／遠端檔案一致性可 PASS 但安全驗收仍 NOT_RUN；`WORLD-RECOVERY-03` 為群組，A～F 需每一子案具 Given／Action／Expected | 靜態檢查不能代替 native conformance、PG ACL、GC、Restore、Commit Loss 的 runtime／DB 證明 |
@@ -87,18 +87,18 @@
 
 | ID | 具體修正 | 證據／限制 |
 | --- | --- | --- |
-| D-58 | 審核拆三軸：`MSDSS Freeze v1 Protocol baseline=ACCEPTED`、`Mirage Owner adoption=PENDING`、`Mirage native conformance=NOT_RUN` | 固定 Mirage SHA 已有局部 `start_send()` 差異，但不能以單點推得完整合約實測結果；`WORLD-PROTOCOL-MATRIX-01` 覆蓋全部授權／傳輸項 |
+| D-58 | 審核拆三軸：`外部判定服務 Freeze v1 Protocol baseline=ACCEPTED`、`Mirage Owner adoption=PENDING`、`Mirage native conformance=NOT_RUN` | 固定 Mirage SHA 已有局部 `start_send()` 差異，但不能以單點推得完整合約實測結果；`WORLD-PROTOCOL-MATRIX-01` 覆蓋全部授權／傳輸項 |
 | D-59 | Restore Anchor 至少記 `restore_fence_id`、Namespace、monotonic generation、資料庫 timeline/position、涵蓋資料 canonical digest、前序 hash、時間與來源認證；外部權威需保存**防重播的最新 head**，並定義 DB COMMIT 與外部 Head durable ACK 之間的發布／對帳窗口 | 僅有 hash chain 而沒有外部可信最高 head，可整條重播舊版；**DB 已提交但 Anchor 更新落後也是缺口**，digest 未明確涵蓋 Tombstone/Binding/Operation/Replay/Revocation 不代表它們完整；`WORLD-RESTORE-FENCE-01` NOT_RUN |
 | D-60 | Admission 授權狀態、Candidate 原始 Payload retention、**已綁 Authorized Snapshot execution eligibility** 是不同軸線 | Candidate 原始 bytes Purged 且 Snapshot 完整仍可合法起送；Snapshot 不可用才拒絕，Purge 不改寫歷史 SEND_AUTHORIZED；已提交不可逆 `PURGE_PENDING` 即使 GC 卡住也不能重開資格；`WORLD-PURGE-BOUNDARY-01` NOT_RUN |
 | D-61 | 安全測試結果應有 `NOT_RUN`／`BLOCKED`／`PASS`／`FAIL`／`STALE` 與固定 evidence refs 的狀態轉移；文件靜態檢查不能出具安全 PASS | 現行 checker 尚未接真實測試 evidence，因此強制新增案例仍為 NOT_RUN；未來引入 PASS/BLOCKED 需另審核證據來源與版本失效條件 |
-| D-62 | MSDSS Protocol commit `5a1ee26...` 與 Mirage source commit `88dc2008...` 各自獨立固定；BD-11 未裁決前只可聲稱鎖後一次 DB decision_time 有效 | `commit-before-deadline` 無證明；未知 Commit 禁新授權／傳輸的猜測，但實際已提交的 SEND_AUTHORIZED 不得回溯否認。Owner／DBA／Security 未核准維持 production send OFF |
+| D-62 | 外部判定服務 Protocol commit `5a1ee26...` 與 Mirage source commit `88dc2008...` 各自獨立固定；BD-11 未裁決前只可聲稱鎖後一次 DB decision_time 有效 | `commit-before-deadline` 無證明；未知 Commit 禁新授權／傳輸的猜測，但實際已提交的 SEND_AUTHORIZED 不得回溯否認。Owner／DBA／Security 未核准維持 production send OFF |
 | D-63 | Candidate Payload 與 Authorized Snapshot 必須有獨立受保護的**邏輯及儲存物件身分**；共享底層去重 Blob 時由實體 Pin／引用權威防 Candidate GC 刪 Snapshot | SEND_AUTHORIZED 僅綁 immutable Snapshot id/version/storage object version，取回真實 bytes 重算 Hash；`WORLD-SNAPSHOT-SEPARATION-01` NOT_RUN |
 | D-64 | 拆成 `CandidatePayloadPurgeFence` 與 `AuthorizedSnapshotPurgeFence`，各獨立 Write-Once、Scope 與受限寫入 | 前者只禁止原 Candidate 再使用；後者不可逆禁止 Snapshot 新起送但不改 SEND_AUTHORIZED，Runtime 不可自填；`WORLD-SNAPSHOT-SEPARATION-01`、`WORLD-PURGE-RETRY-01` NOT_RUN |
 | D-65 | Restore Anchor 與 World DB 不具天然原子提交，必須覆蓋 **DB-first／Anchor-first** 兩種錯誤次序及未知 ACK | DB committed／Anchor missing → Quarantine；Anchor PREPARED／DB rollback 不構成業務提交；獨立最高可信 Head 不回退，Operation Digest 對帳；BD-05 OPEN，`WORLD-RESTORE-PUBLISH-01` NOT_RUN |
 | D-66 | `AuthorizedSnapshotPurgeFence` 已提交但 Object GC 失敗時只重試 cleanup，**永不恢復 eligibility** | 用固定 `gc_operation_id` 冪等清除／受控介入，保留原 ACL、Audit、Tombstone；不得產生替代 Snapshot／Admission；`WORLD-PURGE-RETRY-01` NOT_RUN |
 | D-67 | 安全測試結果必須經 `NOT_RUN → RUNNING → PASS/FAIL/BLOCKED`，阻塞解除／修復失敗後只能重跑；PASS 綁定不可變實測證據 | 固定 Mirage SHA、Migration/Schema、PG 版、Role、資料集、時間、Fault Injection 與脫敏日誌；文件檢查 PASS 不轉成 `WORLD-*` PASS；`WORLD-SNAPSHOT-SEPARATION-01`、`WORLD-RESTORE-PUBLISH-01`、`WORLD-PURGE-RETRY-01` 全部 NOT_RUN |
 
-**版本與責任**：Mirage_API 原生分析 `main` `88dc2008fd35a2d3873949a769653dc9f18e8980`；MSDSS Protocol Freeze v1 整合基準 `main` `5a1ee26dcf79f04cf29345a0403e3f3f8082358b`；此組文件由 Mirage `docs/mir-sec-world-001-adr-v0.1` 的 v0.2 草稿舊提交 `003c918f142296588d2fe14b70fafe3cc5cf8458` 延續。**該 SHA 只是來源歷史，不是當前 ADR Commit**；後者與文件檢查結果須由 Draft PR／`git rev-parse HEAD` 的外部證據留存，不能在自身追蹤檔案內寫入自身 Commit SHA。全部新增安全驗收 **NOT_RUN**。
+**版本與責任**：Mirage_API 原生分析 `main` `88dc2008fd35a2d3873949a769653dc9f18e8980`；外部判定服務 Protocol Freeze v1 整合基準 `main` `5a1ee26dcf79f04cf29345a0403e3f3f8082358b`；此組文件由 Mirage `docs/mir-sec-world-001-adr-v0.1` 的 v0.2 草稿舊提交 `003c918f142296588d2fe14b70fafe3cc5cf8458` 延續。**該 SHA 只是來源歷史，不是當前 ADR Commit**；後者與文件檢查結果須由 Draft PR／`git rev-parse HEAD` 的外部證據留存，不能在自身追蹤檔案內寫入自身 Commit SHA。全部新增安全驗收 **NOT_RUN**。
 
 ### v0.2 新增／修訂測試 ID 交接清單（37 項，其中 1 項為群組索引；全部 NOT_RUN）
 
