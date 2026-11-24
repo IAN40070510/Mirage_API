@@ -22,7 +22,6 @@ GUIDES = {
     "medusa_cart_http": ("src/deception/domains/ecommerce/medusa_cart_http.py", "docs/medusa-carts.md"),
     "medusa_cart_projection": ("src/deception/domains/ecommerce/medusa_cart_projection.py", "docs/medusa-carts.md"),
     "native_resource_time": ("src/deception/domains/ecommerce/native_time.py", "docs/medusa-carts.md"),
-    "gateway_compatibility": ("integrations/msdss/requirements.compatibility-test.txt", "docs/gateway-bootstrap.md"),
     "gateway_bootstrap": ("integrations/msdss/gateway_bootstrap.py", "docs/gateway-bootstrap.md"),
     "runtime_archive": ("tools/package_runtime.py", "docs/runtime-operations.md"),
     "schema_migration": ("tools/apply_migrations.py", "docs/runtime-operations.md"),
