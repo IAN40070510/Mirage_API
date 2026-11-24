@@ -287,12 +287,73 @@ Checkpoint。即使 Publisher Login 已有 Head 表的 UPDATE 權限，也不能
 Checkpoint，再證明 SQL Head 推進遭拒；不宣稱這可阻止已取得合法 Publisher
 簽章私鑰的人發布其他有效事件，也不能代替兩庫最高 Head 的持久化部署。
 
+### 2026-11-25 Oracle 一次性完全隔離 PostgreSQL Lab — SQL／Restore PASS，已清理
+
+使用者另行授權在既有 SSH 主機 `138.2.107.99` 執行**測完立即清理**的
+Mirage 專用 Lab；不得借用或修改 MSDSS／正式 Mirage 容器、網路、資料卷與
+Secret。部署前盤點為 41 個既有容器、30 個網路、30 個資料卷；另以
+`mirage-g5-isotest-20261125-a71f` 全新命名空間建立兩個
+`postgres:17.6-alpine`（World／Fence）、兩個各自 `internal: true` 的
+Docker bridge、兩個獨立具名資料卷及一個同時接入兩個 Lab 網路的專用
+PostgreSQL Probe。沒有公布主機 TCP 埠，憑證在新建 0700 目錄產生、
+僅透過 Docker Secret 掛載，沒有讀取或複用 MSDSS Secret。
+
+以目前 `deploy/security-lab/g5-fence-schema.sql` 在 Fence DB 建立真實
+Trigger／表及最小權限角色；SQL 接受測試 **PASS**：拒絕 Authority 世代
+跳號與更新、拒絕 Checkpoint 改寫、拒絕不存在鏈節的 Head 推進，並允許
+連續有效鏈節前進至 Head 2、Authority Generation 2。World 在序號 1
+做 PostgreSQL `pg_dump -Fc`，推進至 2，再用 `pg_restore --clean`
+還原至 1；Probe 從專用雙網路以真實 SCRAM 登入讀得：
+
+```text
+PASS_FENCE_DDL_ACL_MONOTONIC_EPOCH_AND_HEAD | Head=2 | epoch-a
+PASS_RESTORED_WORLD_SEQ=1
+PASS_LIVE_SCRAM_ROLLBACK_QUARANTINE world=1 fence=2 auth_generation=2
+PASS_DB_NETWORK_SEPARATE_world_cannot_resolve_fence
+PASS_DB_NETWORK_SEPARATE_fence_cannot_resolve_world
+```
+
+這個 Quarantine 結論是隔離 Probe 比較兩庫序號所得的**驗收斷言**；不是
+正式 Restore 控制器、G4 Sender 或 BD-05 解禁路徑的端到端運轉證據。
+SQL Checkpoint 內容使用合成摘要與簽章占位資料，**不能**冒充 Publisher
+Ed25519 驗章測試；真實 Python／SCRAM／簽章鏈驗證另外由固定提交
+[`50b47a6`](https://github.com/IAN40070510/Mirage_API/commit/50b47a6696424e93692d31e06bb36cf23827c347)
+的 [World PG CI #45498525815](https://github.com/IAN40070510/Mirage_API/actions/runs/45498525815)
+（獨立 Fence PG `10 passed`）支援。
+
+Gateway 稽核工作：Fence DDL `job_01M87YDWBX008XNDD5HRYE07RH`；
+Fence SQL／ACL `job_01M87YG7MY00C46GC3BWX60W8M`；World
+`pg_dump` `job_01M87YH0P1001WWGQRVPJF66R7`、前進
+`job_01M87YH9AJ00EHA3W59DQPXQ8M`、`pg_restore`
+`job_01M87YHHDZ00P5G7D2PW606MSE`、還原確認
+`job_01M87YHVHT00XVTS3CXSBMAAAV`；跨網 SCRAM／Quarantine
+`job_01M87YJCXV00VV1FJQFM25PBSP`；反向網路隔離
+`job_01M87YKC8600SXBWY3XZ8B1RFW` 與
+`job_01M87YJQTG00PXG3RNERDH45A4`。
+
+清理 `compose.down` `job_01M87YNMDR00XKF9FNPYVT4WHC` 後，只針對
+本次新建的兩個具名資料卷及 Probe 自動產生的一個匿名資料卷執行已預覽的
+移除，並刪除新專案目錄及兩把一次性密鑰：
+`job_01M87YRTQQ00AYF6JHWB92462M`、
+`job_01M87YSHF2002CMM20ZVRYCZT6`、
+`job_01M87YS5CY0052CHY5N9K3XJ3S`、
+`job_01M87YTA7T00V9FFJJG8H5FMAF`。最後重新列舉為
+**41／30／30**，三份資源名稱集合與測試前完全相同，原有容器的執行
+狀態沒有變化，一次性工作目錄不存在。此測試對 MSDSS **零變更**。
+
+**判定：同主機的獨立 PostgreSQL Lab PASS／CLEAN；跨主機、不同回復域的
+正式 Restore Fence 未獲證明，G5 仍 OPEN／NO-GO，Trusted Send OFF。**
+
 **此項狀態仍是 G5 PARTIAL／NO-GO**：CI 只有兩個測試資料庫與用後即刪的
 隔離角色，尚未完成正式憑證隔離、不可回退的獨立最高 Head Authority、
 端到端事件語意覆蓋、World DB 發布意圖與雙向未知 ACK 對帳、BD-05
 Quarantine 原子自動解禁、正式 Restore／Send／Purge 競態。任何符合簽章的
 `HEAD_MATCHED` 仍固定 `release_authorized=False`，Sender 保持 Sealed。
 
-Use only the dedicated `mir-sec-world001-lab` resources for implementation and tests. Do not attach the existing staging networks, restart the seven existing containers, reuse production secrets, merge the Draft PR, or enable trusted send.
+The pre-existing `mir-sec-world001-lab` remains dedicated to its earlier tests.
+The separately authorized one-time `mirage-g5-isotest-20261125-a71f` environment
+was created outside those resources and completely removed after verification.
+Do not attach existing staging/MSDSS networks, restart existing containers, reuse
+production secrets, merge the Draft PR, or enable trusted send.
 
 Decision: **Option B approved**. Implementation: **IN PROGRESS**. G5: **NOT RUN**. MIR-SEC-WORLD-001: **OPEN**. Mirage release: **NO-GO**.
