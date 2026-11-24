@@ -74,3 +74,29 @@
   實際 PostgreSQL 時鐘超過原合成 World 的 `expires_at`（TTL 420 秒），
   因此是過期測資的拒絕。後續以原生初始化介面建立新合成 Session，
   不直接改資料表 TTL，再檢查正常查詢與重播。
+
+## 2026-11-25 修補後證據：G3b/G4 隔離子項 PASS
+
+| 證據 | 固定結果 | 邊界 |
+| --- | --- | --- |
+| [整合 CI：四服務 45493471770](https://github.com/IAN40070510/Mirage_API/actions/runs/45493471770) | success | 4 非 root 服務／3 網路／物理 ACL／mTLS |
+| [整合 CI：World PG 45493471691](https://github.com/IAN40070510/Mirage_API/actions/runs/45493471691) | 177 passed；另 mTLS 5、G5 模擬 9、Fence 7 | G5 模擬不算正式 Anchor 放行 |
+| [整合 CI：Container 45493471527](https://github.com/IAN40070510/Mirage_API/actions/runs/45493471527) | success | 容器展示與攻擊型請求回歸 |
+| Oracle 真 HTTPS Gateway `job_01M87QNTQK00QTJMRSNPFYSP66` | 20/20 無 JWS 拒絕、簽章路徑、重播、隔離 PASS | 內部 Candidate 對帳，不是正式 Client Send |
+| Oracle 真 PG／Secret Audit `job_01M87QSTAB001130H3C3FMA586` | 四角色服務、三個 `internal` 網路、SCRAM／ACL、Secret 不互見 PASS | 只限新 Lab |
+| Oracle 斷線 `job_01M87R6DQZ00DTM963N9ZBQMS2` | `signed_get=503`、無狀態洩漏 PASS | 新映像 `9a010a3` |
+| Oracle 恢復 `job_01M87RCBGP00FDZXWMNHWGB5CA` | 新合法合成 Session `200`、同請求重播 `403` PASS | 原 420 秒 Session 已自然過期 |
+| Oracle SQL 計數 | 停機前後 Receipt `49→49`；恢復探測後 Receipt/Replay `51/51` | 中間一次過期 Session 的拒絕也原子記入 JTI |
+
+本次 Oracle 應用映像 ID：`sha256:82d8e30ff38a991daa1b70f9eaec74c10debfe6f99d4153a3326d19313748f17`
+（Arm64，`mirage-api:g3b-g4-20261125-9a010a`）；PostgreSQL **17.6**；
+三個隔離網路前綴 `mirage-g3b-g4-stg-20261125-`，皆為 `internal=true`。
+映像內的產品程式對應 Git 提交
+[`9a010a3`](https://github.com/IAN40070510/Mirage_API/commit/9a010a3e9d184588b8797be048d96258adfebae1)；
+僅測試探針後續修正，未重新建置產品映像。
+
+**可簽收範圍**：這一輪 G3b/G4 的 Oracle 四服務隔離、持久資料庫角色
+及故障拒絕／復原子案例；並非 G3b 完整 Client 原生回覆，也不包含
+G4 真正外送、G5 BD-05 自動解禁、G6 混版／備份還原與最終 Owner Release。
+因此所有正式 Gate 繼續 `OPEN`，正式 Trusted Send `OFF`、發布 `NO-GO`；
+此處沒有虛構 Owner 或第三方安全簽核。
