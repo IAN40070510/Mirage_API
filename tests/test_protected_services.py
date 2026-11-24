@@ -1192,3 +1192,28 @@ def test_g3b_ci_validator_ca_key_stays_distinct_from_server_key(tmp_path):
         assert result.stdout.strip().endswith(": OK")
     assert (tmp_path / "secrets/g3b_native_validator_server_key").read_bytes() != (
         tmp_path / "validator-ca/ca.key").read_bytes()
+
+
+@pytest.mark.parametrize("action", ["cart.complete", "cart.cancel_order"])
+def test_g3b_order_success_binding_distinguishes_cart_and_order_resource(action):
+    """C-06／C-08 不能互換路徑身分，錯 Cart、錯 Order 與孤兒訂單皆拒絕。"""
+    from deception.world.protected_native_http import _verified_order_result_matches_snapshot
+
+    cart_id = "cart_" + uuid4().hex
+    order_id = "order_" + uuid4().hex
+    order = {"id": order_id, "cart_id": cart_id, "items": [], "status": "placed"}
+    state = {"cart": {"id": cart_id}, "orders": {order_id: order}}
+    resource = cart_id if action == "cart.complete" else order_id
+    valid = dict(action=action, resource=resource, result=order, snapshot_state=state)
+    assert _verified_order_result_matches_snapshot(**valid)
+    wrong_resource = order_id if action == "cart.complete" else cart_id
+    assert not _verified_order_result_matches_snapshot(**{**valid, "resource": wrong_resource})
+    assert not _verified_order_result_matches_snapshot(**{
+        **valid, "result": {**order, "cart_id": "cart_" + uuid4().hex},
+    })
+    assert not _verified_order_result_matches_snapshot(**{
+        **valid, "snapshot_state": {**state, "orders": {}},
+    })
+    assert not _verified_order_result_matches_snapshot(**{
+        **valid, "result": {**order, "id": "order_" + uuid4().hex},
+    })

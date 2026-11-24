@@ -50,6 +50,32 @@ _SYNTHETIC_MUTATION_PATHS = {
 }
 
 
+def _verified_order_result_matches_snapshot(
+    *, action: str, resource: str, result: dict, snapshot_state: dict,
+) -> bool:
+    """依 complete/cart ID 或 cancel/order ID 分別綁定原始路徑與實體訂單。
+
+    必須證明結果存在於同世代當前 Snapshot，且訂單從同一 Cart 衍生；
+    防止以重算合法 Envelope 的其他 Cart 或 Order 結果冒用本次 Receipt。
+    """
+    if (action not in {"cart.complete", "cart.cancel_order"}
+            or not isinstance(resource, str) or not isinstance(result, dict)
+            or not isinstance(snapshot_state, dict)):
+        return False
+    cart = snapshot_state.get("cart")
+    orders = snapshot_state.get("orders")
+    order_id = result.get("id")
+    if (not isinstance(cart, dict) or not isinstance(orders, dict)
+            or not isinstance(order_id, str)
+            or re.fullmatch(r"order_[0-9a-f]{32}", order_id) is None
+            or not isinstance(result.get("items"), list)
+            or result.get("cart_id") != cart.get("id")
+            or orders.get(order_id) != result):
+        return False
+    return (resource == cart.get("id") if action == "cart.complete"
+            else resource == order_id)
+
+
 def fixed_synthetic_rejection_bytes(platform: str, code: str) -> tuple[tuple[tuple[str, str], ...], bytes]:
     """只將兩份固定 Synthetic OpenAPI 核准的 Handler 拒絕碼投影為 409 JSON。"""
     from deception.domains.ecommerce.cart_http import CART_ERRORS
@@ -891,7 +917,9 @@ class PostgresProtectedNativeProjector(_ProtectedConnection):
                         else:
                             raise ProtectedGrantError("protected_synthetic_success_cart_items_denied")
                     else:
-                        if result.get("cart_id") != resource or not isinstance(result.get("items"), list):
+                        if not _verified_order_result_matches_snapshot(
+                                action=action, resource=resource, result=result,
+                                snapshot_state=snapshot.state):
                             raise ProtectedGrantError("protected_synthetic_success_order_identity_denied")
                         entity = result
                     payload = {kind: entity, "state_version": saved_version,

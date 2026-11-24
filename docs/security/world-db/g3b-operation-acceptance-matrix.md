@@ -110,6 +110,10 @@ Client 原生 HTTP 完整成功／拒絕測試，**不能先簽 G3b**。
 `cancel` 版本 4 的連續真 DB 測試。三次獨立 Receipt 均由原始
 Method／Path／Body 綁定，Mutation 200 需要 Commit Source／Receipt，
 Order GET 200 需要 Creator Lineage／Read Source；未取得真 CI 不可勾選 PASS。
+首輪真 PG 發現 C-08 Validator 誤用 complete 的 `cart_id` 規則，已修補成
+按 `cart.complete`／`cart.cancel_order` 分別與原始 Cart／Order ID 比對，
+再驗證結果確實存在同一 World Snapshot 且 Order→Cart 衍生關係一致；
+跨 Cart、跨 Order、孤兒 Order 負面單元測試 PASS，修補版真 PG 待 CI。
 
 | G3b 子門檻 | 獨立實測結果 | 正式簽收 |
 | --- | --- | --- |

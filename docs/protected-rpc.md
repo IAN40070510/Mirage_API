@@ -122,6 +122,13 @@ Verifier 逐欄比對 Executor 來源、Session Scope、精確 Body／Envelope H
 `order.cart_id` 等於該 Cart。即使有人重算整個合法 JSON 與 Envelope Hash，
 錯 Cart 的歷史結果也不能通過交接；正向與兩類跨 Cart 負面測試均覆蓋。
 本控制只保護候選交接，沒有賦予 Client Send 權，也不消除競態與 G5 缺口。
+**C-06／C-07／C-08 連續訂單成功候選（待真 PG CI）**：新增同一受保護
+Cart World 的 complete→Order GET→cancel 連續整合測試，獨立 Validator
+從真正的 Commit／Read Source 重建 200 JSON。測試發現 C-08 的原始資源
+是 `order_id`，不能沿用 C-06 的 `cart_id` 比對；訂單成功投影現分別要求
+complete 綁原 Cart ID、cancel 綁原 Order ID，且真正結果仍位於相同
+World Snapshot 的 `orders`、`cart.id`／`order.cart_id` 同源。跨 Cart、
+跨 Order 或偽造孤兒結果一律拒絕；正式 Client HTTP 及 Send 仍禁用。
 新增 Synthetic 固定 mutation 真業務拒絕來源：Executor 將已保存
 `rejected` 的結果與 409 固定 Envelope Hash 原子寫入受保護拒絕表，
 獨立 Validator 從 Receipt 重建 JSON `{"code":"..."}`。Verifier 僅在
