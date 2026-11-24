@@ -71,6 +71,7 @@ def inspect_runtime_world_acl(dsn: str, *, schema: str = "public") -> WorldAclAs
                     ("world_operations", ("INSERT", "UPDATE", "DELETE", "TRUNCATE")),
                     ("world_events", ("INSERT", "UPDATE", "DELETE", "TRUNCATE")),
                     ("world_snapshots", ("INSERT", "UPDATE", "DELETE", "TRUNCATE")),
+                    ("world_initializations", ("INSERT", "UPDATE", "DELETE", "TRUNCATE")),
                     ("world_commit_receipts", ("INSERT", "UPDATE", "DELETE", "TRUNCATE")),
                     ("synthetic_resources", ("INSERT", "UPDATE", "DELETE", "TRUNCATE")),
                     ("guest_cart_creations", ("INSERT", "UPDATE", "DELETE", "TRUNCATE")),

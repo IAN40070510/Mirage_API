@@ -561,6 +561,13 @@ def _audit(root: Path) -> None:
                        for role in ("mirage_g3b_ci_verifier", "mirage_g3b_ci_validator",
                                     "mirage_g3b_ci_runtime", "mirage_g3b_ci_inventory"))):
             raise RuntimeError("g3b_ci_native_context_writer_acl_mismatch")
+        if (admin.execute("SELECT has_table_privilege(%s,%s,'INSERT')",
+                          ("mirage_g3b_ci_cart", "world_initializations")).fetchone() != (True,)
+                or any(admin.execute("SELECT has_table_privilege(%s,%s,'INSERT')",
+                                     (role, "world_initializations")).fetchone() != (False,)
+                       for role in ("mirage_g3b_ci_verifier", "mirage_g3b_ci_validator",
+                                    "mirage_g3b_ci_runtime", "mirage_g3b_ci_inventory"))):
+            raise RuntimeError("g3b_ci_world_initialization_audit_acl_mismatch")
     runtime_dsn = (root / "probe" / "runtime-host.dsn").read_text(encoding="utf-8")
     with psycopg.connect(runtime_dsn) as runtime:
         if runtime.execute("SELECT current_user,session_user").fetchone() != (
