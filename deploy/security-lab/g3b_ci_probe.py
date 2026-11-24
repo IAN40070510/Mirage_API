@@ -536,7 +536,11 @@ def _gateway() -> None:
         )
         medusa_added = gateway.send(medusa_add)
         if medusa_added.status_code != 200:
-            raise RuntimeError("g3b_ci_medusa_add_rpc_unverifiable:" + str(medusa_added.status_code))
+            # 診斷只保留 Verifier 的固定不透明錯誤碼；不輸出 JWT、DSN 或 Body。
+            detail = medusa_added.json().get("detail") if (
+                medusa_added.headers.get("content-type", "").startswith("application/json")) else None
+            raise RuntimeError("g3b_ci_medusa_add_rpc_unverifiable:" + str(medusa_added.status_code)
+                               + ":" + str(detail)[:90])
         medusa_add_result = medusa_added.json()
         medusa_add_meta = medusa_add_result.get("executor_result", {})
         medusa_add_projection = medusa_add_result.get("native_projection", {})
