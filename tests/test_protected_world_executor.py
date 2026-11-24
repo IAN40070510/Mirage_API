@@ -831,6 +831,96 @@ def test_cart_http_verified_receipt_drives_real_fixed_world_handler(isolated_tes
     with pytest.raises(ProtectedGrantError, match="source_missing"):
         projector.project_cart_read(uuid4())
 
+    # C-06／C-07／C-08：沿用同一受保護派生世代的 Cart→Order 正向生命週期。
+    def issue_cart_http_proof(path: str, *, body: bytes, resource: SessionBinding,
+                              method: str = "POST") -> tuple[UUID, bytes]:
+        """在實驗室真 PG 登錄不可變原始 HTTP Proof 與對應 Cart／Order Receipt。"""
+        original = replace(original_request(path=path, method=method), body=body)
+        operation_proof = derive_verified_operation(original)
+        new_receipt, jti = uuid4(), uuid4().hex
+        with psycopg.connect(dsn) as connection:
+            connection.execute("INSERT INTO replay_entries VALUES ('gateway','mirage',%s,%s)",
+                               (jti, now + 120))
+            connection.execute(
+                """INSERT INTO ingress_receipts (
+                       receipt_id,issuer,audience,jti,key_id,environment_id,deployment_id,
+                       session_id,session_epoch,request_fingerprint,assessment_digest,
+                       claims_digest,verification_policy_version,token_issued_at,
+                       token_not_before,token_expires_at,access_mode,resource_id)
+                   VALUES (%s,'gateway','mirage',%s,'kid',%s,%s,%s,1,%s,%s,%s,
+                           'trusted-session-v1.1',%s,%s,%s,'cart',%s)""",
+                (new_receipt, jti, resource.environment_id, resource.deployment_id,
+                 resource.session_id, operation_proof.request_fingerprint, digest("b"), digest("c"),
+                 now - 5, now - 5, now + 90, resource.resource_id),
+            )
+            connection.execute(
+                """INSERT INTO protected_http_operation_bindings (
+                       receipt_id,platform,operation_id,method,path_template,
+                       request_fingerprint,request_body_sha256,request_path,request_content_type)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                (new_receipt, operation_proof.platform, operation_proof.operation_id,
+                 operation_proof.method, operation_proof.path_template,
+                 operation_proof.request_fingerprint, operation_proof.request_body_sha256,
+                 operation_proof.request_path, operation_proof.request_content_type),
+            )
+        return new_receipt, original.raw_path
+
+    complete_body = json.dumps({"expected_version": 2, "idempotency_key": "complete-cart",
+                                "commit_attempt_id": str(uuid4())}).encode()
+    complete_receipt, complete_path = issue_cart_http_proof(
+        "/synthetic/carts/" + binding.resource_id + "/complete",
+        body=complete_body, resource=binding,
+    )
+    complete_result = executor.execute_verified_http(
+        receipt_id=complete_receipt, raw_path=complete_path,
+        raw_body=complete_body,
+    )
+    assert complete_result["operation"] == "completeGuestCart"
+    assert complete_result["status"] == "committed" and complete_result["state_version"] == 3
+    completed = projector.project_synthetic_success(complete_receipt)
+    complete_payload = json.loads(completed.body_bytes)
+    assert completed.operation_id == "completeGuestCart" and completed.status_code == 200
+    assert complete_payload["state_version"] == 3
+    assert complete_payload["order"]["cart_id"] == binding.resource_id
+    assert complete_payload["order"]["status"] == "placed"
+    order_id = complete_payload["order"]["id"]
+
+    order_binding = store.resource_binding(
+        order_id, environment_id=binding.environment_id,
+        deployment_id=binding.deployment_id, now=now,
+    )
+    order_receipt, order_path = issue_cart_http_proof(
+        "/synthetic/orders/" + order_id, body=b"", resource=order_binding, method="GET",
+    )
+    order_result = executor.execute_verified_http(
+        receipt_id=order_receipt, raw_path=order_path, raw_body=b"",
+    )
+    assert order_result["kind"] == "cart_read_admitted"
+    assert order_result["operation"] == "getSyntheticOrder" and order_result["resource_id"] == order_id
+    order_projection = projector.project_cart_read(order_receipt)
+    order_payload = json.loads(order_projection.body_bytes)
+    assert order_projection.operation_id == "getSyntheticOrder" and order_projection.status_code == 200
+    assert order_projection.source.read_admission_id == order_result["read_admission_id"]
+    assert order_payload["order"] == complete_payload["order"]
+    assert order_payload["state_version"] == 3 and order_payload["commit_attempt_id"] is None
+
+    cancel_body = json.dumps({"expected_version": 3, "idempotency_key": "cancel-order",
+                              "commit_attempt_id": str(uuid4())}).encode()
+    cancel_receipt, cancel_path = issue_cart_http_proof(
+        "/synthetic/orders/" + order_id + "/cancel", body=cancel_body, resource=order_binding,
+    )
+    cancel_result = executor.execute_verified_http(
+        receipt_id=cancel_receipt, raw_path=cancel_path, raw_body=cancel_body,
+    )
+    assert cancel_result["status"] == "committed" and cancel_result["state_version"] == 4
+    cancelled = projector.project_synthetic_success(cancel_receipt)
+    cancelled_payload = json.loads(cancelled.body_bytes)
+    assert cancelled.operation_id == "cancelSyntheticOrder" and cancelled.status_code == 200
+    assert cancelled_payload["order"]["id"] == order_id
+    assert cancelled_payload["order"]["cart_id"] == binding.resource_id
+    assert cancelled_payload["order"]["status"] == "cancelled"
+    assert cancelled_payload["state_version"] == 4
+
 
 def test_untrusted_legacy_cart_cannot_enter_verified_http_executor(isolated_test_dsn):
     """即使舊 Cart World 有有效資源映射，缺 Creator 的受保護 Lineage 不得成為 RPC 目標。"""

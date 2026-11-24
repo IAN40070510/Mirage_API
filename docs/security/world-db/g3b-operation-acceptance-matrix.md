@@ -104,6 +104,13 @@ RFC3986 編碼 SKU 解析（例如中文 `%E5...`、空格 `%20`），Verifier �
 大小寫歧義、混合編碼與無效 UTF-8。尚待實體 PG/mTLS CI 與
 Client 原生 HTTP 完整成功／拒絕測試，**不能先簽 G3b**。
 
+**C-06／C-07／C-08 真 Cart→Order 200 候選連續驗收（待本 SHA 真 PG CI）**：
+受保護 Cart add 取得版本 2 後，新增同世代 `complete` 版本 3→衍生
+`order_...`→原始 GET 訂單 ReadAdmission／獨立 Snapshot 投影 200→
+`cancel` 版本 4 的連續真 DB 測試。三次獨立 Receipt 均由原始
+Method／Path／Body 綁定，Mutation 200 需要 Commit Source／Receipt，
+Order GET 200 需要 Creator Lineage／Read Source；未取得真 CI 不可勾選 PASS。
+
 | G3b 子門檻 | 獨立實測結果 | 正式簽收 |
 | --- | --- | --- |
 | 真 HTTPS Gateway→Verifier→Executor、互異 Client CA、拒絕重播／竄改 | 隔離 CI PASS | 僅實驗室傳輸子項 PASS |
@@ -120,18 +127,18 @@ Client 原生 HTTP 完整成功／拒絕測試，**不能先簽 G3b**。
 
 | 編號 | 實際方法／路由 | 來源 Proof | 固定 Executor | 2xx／4xx 完整相容簽收 |
 | --- | --- | --- | --- | --- |
-| I-01 | POST `/synthetic/inventory/reservations` | 隔離 PASS | 受保護 reserve；單一 Receipt Commit；真 Handler `unknown_synthetic_sku` 409 候選四服務 PASS | OPEN：200、CAS conflict／其他 409、原生 HTTP |
+| I-01 | POST `/synthetic/inventory/reservations` | 隔離 PASS | 受保護 reserve；單一 Receipt Commit；真 Handler `unknown_synthetic_sku` 409 候選四服務 PASS；200 成功 Commit／獨立 Validator 候選真 PG PASS | OPEN：其他 409、CAS conflict、原生 HTTP |
 | I-02 | POST `/synthetic/inventory/reservations/{reservation_id}/cancel` | 隔離 PASS | 受保護 cancel；409 候選能力已有固定 Handler，個別情境未真容器逐條實測 | OPEN：200、CAS conflict／其他 409、原生 HTTP |
 | I-03 | GET `/synthetic/operations/{attempt}` | 隔離 PASS | 固定 UUID4／空 Body Proof → ReadAdmission；獨立 Validator 核對 WorldOperation、Commit Receipt、Snapshot／Epoch／Key，重建歷史 200 或確定不存在的 409 候選；固定 SHA `88d286f` 真 PG/mTLS CI PASS | OPEN：客戶端原生 200／409、競態與故障路徑 |
 | I-04 | GET `/synthetic/inventory/{sku}` | 隔離 PASS | 固定 SKU／空 Body Proof → Executor ReadAdmission → 獨立 Validator 200 成功／真正缺 SKU 409 候選；SHA `c1769b9` 原始 UTF-8 三段一致性真 PG/mTLS CI PASS；正規百分比編碼候選待真 CI | OPEN：Client 原生 200／409、編碼完整相容、G4 Send |
 | C-01 | POST `/synthetic/carts` | 隔離 PASS | 受保護 Creator→衍生 Cart | OPEN：200／409、原始成功封套 |
-| C-02 | GET `/synthetic/carts/{cart_id}` | 隔離 PASS | 受保護 ReadAdmission＋來源 ID；新增 Validator 按同 Receipt 的派生 Cart、目前 Snapshot 重建 200 JSON 候選，待本 SHA 真 PG／四服務 CI | OPEN：409 來源、客戶端原生 HTTP |
-| C-03 | POST `/synthetic/carts/{cart_id}/line-items` | 隔離 PASS | 受保護 add；409 候選固定 Handler 存在，個別情境尚待真容器測試 | OPEN：200、其餘 409、原生 HTTP |
+| C-02 | GET `/synthetic/carts/{cart_id}` | 隔離 PASS | 受保護 ReadAdmission＋來源 ID；獨立 Validator 按派生 Cart、目前 Snapshot 重建 200 候選，真 PG 測試 PASS | OPEN：409 來源、客戶端原生 HTTP |
+| C-03 | POST `/synthetic/carts/{cart_id}/line-items` | 隔離 PASS | 受保護 add 200 Commit／Validator 候選真 PG PASS；409 候選固定 Handler 存在 | OPEN：其餘 409、原生 HTTP |
 | C-04 | POST `/synthetic/carts/{cart_id}/line-items/{item_id}` | 隔離 PASS | 受保護 update；409 候選固定 Handler 存在，個別情境尚待真容器測試 | OPEN：200、其餘 409、原生 HTTP |
 | C-05 | DELETE `/synthetic/carts/{cart_id}/line-items/{item_id}` | 隔離 PASS | 受保護 remove；409 候選固定 Handler 存在，個別情境尚待真容器測試 | OPEN：200、其餘 409、原生 HTTP |
-| C-06 | POST `/synthetic/carts/{cart_id}/complete` | 隔離 PASS | 受保護 complete；409 候選固定 Handler 存在，個別情境尚待真容器測試 | OPEN：200、其餘 409、原生 HTTP |
-| C-07 | GET `/synthetic/orders/{order_id}` | 隔離 PASS | 新增獨立 Validator 按受保護派生 Order、ReadAdmission 重建 200 JSON 候選，待本 SHA 真 PG CI | OPEN：409 來源、客戶端原生 HTTP |
-| C-08 | POST `/synthetic/orders/{order_id}/cancel` | 隔離 PASS | 受保護 cancel_order；409 候選固定 Handler 存在，個別情境尚待真容器測試 | OPEN：200、其餘 409、原生 HTTP |
+| C-06 | POST `/synthetic/carts/{cart_id}/complete` | 隔離 PASS | 受保護 complete 版本 3／獨立 Validator 200 候選新增真 PG 驗收待 CI；409 固定 Handler 存在 | OPEN：200 真 CI、其餘 409、原生 HTTP |
+| C-07 | GET `/synthetic/orders/{order_id}` | 隔離 PASS | 獨立 Validator 按受保護派生 Order、ReadAdmission 重建 200 候選，新增真正已下單 Order 正向路徑待 CI | OPEN：200 真 CI、409 來源、原生 HTTP |
+| C-08 | POST `/synthetic/orders/{order_id}/cancel` | 隔離 PASS | 受保護 cancel_order 版本 4／獨立 Validator 200 候選新增真 PG 驗收待 CI；409 固定 Handler 存在 | OPEN：200 真 CI、其餘 409、原生 HTTP |
 | C-09 | GET `/synthetic/carts/{cart_id}/operations/{attempt}` | 隔離 PASS | 唯讀 Validator 核對歷史 WorldOperation、Protected Commit Source／Commit Receipt、ReadAdmission 與快照，重建 200 或確定不存在的 409 候選；固定 SHA `20be55a` 另修補歷史 Cart／Order 的跨 Cart ID 重綁，真 PG/mTLS CI PASS | OPEN：客戶端原生 200／409、競態與故障路徑 |
 | M-01 | POST `/store/carts` | 隔離 PASS | 尚未執行 Native 建立 | OPEN：200／400／404／409 |
 | M-02 | GET `/store/carts/{id}` | 隔離 PASS | 尚未執行 Native 讀取 | OPEN：200／400／404／409 |
