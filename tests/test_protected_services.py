@@ -1158,15 +1158,19 @@ def test_g3b_executor_medusa_mutation_result_is_route_bound(
         """Stub transport only; execute the real strict Executor parser."""
 
         def __init__(self, **kwargs):
+            """Keep the production no-proxy rule at the transport seam."""
             assert kwargs["trust_env"] is False
 
         async def __aenter__(self):
+            """Return the single in-memory transport stub."""
             return self
 
         async def __aexit__(self, *_):
+            """Close the stub without suppressing parser failures."""
             return False
 
         async def post(self, url, *, json):
+            """Return only the fixed response for the exact Executor endpoint."""
             assert url == "https://executor.invalid:8444/internal/v1/execute"
             return httpx.Response(200, json=response)
 

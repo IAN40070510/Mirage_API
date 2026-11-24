@@ -221,6 +221,32 @@ World DB ↔ Fence DB 的跨庫 Commit Intent／ACK 對帳、完整事件語意�
 BD-05 Quarantine 原子解禁及 Sender／Purge 競態仍未實作，G5 不得簽成 PASS。
 本輪資料庫和網路均為拋棄式合成實驗，未觸及 staging/production。
 
+**隔離主線 CI 補證**：固定提交
+[`d35af3f`](https://github.com/IAN40070510/Mirage_API/commit/d35af3f62c9ab7bf667bfcae903540a3ec333f7d)
+的 [World PG17.6 #45426410173](https://github.com/IAN40070510/Mirage_API/actions/runs/45426410173)
+`166 passed`、真 mTLS `5 passed`、密碼學 `9 passed`、獨立 Fence PG `6 passed`；
+[Python #45426410183](https://github.com/IAN40070510/Mirage_API/actions/runs/45426410183)
+`1453 passed / 11 skipped / 2 warnings`，
+[容器 #45426410092](https://github.com/IAN40070510/Mirage_API/actions/runs/45426410092)
+成功。
+
+**Fence Head 資料庫級前節綁定**：固定提交
+[`e15c7f5`](https://github.com/IAN40070510/Mirage_API/commit/e15c7f5793de56e0238c3fc4f769d73cc901e7e2)
+在第二個實體 PG 加上 Head INSERT／UPDATE Trigger：首次 Head 必須對應
+已持久化序號 1／全零前節／事件 1 起點；後續 Head 必須參照同
+Namespace／Epoch、序號恰好 +1、雜湊承接前一 Head、事件連續且已寫入的
+Checkpoint。即使 Publisher Login 已有 Head 表的 UPDATE 權限，也不能
+直接 SQL 推進至不存在或斷鏈節點。
+[World PG17.6 #45427919546](https://github.com/IAN40070510/Mirage_API/actions/runs/45427919546)
+`166 passed`、真 mTLS `5 passed`、密碼學 `9 passed`、**獨立 Fence 真 PG `7 passed`**；
+[Python #45427919653](https://github.com/IAN40070510/Mirage_API/actions/runs/45427919653)
+`1453 passed / 12 skipped / 2 warnings`；
+[容器 #45427919657](https://github.com/IAN40070510/Mirage_API/actions/runs/45427919657)
+與[四服務 #45427905221](https://github.com/IAN40070510/Mirage_API/actions/runs/45427905221)
+均成功。新測試只在可拋棄 Schema 建立不存在 Head 與合法簽名但錯前節的
+Checkpoint，再證明 SQL Head 推進遭拒；不宣稱這可阻止已取得合法 Publisher
+簽章私鑰的人發布其他有效事件，也不能代替兩庫最高 Head 的持久化部署。
+
 **此項狀態仍是 G5 PARTIAL／NO-GO**：CI 只有兩個測試資料庫與用後即刪的
 隔離角色，尚未完成正式憑證隔離、不可回退的獨立最高 Head Authority、
 端到端事件語意覆蓋、World DB 發布意圖與雙向未知 ACK 對帳、BD-05

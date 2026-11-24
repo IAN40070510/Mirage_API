@@ -1586,7 +1586,7 @@ def _audit(root: Path) -> None:
             raise RuntimeError("g3b_ci_cross_role_secret_exposure:" + name)
     with psycopg.connect("postgresql://mirage_ci_owner:mirage_ci_only@127.0.0.1:55433/"
                          "mirage_g3b_ci?connect_timeout=5") as admin:
-        if admin.execute("SELECT count(*) FROM protected_world_commit_sources").fetchone()[0] != 9:
+        if admin.execute("SELECT count(*) FROM protected_world_commit_sources").fetchone()[0] != 10:
             raise RuntimeError("g3b_ci_inventory_commit_evidence_missing")
         if admin.execute("SELECT count(*) FROM protected_medusa_rejection_sources").fetchone()[0] != 2:
             raise RuntimeError("g3b_ci_medusa_rejection_evidence_missing")
@@ -1616,6 +1616,7 @@ def _audit(root: Path) -> None:
                 # 第七個 Query 在 Verifier 403，不允許鑄造 Operation Proof。
                 "PostCarts": 8,
                 "PostCartsIdLineItems": 3,
+                "PostCartsIdLineItemsLine_id": 2,
         }:
             raise RuntimeError("g3b_ci_operation_proof_count_mismatch")
         # Owner fixture、synthetic HTTP 與受限 Medusa M-01 各建立一筆；
