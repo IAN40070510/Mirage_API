@@ -164,14 +164,28 @@ Body 不得重綁 Proof。最後再 add→complete→order GET→cancel，核對
 真 PG 合約 `152 passed` 包含這道檢查的正向路徑與負面單元測試，
 不等於已驗證 Client HTTP 或擁有 Send 授權。
 
-**C-03／C-06／C-08 真業務拒絕增量（待本次真 PG CI）**：從真實衍生
+**C-03／C-06／C-08 真業務拒絕增量（固定 SHA `45b0285823e2dbc2fa2c8cc0558039475055682c`，隔離 PASS）**：從真實衍生
 Cart 同世代、不同原始 HTTP Receipt 分別觸發 C-03 的
 `unknown_synthetic_variant`／`insufficient_synthetic_inventory`、
 C-06 的 `empty_synthetic_cart`／`cart_not_active`，以及 C-08 的
 `order_not_cancellable`。每次均要求受保護 WorldOperation `rejected`、
 獨立唯讀 Projector 固定 `409` JSON、原 Receipt 重送不另增 Rejection Source、
 World 版本保持不變；本地純 Handler 五種拒絕碼重現通過。
-**在真 PostgreSQL CI 完成前只是待驗候選，不是 Client HTTP 409 PASS。**
+[真 PostgreSQL 17.6 隔離 CI 45320201515](https://github.com/IAN40070510/Mirage_API/actions/runs/45320201515)
+`152 passed`、獨立實體 mTLS `5 passed`，
+[容器 CI 45320201553](https://github.com/IAN40070510/Mirage_API/actions/runs/45320201553)
+`success`。**五種固定拒絕僅來源／Validator 隔離 PASS；不是 Client HTTP 409 PASS。**
+
+**C-03 舊版本 CAS 拒絕增量（固定 SHA `c62c79cd0adaae7924ba6c757a8fdb2c41a20c6b`，隔離 PASS）**：
+當另一有效且不同原始 Receipt 用過期 `expected_version` 發起 mutation，
+要求真 DB `version_conflict` 使操作停止；同一 Receipt 再試不能創造
+WorldOperation、Commit Source 或 Rejection Source，更不能把 CAS 競態偽裝成
+Handler 的合法 409。
+[真 PostgreSQL 17.6 CI 45320671028](https://github.com/IAN40070510/Mirage_API/actions/runs/45320671028)
+`152 passed`、真 mTLS `5 passed`、文件檢查成功，
+[容器 CI 45320671065](https://github.com/IAN40070510/Mirage_API/actions/runs/45320671065)
+`success`。**只勾選單一舊版本 CAS fail-closed 子案例**；尚未覆蓋平行提交、
+COMMIT ACK 不明或 Client HTTP，不能簽收全部 CAS。
 
 **C-01 Creator／衍生 Cart Scope 缺口（仍 OPEN）**：原始
 `createGuestCart` Receipt 屬於 Creator Session，但新建立的 Cart 使用另一個
@@ -189,7 +203,7 @@ World 版本保持不變；本地純 Handler 五種拒絕碼重現通過。
 | 可配置的隔離 Verifier／雙 Executor／Native Validator、專用 DSN Secret、Role／Schema／ACL 啟動檢查 | 真四容器啟動／實體角色／mTLS／密鑰用途 PASS | 隔離部署子項 PASS；正式環境另驗 |
 | Medusa M-03 特定 400／404 的原生 JSON 從獨立 Rejection Source 重建 | 真 PG、唯讀 Validator 來源投影、第二 mTLS CA PASS | 實驗室子項 PASS；正式 Client HTTP 回應與全操作兼容 OPEN |
 | Medusa M-03 Validator→Verifier 完整候選 Status／Headers／Body 交接 | 固定 400／404 bytes／Scope 綁定及篡改拒絕；真四容器 CI [45211431898](https://github.com/IAN40070510/Mirage_API/actions/runs/45211431898) PASS | **候選交接隔離 PASS**；外層仍為內部 HTTP 200、正式 Client 400／404 OPEN |
-| Synthetic 固定 mutation Handler rejected→可信 409 來源→獨立 Validator | I-01／I-02、C-03～C-06、C-08 固定 409 候選能力；隔離四服務實測 I-01 `unknown_synthetic_sku` 409，I-02 真 PG 重複取消 `reservation_not_active` 409 來源 PASS | **I-01／I-02 指定拒絕候選 PASS**；其餘 Handler 情境／CAS conflict／原生 HTTP 仍 OPEN |
+| Synthetic 固定 mutation Handler rejected→可信 409 來源→獨立 Validator | I-01／I-02、C-03～C-06、C-08 固定 409 候選能力；隔離四服務實測 I-01 `unknown_synthetic_sku` 409，I-02 真 PG 重複取消 `reservation_not_active` 409，以及 C-03／C-06／C-08 五種真業務拒絕候選 SHA `45b0285` 真 PG PASS | **指定拒絕來源候選隔離 PASS**；其餘 Handler 情境／CAS conflict／原生 HTTP 仍 OPEN |
 | Inventory I-04 GET ReadAdmission→唯讀 WorldSnapshot→獨立 Validator 200／409 | 獨立 Validator 按 Receipt 重建精確 JSON／Scope／Hash，與 Executor ReadAdmission ID／Generation／Version／State Hash 逐欄相符；既有 SKU 200、真缺 SKU 409 與正規編碼 URI 均已真 PG/mTLS CI PASS | **I-04 200／409 與 SKU 編碼來源候選隔離 PASS**；客戶端原生 HTTP 與 G4 Send OPEN |
 | 正式獨立服務部署、Secret Mount／網路來源、無共享憑證可見性 | 一次性 Docker CI 真容器角色隔離 PASS | 隔離環境 PASS；staging／production 正式部署 OPEN |
 | 20 條正式原生 2xx／4xx Payload 與獨立來源／Validator | 20 條均未具全套證據 | OPEN |
@@ -203,12 +217,12 @@ World 版本保持不變；本地純 Handler 五種拒絕碼重現通過。
 | I-04 | GET `/synthetic/inventory/{sku}` | 隔離 PASS | 固定 SKU／空 Body Proof → Executor ReadAdmission → 獨立 Validator 200 成功／真正缺 SKU 409 候選；SHA `c1769b9` 原始 UTF-8、SHA `4e2cecc` 正規 percent URL 候選真 PG/mTLS PASS | OPEN：Client 原生 200／409、全 URL 相容、G4 Send |
 | C-01 | POST `/synthetic/carts` | 隔離 PASS | 受保護 Creator→衍生 Cart；衍生 Scope 與原 Receipt Scope 不同，尚無可信跨 Scope 成功 Promotion | OPEN：200／409、原始成功封套、跨 Scope 授權契約 |
 | C-02 | GET `/synthetic/carts/{cart_id}` | 隔離 PASS | 受保護 ReadAdmission＋來源 ID；獨立 Validator 按派生 Cart、目前 Snapshot 重建 200 候選，真 PG 測試 PASS | OPEN：409 來源、客戶端原生 HTTP |
-| C-03 | POST `/synthetic/carts/{cart_id}/line-items` | 隔離 PASS | 受保護 add 200 Commit／Validator 候選真 PG PASS；新增真正未知 Variant／庫存不足的 409 Receipt 測試待真 PG CI | OPEN：其餘 409／CAS、原生 HTTP |
+| C-03 | POST `/synthetic/carts/{cart_id}/line-items` | 隔離 PASS | 受保護 add 200 Commit／Validator 候選真 PG PASS；真未知 Variant／庫存不足 409 候選 SHA `45b0285` 真 PG PASS；舊版本 CAS fail-closed SHA `c62c79c` 真 PG PASS | OPEN：其餘 409／CAS 並行、原生 HTTP |
 | C-04 | POST `/synthetic/carts/{cart_id}/line-items/{item_id}` | 隔離 PASS | 受保護 update；真品項 200、缺品項 409、重送與 Proof 防替換，SHA `bcb0c68` 真 PG PASS | OPEN：其他 409／CAS、原生 HTTP、實體部署 |
 | C-05 | DELETE `/synthetic/carts/{cart_id}/line-items/{item_id}` | 隔離 PASS | 受保護 remove；真品項 200、重複刪除 409、重送與 Proof 防替換，SHA `bcb0c68` 真 PG PASS | OPEN：其他 409／CAS、原生 HTTP、實體部署 |
-| C-06 | POST `/synthetic/carts/{cart_id}/complete` | 隔離 PASS | 受保護 complete 200 候選真 PG PASS；新增真空 Cart／已完成 Cart 409 Receipt 測試待真 PG CI | OPEN：其他 409／CAS、原生 HTTP |
+| C-06 | POST `/synthetic/carts/{cart_id}/complete` | 隔離 PASS | 受保護 complete 200 候選真 PG PASS；真空 Cart／已完成 Cart 409 候選 SHA `45b0285` 真 PG PASS | OPEN：其他 409／CAS、原生 HTTP |
 | C-07 | GET `/synthetic/orders/{order_id}` | 隔離 PASS | 獨立 Validator 按受保護派生 Order、ReadAdmission 重建 200，SHA `eb118a7` 真 PG PASS | OPEN：409 來源、原生 HTTP |
-| C-08 | POST `/synthetic/orders/{order_id}/cancel` | 隔離 PASS | 受保護 cancel_order 200 候選真 PG PASS；新增真正重複取消 Order 409 Receipt 測試待真 PG CI | OPEN：其他 409／CAS、原生 HTTP |
+| C-08 | POST `/synthetic/orders/{order_id}/cancel` | 隔離 PASS | 受保護 cancel_order 200 候選真 PG PASS；真重複取消 Order 409 候選 SHA `45b0285` 真 PG PASS | OPEN：其他 409／CAS、原生 HTTP |
 | C-09 | GET `/synthetic/carts/{cart_id}/operations/{attempt}` | 隔離 PASS | 唯讀 Validator 核對歷史 WorldOperation、Protected Commit Source／Commit Receipt、ReadAdmission 與快照，重建 200 或確定不存在的 409 候選；固定 SHA `20be55a` 另修補歷史 Cart／Order 的跨 Cart ID 重綁，真 PG/mTLS CI PASS | OPEN：客戶端原生 200／409、競態與故障路徑 |
 | M-01 | POST `/store/carts` | 隔離 PASS | 尚未執行 Native 建立 | OPEN：200／400／404／409 |
 | M-02 | GET `/store/carts/{id}` | 隔離 PASS | 尚未執行 Native 讀取 | OPEN：200／400／404／409 |
