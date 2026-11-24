@@ -960,8 +960,15 @@ def create_fixed_executor_app(*, executor) -> FastAPI:
                 sqlstate = getattr(exc, "sqlstate", None)
                 if not isinstance(sqlstate, str) or not re.fullmatch(r"[0-9A-Z]{5}", sqlstate):
                     sqlstate = None
+                # PostgreSQL's first-line error identifies only a SQL object;
+                # never print its query, DETAIL, HINT or connection string.
+                object_match = re.fullmatch(
+                    r"permission denied for (?:table|sequence|function) ([a-z_][a-z0-9_]*)",
+                    str(exc).splitlines()[0] if str(exc) else "",
+                )
                 print("G3B_EXECUTOR_FAIL_CLOSED " + json.dumps({
                     "class": type(exc).__name__, "code": sqlstate, "reason": reason,
+                    "denied_object": object_match.group(1) if object_match else "redacted",
                 }, sort_keys=True), flush=True)
             raise HTTPException(status_code=503, detail="fixed_executor_unverifiable") from exc
 
