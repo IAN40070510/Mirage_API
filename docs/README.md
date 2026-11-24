@@ -1,5 +1,7 @@
 # 工具說明文件索引
 
+[Mirage 獨立安裝與驗收](standalone.md)。外部消費者的組裝程式、資料持久化及相容性測試不在本倉庫維護；歷史整合測試紀錄僅作當時證據保存。
+
 想知道某個工具做什麼、需要哪些資料、怎麼使用，可以從下面的表格找到說明。各份文件也會交代設定方式、檢查方法、授權，以及哪些部分還沒有實作。
 
 首次使用請先看[安裝與第一次使用](getting-started.md)；各節點分工見 [README 架構總覽](../README.md#系統架構)，部署組裝、快取及錯誤分支詳見 [詳細架構與執行邊界](architecture.md)。
@@ -19,15 +21,13 @@
 | Profile 整體撤銷 | `src/deception/world/projection_registry.py`、`admission.py`、`postgres_admission.py` | [一般／緊急墓碑、控制邊界與驗證](profile-revocation.md) |
 | Medusa 原生購物車映射 | `src/deception/domains/ecommerce/medusa_cart_http.py`、`medusa_cart_projection.py` | [原生路由、金額、匿名投影與隔離驗收](medusa-carts.md) |
 | 原生資源時間 | `src/deception/domains/ecommerce/native_time.py` | [UTC 格式、單調時間與歷史拒絕](medusa-carts.md) |
-| Gateway 部署組裝與已核准注入點 | `integrations/msdss/gateway_bootstrap.py` | [預設觀察政策、秘密檔與外部變更](gateway-bootstrap.md) |
-| Gateway 原版框架相容性環境 | `integrations/msdss/requirements.compatibility-test.txt` | [隔離版本清單與驗收邊界](gateway-bootstrap.md) |
 | 脫敏封裝與版本化資料庫更新 | `tools/package_runtime.py`、`tools/apply_migrations.py` | [操作邊界、輸入與驗證](runtime-operations.md) |
 | 匿名合成購物車與訂單 | `src/deception/domains/ecommerce/carts.py`、`cart_http.py` | [cart.id、訪客狀態、下單與取消](carts.md) |
 | 原生 Medusa 購物車範圍審查 | 固定來源與獨立 scoped Profile | [合成契約與原生接線的差異](medusa-cart-integration-review.md) |
 | 合成庫存預留與取消 | `src/deception/domains/ecommerce/inventory.py` | [交易、冪等與結果恢復](inventory.md) |
 | Session 世界映射與讀取准入 | `src/deception/world/session.py` | [Session、epoch 與 Watermark](world-runtime.md) |
 | Medusa 身份與匿名唯讀分組 | `src/deception/security/medusa_identity.py`、`anonymous_identity.py` | [驗證介面與啟用範圍](trusted-session.md) |
-| Trusted Session 部署與 Gateway | `src/deception/security/trusted_deployment.py`、`integrations/msdss/` | [JWS 接線、Replay 與限制](trusted-session.md) |
+| Trusted Session 驗章與 Replay | `src/deception/security/trusted_deployment.py` | [原生可信接收、拒絕與限制](trusted-session.md) |
 | 共用模型與資料交換 | `src/deception/common/` | [嚴格型別、隔離範圍與通用資料投影](common-data.md) |
 | Synthetic World Runtime | `src/deception/world/` | [WorldScope、Snapshot、CAS 與 ResponseAdmission](world-runtime.md) |
 | 實作進度追蹤 | `docs/implementation-progress.md` | [目前完成項目、驗證紀錄與下一步](implementation-progress.md) |

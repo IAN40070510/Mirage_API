@@ -80,6 +80,6 @@ python tools/check_documentation.py
 python -m pytest -q
 ```
 
-未設定專用 `MIRAGE_POSTGRES_TEST_DSN` 時，資料庫案例會明確 skip；不要指向真實 Medusa 資料庫。GitHub Actions 會提供獨立 PostgreSQL 跑資料庫案例及 Node 固定向量。需要實際 MSDSS checkout／Medusa 服務的整合案例仍明確 skip，其測試條件見[證據矩陣](conformance-evidence.md)。
+未設定專用 `MIRAGE_POSTGRES_TEST_DSN` 時，資料庫案例會明確 skip；不要指向真實 Medusa 資料庫。GitHub Actions 可提供獨立 PostgreSQL 跑資料庫案例及 Node 固定向量。外部消費者的整合案例不屬於 Mirage 的安裝前提；本倉庫的 Medusa 隔離案例仍需服務環境，詳見[證據矩陣](conformance-evidence.md)。
 
 自有程式採 Apache-2.0，依賴、固定來源與模型授權見[授權表](licensing.md)。不提供真實付款、配送、退款、任意 Medusa 路由、正式攻擊偵測器或 L3 真實資料匯入。MSDSS 正式導流、TLS 與秘密管理由部署整合處理，本應用不自動修改其他服務。
