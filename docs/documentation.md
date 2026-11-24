@@ -57,6 +57,6 @@
 
 ## World DB ADR v0.2 契約文件同步（僅在 ADR 分支啟用檢查）
 
-`python tools/check_documentation.py` 除了函式 docstring／工具指南／本地 Markdown Link，亦會在 `docs/adr/MIR-SEC-WORLD-001-world-db-trust-boundary.md` 存在時核對 ADR、[Decision Log](security/world-db/decisions-log.md)、[Verification Plan](security/world-db/verification-plan.md) 的 v0.2 關鍵測試 ID 與 **NOT_RUN**，確認索引存在、Freeze v1／`MIR-SEC-WORLD-001 OPEN`／`MSDSS P2 NO-GO` 不被誤標成 PASS。這是文件一致性靜態檢查，不取代真 PostgreSQL ACL／Race／Object Storage／Restore 的未來驗收。
+`python tools/check_documentation.py` 除了函式 docstring／工具指南／本地 Markdown Link，亦會在 `docs/adr/MIR-SEC-WORLD-001-world-db-trust-boundary.md` 存在時核對 ADR、[Decision Log](security/world-db/decisions-log.md)、[Verification Plan](security/world-db/verification-plan.md) 的 v0.2 關鍵測試 ID 與 **NOT_RUN**，確認索引存在、Freeze v1／`MIR-SEC-WORLD-001 OPEN`／`外部端權限驗收 NO-GO` 不被誤標成 PASS。這是文件一致性靜態檢查，不取代真 PostgreSQL ACL／Race／Object Storage／Restore 的未來驗收。
 
 **v0.2 World DB 靜態合約檢查的邊界**：包含三層 Protocol baseline／Owner adoption／native conformance 標記、34 個強制測試 ID（`WORLD-RECOVERY-03` 是不可獨立 PASS 的群組索引）、Verification Plan 所有 `WORLD-*` 主要測試列的 ID 唯一性與 `NOT_RUN`。`NOT_RUN` 不表示前置條件已滿足；正式安全測試應另保存 `BLOCKED`／`PASS`／`FAIL`／`STALE` 的固定 SHA、Migration、DB Role、實際結果、Owner 與 Evidence Link。現行文件 checker **不執行**授權、並行、Restore 或傳輸測試，也**不提供安全測試狀態升級**；未來改為接受 PASS/BLOCKED 時，必須先建立 Evidence 驅動的狀態轉移與稽核，不能只放寬字串驗證。

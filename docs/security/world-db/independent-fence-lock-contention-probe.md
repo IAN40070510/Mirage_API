@@ -21,4 +21,4 @@ Isolated container `mir-sec-world001-fence-pg`, independent volume `mir-sec-worl
 - Full independent verifier and evidence-based BD-05 release.
 - A lab-only RELEASED fixture must never be treated as an approved restore-release event.
 
-**MIR-SEC-WORLD-001 OPEN / MSDSS P2 NO-GO / trusted send OFF.**
+**MIR-SEC-WORLD-001 OPEN / 外部端權限驗收 NO-GO / trusted send OFF.**
