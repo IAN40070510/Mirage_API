@@ -14,7 +14,7 @@
 
 ResourceIdentityProvider 只解析固定路由前綴上、資料庫已登記的合成 ID，拒絕跨部署、到期、舊 epoch、封存與緊急撤銷。已提供但無效的顧客憑證不會降級。持有資源 ID 的人能操作該合成資源，故 ID 需保密並避免進入不必要的日誌。這個能力不證明帳號所有權，不授予真實 Medusa 資料權限。
 
-每張合成購物車使用獨立 World，不自動合併到 Medusa 顧客帳號或其他購物車。MSDSS 原始碼與真實商店保持既有邊界；Mirage adapter 透過既有 dispatcher 注入介面接線。
+每張合成購物車使用獨立 World，不自動合併到 Medusa 顧客帳號或其他購物車。外部判定服務原始碼與真實商店保持既有邊界；Mirage adapter 透過既有 dispatcher 注入介面接線。
 
 ## 設定與輸入輸出
 
