@@ -33,3 +33,14 @@ def test_container_copy_sources_exist_in_standalone_checkout():
         sources = [part for part in line.split()[1:-1] if not part.startswith("--")]
         for source in sources:
             assert (root / source).exists(), source
+
+def test_checkout_contains_no_consumer_assembly_modules():
+    """阻止已移交給呼叫端的整合組裝目錄重新進入獨立服務。"""
+    root = Path(__file__).resolve().parents[1]
+    assembly = root / "integrations"
+    files = [
+        path.relative_to(root).as_posix()
+        for path in assembly.rglob("*")
+        if path.is_file() and "__pycache__" not in path.parts
+    ]
+    assert files == []
