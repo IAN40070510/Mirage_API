@@ -405,6 +405,27 @@ def _gateway() -> None:
             "operation_id": "createGuestCart", "outcome": "fail_closed",
             "second_protected_creation": False, "native_business_response": False,
         }, sort_keys=True))
+        # 真 HTTP／mTLS 路徑下，重複 JSON 欄位與 Client 偽造庫存均需在
+        # Executor 原始 Proof 檢查拒絕，不能建立額外 Cart 或從外部選初始世界。
+        for case, invalid_body in (
+                ("duplicate-json", b'{"idempotency_key":"x","idempotency_key":"y"}'),
+                ("client-inventory", b'{"inventory":{"sku-1":999}}')):
+            denied_id = "g3b-ci-cart-deny-" + case
+            invalid_create = gateway.build_request(
+                "POST", origin + "/synthetic/carts", content=invalid_body,
+                headers={"x-request-id": denied_id,
+                         "content-type": "application/json"},
+            )
+            invalid_create.headers["x-trusted-session"] = _sign(
+                key, fingerprint=fingerprint_httpx_request(invalid_create, denied_id),
+                session="g3b-ci-cart-creator", mode="cart",
+            )
+            if gateway.send(invalid_create).status_code != 503:
+                raise RuntimeError("g3b_ci_cart_invalid_body_not_denied:" + case)
+        print("G3B_ROUTE_CART_CREATION_INVALID_BODY_DENIED " + json.dumps({
+            "operation_id": "createGuestCart", "cases": 2,
+            "native_business_response": False,
+        }, sort_keys=True))
         # C-02：同樣透過真 Gateway→Cart Executor→獨立唯讀 Validator，
         # 只能查驗與既有派生 Cart Session 相符的原生成功 JSON 候選。
         cart_request_id = "g3b-ci-cart-get-200"
@@ -493,6 +514,7 @@ def _gateway() -> None:
     print("G3B_GATEWAY_PASS unsigned_routes=20/20 inventory_commit=1 inventory_read_200=1 "
           "inventory_operation_200=1 inventory_absence_409=1 unknown_operation=503 "
           "synthetic_409=1 cart_create_200=1 cart_cross_receipt_key=denied "
+          "cart_invalid_body=2_denied "
           "cart_read_200=1 medusa_400=1 medusa_404=1 "
           "replay=denied anonymous=denied "
           "execution_network=unreachable trusted_send=off")
@@ -557,7 +579,7 @@ def _audit(root: Path) -> None:
                 "reserveSyntheticInventory": 2,
                 "getSyntheticInventory": 2,
                 "getSyntheticOperation": 2,
-                "createGuestCart": 2,
+                "createGuestCart": 4,
                 "getGuestCart": 1,
                 "PostCartsIdLineItems": 2,
         }:
