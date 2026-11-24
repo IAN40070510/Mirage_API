@@ -88,8 +88,8 @@ I-03 已增加經真 PG CI 驗證的獨立候選投影路徑：
 WorldOperation＋Commit Receipt＋ReadAdmission，重建固定 `200` 操作結果。
 目前仍缺正式客戶端 HTTP、未知操作的可信 409 與完整 G4/G5，
 不能因這項候選而把 I-03 當成正式完成。
-包含百分比編碼 SKU 的 URI 相容測試仍
-未解決；ReadAdmission 子切面已在固定 SHA `49fc6ed8` 的
+標準 percent-encoded SKU 的額外相容測試正在隔離分支驗收，ReadAdmission
+子切面先前已在固定 SHA `49fc6ed8` 的
 [真 PostgreSQL CI](https://github.com/IAN40070510/Mirage_API/actions/runs/45185402530)
 通過，但完整 GET 回應仍 OPEN。
 
@@ -101,10 +101,12 @@ Session Epoch／Key 撤銷時固定失敗；**只有真缺 SKU** 可以建立 40
 **I-04 UTF-8 SKU 路徑一致性修補（2026-11-24）**：可信 GET Decoder、
 獨立 Snapshot Projector 與 Verifier 的 mTLS 候選交接共用
 `decode_verified_inventory_sku_path()`。已核准的原始 UTF-8 SKU（例如
-`品項+特別:版`）不再在後段被誤判為不支援；`%` 路徑編碼、分隔符、
-控制字元、`.`／`..`、非 UTF-8 與超長名稱仍固定拒絕。這只是既有
-原始 Path 規則的跨角色一致性，不代表一般瀏覽器的 percent-encoded
-URI 已通過相容驗收，也沒有開啟正式 HTTP Send。
+`品項+特別:版`）不再在後段被誤判為不支援。後續隔離修補允許
+`%E5%93%81...` 這種 RFC3986 唯一正規 SKU 編碼及 `%20` 空白，
+保留原始編碼字串於不可變 Proof，以防 Executor 將另一種等價 Path
+重新綁定 Receipt；仍拒絕 `%2F`、百分比 ASCII 別名、混編、雙重編碼、
+分隔符、控制字元、`.`／`..`、無效 UTF-8 與過長名稱。
+此路徑尚待真 PG/mTLS CI 回歸，也沒有開啟正式 HTTP Send。
 **C-02／C-07 Cart／Order GET 200 候選（本輪待真 CI）**：Cart Executor
 回傳固定 `cart_read_admitted`、`read_admission_id`、World Generation／版本／Hash；
 獨立 Validator 的 `POST /internal/v1/project-cart-read` 只收 UUID4 Receipt，

@@ -96,6 +96,14 @@ Verifier 解碼、獨立 Read Source Projector、mTLS Validator Client 現在共
 `success`。**I-04 原始 UTF-8 候選相容子項 PASS**；標準 Client
 percent-encoded URL 與原生 Client HTTP 200／409、G4/G5/G6 仍 OPEN。
 
+**I-04 正規 percent-encoded URL 候選（隔離分支待真 CI）**：新增固定
+RFC3986 編碼 SKU 解析（例如中文 `%E5...`、空格 `%20`），Verifier 將
+原始 bytes 形式寫入不可變 Operation Proof，Executor 拒絕把同一 SKU
+另一種 URL 表示重新綁回 Receipt；受保護 Projector 與獨立 Validator
+仍按解碼後 SKU 比對來源。拒絕 `%2F`、ASCII 編碼別名、雙重編碼、
+大小寫歧義、混合編碼與無效 UTF-8。尚待實體 PG/mTLS CI 與
+Client 原生 HTTP 完整成功／拒絕測試，**不能先簽 G3b**。
+
 | G3b 子門檻 | 獨立實測結果 | 正式簽收 |
 | --- | --- | --- |
 | 真 HTTPS Gateway→Verifier→Executor、互異 Client CA、拒絕重播／竄改 | 隔離 CI PASS | 僅實驗室傳輸子項 PASS |
@@ -115,7 +123,7 @@ percent-encoded URL 與原生 Client HTTP 200／409、G4/G5/G6 仍 OPEN。
 | I-01 | POST `/synthetic/inventory/reservations` | 隔離 PASS | 受保護 reserve；單一 Receipt Commit；真 Handler `unknown_synthetic_sku` 409 候選四服務 PASS | OPEN：200、CAS conflict／其他 409、原生 HTTP |
 | I-02 | POST `/synthetic/inventory/reservations/{reservation_id}/cancel` | 隔離 PASS | 受保護 cancel；409 候選能力已有固定 Handler，個別情境未真容器逐條實測 | OPEN：200、CAS conflict／其他 409、原生 HTTP |
 | I-03 | GET `/synthetic/operations/{attempt}` | 隔離 PASS | 固定 UUID4／空 Body Proof → ReadAdmission；獨立 Validator 核對 WorldOperation、Commit Receipt、Snapshot／Epoch／Key，重建歷史 200 或確定不存在的 409 候選；固定 SHA `88d286f` 真 PG/mTLS CI PASS | OPEN：客戶端原生 200／409、競態與故障路徑 |
-| I-04 | GET `/synthetic/inventory/{sku}` | 隔離 PASS | 固定 SKU／空 Body Proof → Executor ReadAdmission → 獨立 Validator 200 成功／真正缺 SKU 409 候選；SHA `c1769b9` 補齊原始 UTF-8 SKU 三段一致性，真 PG/mTLS CI PASS | OPEN：百分比編碼 URI、客戶端原生 200／409、G4 Send |
+| I-04 | GET `/synthetic/inventory/{sku}` | 隔離 PASS | 固定 SKU／空 Body Proof → Executor ReadAdmission → 獨立 Validator 200 成功／真正缺 SKU 409 候選；SHA `c1769b9` 原始 UTF-8 三段一致性真 PG/mTLS CI PASS；正規百分比編碼候選待真 CI | OPEN：Client 原生 200／409、編碼完整相容、G4 Send |
 | C-01 | POST `/synthetic/carts` | 隔離 PASS | 受保護 Creator→衍生 Cart | OPEN：200／409、原始成功封套 |
 | C-02 | GET `/synthetic/carts/{cart_id}` | 隔離 PASS | 受保護 ReadAdmission＋來源 ID；新增 Validator 按同 Receipt 的派生 Cart、目前 Snapshot 重建 200 JSON 候選，待本 SHA 真 PG／四服務 CI | OPEN：409 來源、客戶端原生 HTTP |
 | C-03 | POST `/synthetic/carts/{cart_id}/line-items` | 隔離 PASS | 受保護 add；409 候選固定 Handler 存在，個別情境尚待真容器測試 | OPEN：200、其餘 409、原生 HTTP |

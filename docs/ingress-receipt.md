@@ -35,7 +35,11 @@ claims, receipt_id = verifier.verify_with_receipt(
 `normalized` 必須是 Verifier 直接取得的 `NormalizedRequest`，不能由 Runtime
 宣稱為「已驗證 JSON」。`derive_verified_operation()` 從固定的 synthetic
 Inventory／Cart OpenAPI 路由與原始 request method/path 導出唯一 Operation，
-要求 raw_path 與解碼後路徑一致、禁止 percent-encoding 路由別名與非空 query。
+除 I-04 固定 SKU 外要求 raw_path 與解碼後路徑一致，禁止 percent-encoding
+路由別名與非空 query。I-04 僅允許未編碼 UTF-8 或唯一 RFC3986 標準 SKU 編碼
+（例如 `%E5%93%81`），禁止編碼 ASCII 別名、`%2F`、雙重編碼及混用編碼；
+不可變 Operation Proof 保存**真正原始**編碼路徑，Executor 須逐 byte 比對，
+不得將相同解碼 SKU 的另一種表示形式代入原 Receipt。
 若 Signature 綁定的 Request Fingerprint 與這份原始快照不一致，Receipt Writer
 在 Replay/Receipt 同一交易內拒絕，JTI 消費也回滾。
 
@@ -93,7 +97,8 @@ Cart／Order／Operation 路徑與可信 Creator Lineage，不能由 Runtime
 原始 GET 的空 Body／SKU 或 UUID4，再由同 Receipt 產生受保護 ReadAdmission。
 內部 mTLS Executor 可回報來源的版本與 Hash，**不會**回報庫存或操作結果，
 不具有可直接傳送的原生 HTTP 200／409。此增量的真 PostgreSQL 驗收與
-URL 百分比編碼 SKU 相容性仍是 OPEN。
+URL 百分比編碼 SKU 的固定合約候選測試在隔離分支增量實作中；仍待真 PG
+及 mTLS CI，原生 Client HTTP 與 G4 Sender 依舊 OPEN。
 **上述 primitive 尚未成為 mTLS 的 HTTP 業務 RPC**；當前
 `create_sealed_app()` 的 execute endpoint 依舊回 503。
 格式不合法但需要 409／400／404 的請求尚無可 Promote 的獨立拒絕證據，

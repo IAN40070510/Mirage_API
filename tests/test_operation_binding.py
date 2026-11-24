@@ -2,6 +2,7 @@
 
 from dataclasses import replace
 import json
+from urllib.parse import unquote
 from uuid import uuid4
 
 import pytest
@@ -204,6 +205,42 @@ def test_inventory_reads_derive_exact_get_without_rpc_selected_resource(path, op
     with pytest.raises(OperationBindingError, match="operation_or_resource_denied"):
         decode_verified_inventory_read(replace(proof, operation_id="reserveSyntheticInventory"),
                                        raw_path=request.raw_path, raw_body=b"")
+
+
+@pytest.mark.parametrize("encoded,sku", [
+    ("%E5%93%81%E9%A0%85+%E7%89%B9%E5%88%A5:%E7%89%88", "品項+特別:版"),
+    ("sku%20with%20space", "sku with space"),
+    ("%F0%9F%93%A6", "📦"),
+])
+def test_inventory_sku_accepts_only_canonical_client_url_encoding(encoded, sku):
+    """I-04 標準 HTTP URL 只能以唯一 percent 編碼綁回相同 SKU／Proof。"""
+    path = "/synthetic/inventory/" + sku
+    raw_path = ("/synthetic/inventory/" + encoded).encode("ascii")
+    request = replace(original_request(path=path, method="GET"),
+                      raw_path=raw_path, body=b"")
+    proof = derive_verified_operation(request)
+    assert proof.request_path == "/synthetic/inventory/" + encoded
+    assert decode_verified_inventory_read(
+        proof, raw_path=raw_path, raw_body=b"").resource_id == sku
+    with pytest.raises(OperationBindingError, match="snapshot_mismatch"):
+        decode_verified_inventory_read(proof, raw_path=path.encode("utf-8") + b"x", raw_body=b"")
+    with pytest.raises(OperationBindingError, match="snapshot_mismatch"):
+        decode_verified_inventory_read(proof, raw_path=path.encode("utf-8"), raw_body=b"")
+
+
+@pytest.mark.parametrize("encoded", [
+    "sku%2Falternate", "sku%2falternate", "sku%2e", "%73ku", "sku%25",
+    "sku%3Fother", "sku%23other", "sku%252F", "sku%", "%E5%93",
+    "%e5%93%81", "品%E9%A0%85", "sku%5Cbackslash", "..%2e",
+])
+def test_inventory_sku_rejects_alias_invalid_utf8_and_encoded_separators(encoded):
+    """I-04 拒絕路徑拆分、大小寫、雙重編碼、混搭與截斷 UTF-8。"""
+    path = "/synthetic/inventory/" + unquote(encoded)
+    request = replace(original_request(path=path, method="GET"),
+                      raw_path=("/synthetic/inventory/" + encoded).encode("utf-8"), body=b"")
+    with pytest.raises(OperationBindingError):
+        proof = derive_verified_operation(request)
+        decode_verified_inventory_read(proof, raw_path=request.raw_path, raw_body=b"")
 
 
 @pytest.mark.parametrize("path", [

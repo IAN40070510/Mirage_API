@@ -81,6 +81,10 @@ class FixedExecutorMTLSClient:
                               raw_path: bytes, raw_body: bytes,
                               original_request: NormalizedRequest | None = None) -> dict[str, object]:
         """只傳不可變 Receipt／原始 Bytes，單次 mTLS 呼叫且拒絕回應操作錯綁。"""
+        from deception.security.operation_binding import (
+            OperationBindingError, decode_verified_inventory_sku_path,
+        )
+
         payload = {"receipt_id": str(receipt_id),
                    "raw_path_b64": base64.b64encode(raw_path).decode("ascii"),
                    "raw_body_b64": base64.b64encode(raw_body).decode("ascii")}
@@ -123,14 +127,19 @@ class FixedExecutorMTLSClient:
                      or result.get("contract_revision") != "medusa-cart-1"))
                 or (result["kind"] == "cart_created" and result.get("status") != "committed")):
             raise ProtectedRpcConfigurationError("fixed_executor_result_binding_mismatch")
+        valid_sku_path = False
+        if result["kind"] == "inventory_read_admitted" and operation_id == "getSyntheticInventory":
+            try:
+                valid_sku_path = decode_verified_inventory_sku_path(raw_path) == result.get("resource_id")
+            except OperationBindingError:
+                pass
         if result["kind"] == "inventory_read_admitted" and (
                 operation_id not in {"getSyntheticInventory", "getSyntheticOperation"}
                 or not isinstance(result.get("resource_id"), str)
                 or not isinstance(raw_path, bytes) or not isinstance(raw_body, bytes)
                 or raw_body != b""
-                or raw_path != (
-                    b"/synthetic/inventory/" if operation_id == "getSyntheticInventory"
-                    else b"/synthetic/operations/") + result["resource_id"].encode("utf-8")
+                or (not valid_sku_path if operation_id == "getSyntheticInventory"
+                    else raw_path != b"/synthetic/operations/" + result["resource_id"].encode("utf-8"))
                 or not all(isinstance(result.get(field), str)
                            and re.fullmatch(r"[0-9a-f]{32}", result[field]) is not None
                            for field in ("read_admission_id", "world_generation_id"))

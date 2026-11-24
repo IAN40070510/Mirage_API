@@ -345,6 +345,8 @@ def test_fixed_inventory_409_has_independent_validator_and_promotable_source(
 @pytest.mark.parametrize("path,operation,expected_available", [
     ("/synthetic/inventory/sku-1", "getSyntheticInventory", 4),
     ("/synthetic/inventory/品項+特別:版", "getSyntheticInventory", 7),
+    ("/synthetic/inventory/%E5%93%81%E9%A0%85+%E7%89%B9%E5%88%A5:%E7%89%88",
+     "getSyntheticInventory", 7),
     ("/synthetic/inventory/unknown-sku", "getSyntheticInventory", None),
     ("/synthetic/operations/" + str(uuid4()), "getSyntheticOperation", None),
 ])
@@ -358,6 +360,7 @@ def test_inventory_get_receipt_admits_real_protected_read_without_native_http(
     import psycopg
     from fastapi.testclient import TestClient
     from deception.security.protected_rpc import create_fixed_executor_app
+    from urllib.parse import unquote
 
     dsn, now = isolated_test_dsn, int(time.time())
     binding = SessionBinding(environment_id="inventory-get-http", deployment_id="isolated",
@@ -365,7 +368,9 @@ def test_inventory_get_receipt_admits_real_protected_read_without_native_http(
     store = SyntheticInventory(dsn)
     snapshot = store.resolve(binding, {"inventory": {"sku-1": 4, "品項+特別:版": 7}, "reservations": {}},
                              now=now, ttl=120)
-    request = replace(original_request(path=path, method="GET"), body=b"")
+    decoded_path = unquote(path)
+    request = replace(original_request(path=decoded_path, method="GET"),
+                      raw_path=path.encode("utf-8"), body=b"")
     proof = derive_verified_operation(request)
     receipt, jti = uuid4(), uuid4().hex
     with psycopg.connect(dsn) as connection:
@@ -399,6 +404,12 @@ def test_inventory_get_receipt_admits_real_protected_read_without_native_http(
         executor.read_verified_inventory_http(**{**args, "raw_body": b"{}"})
     with pytest.raises(OperationBindingError, match="snapshot_mismatch"):
         executor.read_verified_inventory_http(**{**args, "raw_path": request.raw_path + b"x"})
+    if request.raw_path != decoded_path.encode("utf-8"):
+        # 即使 URL 解出相同 SKU，Receipt 只授權真正收到的 raw-path bytes。
+        with pytest.raises(OperationBindingError, match="snapshot_mismatch"):
+            executor.read_verified_inventory_http(**{
+                **args, "raw_path": decoded_path.encode("utf-8"),
+            })
     with pytest.raises(ProtectedGrantError):
         executor.read_verified_inventory_http(**{
             **args, "binding": binding.model_copy(update={"session_id": uuid4().hex}),
@@ -416,7 +427,7 @@ def test_inventory_get_receipt_admits_real_protected_read_without_native_http(
         assert accepted.status_code == 200  # 內部 RPC；不是客戶端原生 200。
         outcome = accepted.json()
         assert outcome["kind"] == "inventory_read_admitted" and outcome["operation"] == operation
-        assert outcome["resource_id"] == path.rsplit("/", 1)[-1]
+        assert outcome["resource_id"] == decoded_path.rsplit("/", 1)[-1]
         assert outcome["world_generation_id"] == snapshot.scope.world_generation_id
         assert outcome["state_version"] == 1 and outcome["state_hash"] == snapshot.state_hash
         assert "status_code" not in outcome and "body" not in outcome
@@ -433,7 +444,7 @@ def test_inventory_get_receipt_admits_real_protected_read_without_native_http(
             assert projected.status_code == 200 and projected.source.kind == "snapshot"
             assert projected.source.state_hash == snapshot.state_hash
             assert json.loads(projected.body_bytes) == {
-                "sku": path.rsplit("/", 1)[-1], "available": expected_available,
+                "sku": decoded_path.rsplit("/", 1)[-1], "available": expected_available,
                 "state_version": 1,
             }
         else:

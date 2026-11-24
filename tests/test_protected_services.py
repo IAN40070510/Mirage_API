@@ -979,12 +979,17 @@ def test_g3b_executor_rpc_refuses_ambiguous_result_json(monkeypatch):
             asyncio.run(client.execute_receipt(**args))
 
 
-@pytest.mark.parametrize("operation", ["getSyntheticInventory", "getSyntheticOperation"])
-def test_g3b_executor_inventory_get_response_is_admission_metadata_only(monkeypatch, operation):
+@pytest.mark.parametrize("operation,sku", [
+    ("getSyntheticInventory", "sku-1"),
+    ("getSyntheticInventory", "品項+特別:版"),
+    ("getSyntheticOperation", None),
+])
+def test_g3b_executor_inventory_get_response_is_admission_metadata_only(monkeypatch, operation, sku):
     """驗證 Verifier 僅接受精確 I-03／I-04 來源欄位，拒絕混入偽造 HTTP 回應。"""
     from deception.security import protected_rpc
+    from urllib.parse import quote
 
-    resource = "sku-1" if operation == "getSyntheticInventory" else str(uuid4())
+    resource = sku if sku is not None else str(uuid4())
     response = {"kind": "inventory_read_admitted", "operation": operation,
                 "resource_id": resource, "read_admission_id": uuid4().hex,
                 "world_generation_id": uuid4().hex, "state_version": 1, "state_hash": "a" * 64}
@@ -1013,9 +1018,10 @@ def test_g3b_executor_inventory_get_response_is_admission_metadata_only(monkeypa
     monkeypatch.setattr(protected_rpc.httpx, "AsyncClient", StubAsyncClient)
     client = object.__new__(FixedExecutorMTLSClient)
     client._origin, client._tls = "https://executor.invalid:8444", object()
+    path = (("/synthetic/inventory/" + quote(resource, safe="!$&'()*+,-._~:;=@"))
+            if sku is not None else "/synthetic/operations/" + resource)
     args = dict(receipt_id=uuid4(), operation_id=operation,
-                raw_path=("/synthetic/inventory/" if resource == "sku-1" else
-                          "/synthetic/operations/").encode() + resource.encode(), raw_body=b"")
+                raw_path=path.encode("ascii"), raw_body=b"")
     assert asyncio.run(client.execute_receipt(**args)) == response
     for invalid in ({"status_code": 200}, {"body_b64": "e30="}, {"trusted_send": "enabled"},
                     {"state_version": True}, {"state_version": 0},

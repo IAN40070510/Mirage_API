@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import re
+from urllib.parse import quote, unquote_to_bytes
 from uuid import UUID
 
 from deception.api.fingerprint import fingerprint_request
@@ -80,19 +81,42 @@ class VerifiedInventoryRead:
 
 
 def decode_verified_inventory_sku_path(raw_path: bytes) -> str:
-    """統一驗證 I-04 原始 UTF-8 SKU 路徑，拒絕編碼、分隔符與控制字元歧義。"""
+    """只接受 I-04 原始 UTF-8 或唯一 RFC3986 percent-encoded SKU，拒絕別名。
+
+    客戶端可按 URL 規則編碼非 ASCII／空白，但不得 percent-encode 一般
+    ASCII 字元、混用 raw UTF-8 與編碼、編碼分隔符、雙重編碼或改變大小寫。
+    此處只解碼受限 SKU，不改寫原始 Fingerprint 或賦予 HTTP Send 權。
+    """
     if not isinstance(raw_path, bytes):
         raise OperationBindingError("verified_inventory_read_operation_or_resource_denied")
-    matched = re.fullmatch(rb"/synthetic/inventory/([^/%?#\x00-\x1f\x7f]{1,512})", raw_path)
-    if matched is None or matched[1] in {b".", b".."}:
+    prefix = b"/synthetic/inventory/"
+    matched = re.fullmatch(rb"/synthetic/inventory/([^/?#\x00-\x1f\x7f]{1,1536})", raw_path)
+    if matched is None:
+        raise OperationBindingError("verified_inventory_read_operation_or_resource_denied")
+    decoded = unquote_to_bytes(matched[1])
+    if (re.fullmatch(rb"[^/%?#\\\x00-\x1f\x7f]{1,512}", decoded) is None
+            or decoded in {b".", b".."}):
         raise OperationBindingError("verified_inventory_read_operation_or_resource_denied")
     try:
-        sku = matched[1].decode("utf-8", errors="strict")
+        sku = decoded.decode("utf-8", errors="strict")
     except UnicodeDecodeError as exc:
         raise OperationBindingError("verified_inventory_read_operation_or_resource_denied") from exc
-    if len(sku) > 128:
+    canonical_encoded = quote(sku, safe="!$&'()*+,-._~:;=@").encode("ascii")
+    if (len(sku) > 128 or raw_path not in {
+            prefix + decoded, prefix + canonical_encoded}):
         raise OperationBindingError("verified_inventory_read_operation_or_resource_denied")
     return sku
+
+
+def _inventory_sku_path_matches_decoded(raw_path: bytes, decoded_path: str) -> bool:
+    """核對真正原始 URL bytes 與 ASGI 解碼路徑一致且沒有替代編碼別名。"""
+    prefix = "/synthetic/inventory/"
+    if not isinstance(decoded_path, str) or not decoded_path.startswith(prefix):
+        return False
+    try:
+        return decode_verified_inventory_sku_path(raw_path) == decoded_path[len(prefix):]
+    except OperationBindingError:
+        return False
 
 
 def decode_verified_inventory_read(
@@ -351,14 +375,17 @@ def decode_verified_inventory_mutation(
 def derive_verified_operation(request: NormalizedRequest) -> VerifiedOperationBinding:
     """使用固定 Synthetic API 規格及實際接收的原始 path 導出唯一 Operation。
 
-    不接受百分比編碼路徑、非空 query、斜線或方法替代、重複／重疊路由。
+    I-04 只容許唯一 RFC3986 SKU 編碼；其他路由不接受百分比別名，
+    所有路由拒絕非空 query、斜線或方法替代、重複／重疊路由。
     Medusa 只建立來自固定 SHA-256 審核來源的 Operation 證據；目前仍不得
     用它直接執行 Native Handler 或生成未核准的 400／404 回應。
     """
     if not isinstance(request, NormalizedRequest):
         raise OperationBindingError("verified_operation_requires_http_snapshot")
     if (not isinstance(request.path, str) or not isinstance(request.raw_path, bytes)
-            or request.raw_path != request.path.encode("utf-8")
+            or (request.raw_path != request.path.encode("utf-8")
+                and (request.method != "GET" or not _inventory_sku_path_matches_decoded(
+                    request.raw_path, request.path)))
             or not isinstance(request.method, str)
             or not re.fullmatch(r"[A-Z]+", request.method)
             or request.query_string or request.query
@@ -393,5 +420,11 @@ def derive_verified_operation(request: NormalizedRequest) -> VerifiedOperationBi
         path_template=path_template,
         request_fingerprint=fingerprint_request(request),
         request_body_sha256=hashlib.sha256(request.body).hexdigest(),
-        request_path=request.path, request_content_type=content_type,
+        # I-04 ASGI path 已解碼；Proof 必須留存唯一原始 URL 編碼形式，
+        # Executor 才能逐 byte 拒絕同 SKU 的不同 raw-path 重新綁定。
+        request_path=(request.raw_path.decode("utf-8")
+                      if (operation_id == "getSyntheticInventory" and
+                          request.raw_path != request.path.encode("utf-8"))
+                      else request.path),
+        request_content_type=content_type,
     )
