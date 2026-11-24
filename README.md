@@ -1,8 +1,10 @@
 **P2 原始判定／最終發送授權原生安全增量（待正式簽收）：**
-[專用 PostgreSQL ledger、最小權限／未知 COMMIT／Session epoch 驗收](docs/p2-original-assessment-store.md)。
-這只提供 opt-in 元件測試與稽核入口，不授予正式欺敵開關許可。
+[外部原判定查回介面與 Session epoch 安全邊界](docs/p2-original-assessment-store.md)。
+專用 PostgreSQL ledger 及其 migration／ACL 驗收已移交外部消費者；本分支僅保留原生驗章、嚴格拒絕與發送准入修補，不授予正式欺敵開關許可。
 
 # Mirage_API — 通用型 API 誘餌平台
+
+Mirage 為可獨立安裝、執行及測試的合成 API 服務；世界、Session、Grant、Replay、受保護傳輸與原生稽核均由 Mirage 管理。外部安全偵測、分類、客戶端簽章及其原判定持久化由獨立消費端負責，無須安裝其他專案。參見 [獨立運作與驗收](docs/standalone.md)。本次去耦不是 G3b～G6 發布簽核：正式傳輸仍須各 Gate 驗收核准。
 
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 
@@ -55,7 +57,6 @@ docker compose up --build -d --wait --wait-timeout 180
 
 使用者已要求擴充 Medusa `/store` 映射。首組原生購物車、品項增刪改、完成及訂單查詢已接到同一合成引擎，原生回應不包含內部 CAS／hash 欄位；來源、金額轉換、匿名有效投影與支援範圍見[原生映射說明](docs/medusa-carts.md)。這項能力須另外明確啟用，尚未切換 staging，也不代表整套 Store／付款配送 API 都已支援。
 
-Gateway 的部署組裝器位於 Mirage 的 `integrations/msdss/gateway_bootstrap.py`：把固定身份服務、匿名分組及資源 ID 綁定接到既有 dispatcher，秘密由分開的檔案提供，預設維持 observe-only。外部 Gateway lifespan 的五行注入點已經使用者核准，套用至本機與 SSH 原始碼；未啟用設定、安裝依賴或切換 staging。依賴差異與啟用邊界見[部署組裝說明](docs/gateway-bootstrap.md)。
 
 ## 系統架構
 
