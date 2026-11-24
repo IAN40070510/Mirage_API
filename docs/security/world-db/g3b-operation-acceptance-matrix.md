@@ -322,6 +322,41 @@ runtime_acl=denied trusted_send=off` 均成立；
 `success`。**只簽收這個 Creator→Derived 跨 Scope 負面子案例**；
 其他錯 Scope、可信 409、原生 Client HTTP、G4～G6 仍 OPEN。
 
+**C-03～C-05 同一 Derived Cart 真四服務連續操作（2026-11-24，隔離候選 PASS）**：
+固定提交 [`2cd34d1`](https://github.com/IAN40070510/Mirage_API/commit/2cd34d1c9aca6b804ad42b2550927f0a678d641a)
+的 [四服務 CI #79](https://github.com/IAN40070510/Mirage_API/actions/runs/45356443474)
+先證實 C-01 新建、C-02 原生候選讀取成功的 Derived Cart，以新 Receipt／
+JWS／JTI／資源能力，真 POST C-03 加入 `known` Variant 兩件。
+Executor 的真 Commit Source 及獨立唯讀 Validator 重建
+`addGuestCartItem` 200 候選，`state_version=2`、數量 2、單價 100、
+總額 200、Commit Attempt／Digest／State Hash／World Generation／
+精確 Envelope Hash 均相符，JWS 重播 403。
+
+固定提交 [`f414ecc`](https://github.com/IAN40070510/Mirage_API/commit/f414ecc9f7574ec6591cd94792da104913a625c9)
+的 [四服務 CI #80](https://github.com/IAN40070510/Mirage_API/actions/runs/45356848007)
+在相同 Derived Cart 版本 2，改送不存在的 `not-in-catalog` Variant，
+真 Handler 回 `rejected`，獨立 `protected_world_rejection_sources`
+還原固定 `unknown_synthetic_variant` 409 候選；內部控制面仍是 200，
+**非客戶端收到業務 409**。
+
+固定提交 [`2d75dfe`](https://github.com/IAN40070510/Mirage_API/commit/2d75dfe6bc49dbdfc18f91f087a40330c66f6df9)
+的 [四服務 CI #81](https://github.com/IAN40070510/Mirage_API/actions/runs/45357206947)
+`success` 再沿用上一張**已核對的加入候選**中的 Item ID，使用獨立有效
+JWS／Receipt，依版本 2→3 執行 C-04 update 數量 3、金額 300，再依版本
+3→4 執行 C-05 delete、Item 清空、金額 0。兩次真 mTLS／真 PostgreSQL
+Commit／獨立 Validator 都逐欄核對受保護來源、Digest、版本、Hash、
+Scope、精確封套，且兩次 Replay 都得到 403；
+`G3B_GATEWAY_PASS cart_derived_add_200=1 cart_derived_unknown_variant_409=1
+cart_derived_update_200=1 cart_derived_remove_200=1`，
+`G3B_CONTAINER_AUDIT_PASS services=4 networks=3 ... trusted_send=off`。
+真 PG 稽核要求 Commit Source 合計 4（庫存 1＋Cart 3）、
+受保護 Rejection Source 合計 2（庫存 1＋Cart 1）；同版
+[PG 契約 CI 45357214783](https://github.com/IAN40070510/Mirage_API/actions/runs/45357214783)
+和 [容器 CI 45357214771](https://github.com/IAN40070510/Mirage_API/actions/runs/45357214771)
+均 `success`。**只簽收這組 Derived Cart 加入／未知商品拒絕／更新／刪除的隔離子項**；
+所有其他 CAS／缺 Item／競態／未知 COMMIT／客戶端原生 HTTP 仍 OPEN，
+不能解除 G4～G6 Gate。
+
 | G3b 子門檻 | 獨立實測結果 | 正式簽收 |
 | --- | --- | --- |
 | 真 HTTPS Gateway→Verifier→Executor、互異 Client CA、拒絕重播／竄改 | 隔離 CI PASS | 僅實驗室傳輸子項 PASS |
@@ -337,6 +372,7 @@ runtime_acl=denied trusted_send=off` 均成立；
 | C-01 不合法原始建立 Body／Client 偽造初始庫存 | [四服務 #73](https://github.com/IAN40070510/Mirage_API/actions/runs/45335393441) 真 JWS/mTLS 的重複 JSON Key／額外 Inventory 兩次 `503`，真 DB 無新增 Cart | **兩個輸入拒絕隔離子項 PASS**；完整 Body／業務 409／正式原生 HTTP OPEN |
 | C-02 新建 Derived Cart 的 ReadAdmission／Validator 200 | [四服務 #75](https://github.com/IAN40070510/Mirage_API/actions/runs/45355053879) 新建真 Cart→新 Session GET→真 PG Read Source／精確 Hash 200 候選及 JWS Replay 拒絕 PASS | **C-02 即時派生讀取候選隔離 PASS**；可信缺 Cart 409、正式客戶端 HTTP OPEN |
 | C-02 Creator 對 Derived Cart 跨 Scope 的讀取拒絕 | [四服務 #77](https://github.com/IAN40070510/Mirage_API/actions/runs/45355731172) 真 mTLS 有效 Creator JWS／新 Cart ID → 不透明 503；真 PG 無 Creator Read Source；Derived Scope 200 候選保持 PASS | **單一跨 Scope 負面子項隔離 PASS**；其他 Scope／409／原生 HTTP OPEN |
+| C-03～C-05 真 Derived Cart 的連續更新與拒絕 | [四服務 #79](https://github.com/IAN40070510/Mirage_API/actions/runs/45356443474) C-03 200；[#80](https://github.com/IAN40070510/Mirage_API/actions/runs/45356848007) 未知 Variant 真來源 409 候選；[#81](https://github.com/IAN40070510/Mirage_API/actions/runs/45357206947) C-04/C-05 200，版本 1→2→3→4／精確 Hash／Replays PASS | **指定 200／409 候選四服務隔離 PASS**；其他錯誤／CAS 並行／原生 Client HTTP OPEN |
 | 正式獨立服務部署、Secret Mount／網路來源、無共享憑證可見性 | 一次性 Docker CI 真容器角色隔離 PASS | 隔離環境 PASS；staging／production 正式部署 OPEN |
 | 20 條正式原生 2xx／4xx Payload 與獨立來源／Validator | 20 條均未具全套證據 | OPEN |
 | G3b 整體解封並移交 G4 Sender | 前述兩項未完成 | **NO-GO** |
@@ -349,9 +385,9 @@ runtime_acl=denied trusted_send=off` 均成立；
 | I-04 | GET `/synthetic/inventory/{sku}` | 隔離 PASS | 固定 SKU／空 Body Proof → Executor ReadAdmission → 獨立 Validator 200 成功／真正缺 SKU 409 候選；SHA `c1769b9` 原始 UTF-8、SHA `4e2cecc` 正規 percent URL 候選真 PG/mTLS PASS | OPEN：Client 原生 200／409、全 URL 相容、G4 Send |
 | C-01 | POST `/synthetic/carts` | 隔離 PASS | Creator→Derived `cart_creation` 200 候選、獨立 Validator／Promotion／Creator Admission 真 PG（`f4ef309`）；真四服務實際 JWS／mTLS／Cart-only DB Role 候選 200、越權更新拒絕（`8f3aea4`、CI #68），跨 Receipt 重用鍵 fail-closed（`43d11ba`、CI #71），雙重 JSON Key／Client 偽造 Inventory 拒絕（`2fe7fb0`、CI #73），來源漂移在 Grant 拒絕 | OPEN：Client 原生 200／409、未知 COMMIT、Grant→Sender 競態、正式部署 |
 | C-02 | GET `/synthetic/carts/{cart_id}` | 隔離 PASS | 受保護 ReadAdmission＋來源 ID；獨立 Validator 按派生 Cart、目前 Snapshot 重建 200 候選，真 PG 測試 PASS；C-01 真建 Cart→新 Derived Session 立刻 GET（`a79df7c`、四服務 #75）PASS；原 Creator 對 Derived ID 跨 Scope 讀取 fail-closed（`91ba701`、四服務 #77）PASS | OPEN：409 來源、其餘跨 Scope 負面、客戶端原生 HTTP |
-| C-03 | POST `/synthetic/carts/{cart_id}/line-items` | 隔離 PASS | 受保護 add 200 Commit／Validator 候選真 PG PASS；真未知 Variant／庫存不足 409 候選 SHA `45b0285` 真 PG PASS；舊版本 CAS fail-closed SHA `c62c79c` 真 PG PASS | OPEN：其餘 409／CAS 並行、原生 HTTP |
-| C-04 | POST `/synthetic/carts/{cart_id}/line-items/{item_id}` | 隔離 PASS | 受保護 update；真品項 200、缺品項 409、重送與 Proof 防替換，SHA `bcb0c68` 真 PG PASS | OPEN：其他 409／CAS、原生 HTTP、實體部署 |
-| C-05 | DELETE `/synthetic/carts/{cart_id}/line-items/{item_id}` | 隔離 PASS | 受保護 remove；真品項 200、重複刪除 409、重送與 Proof 防替換，SHA `bcb0c68` 真 PG PASS | OPEN：其他 409／CAS、原生 HTTP、實體部署 |
+| C-03 | POST `/synthetic/carts/{cart_id}/line-items` | 隔離 PASS | 受保護 add 200 Commit／Validator 候選真 PG PASS；真未知 Variant／庫存不足 409 候選 SHA `45b0285` 真 PG PASS；舊版本 CAS fail-closed SHA `c62c79c` 真 PG PASS；**C-01→C-02 新 Derived Cart 的四服務實體 200（`2cd34d1`、#79）＋未知 Variant 409 候選（`f414ecc`、#80）PASS** | OPEN：其餘 409／CAS 並行、原生 HTTP |
+| C-04 | POST `/synthetic/carts/{cart_id}/line-items/{item_id}` | 隔離 PASS | 受保護 update；真品項 200、缺品項 409、重送與 Proof 防替換，SHA `bcb0c68` 真 PG PASS；**新 Derived Cart 真四服務版本 2→3 200 候選（`2d75dfe`、#81）PASS** | OPEN：其他 409／CAS、原生 HTTP、正式部署 |
+| C-05 | DELETE `/synthetic/carts/{cart_id}/line-items/{item_id}` | 隔離 PASS | 受保護 remove；真品項 200、重複刪除 409、重送與 Proof 防替換，SHA `bcb0c68` 真 PG PASS；**同 Derived Cart 真四服務版本 3→4 200 候選（`2d75dfe`、#81）PASS** | OPEN：其他 409／CAS、原生 HTTP、正式部署 |
 | C-06 | POST `/synthetic/carts/{cart_id}/complete` | 隔離 PASS | 受保護 complete 200 候選真 PG PASS；真空 Cart／已完成 Cart 409 候選 SHA `45b0285` 真 PG PASS | OPEN：其他 409／CAS、原生 HTTP |
 | C-07 | GET `/synthetic/orders/{order_id}` | 隔離 PASS | 獨立 Validator 按受保護派生 Order、ReadAdmission 重建 200，SHA `eb118a7` 真 PG PASS | OPEN：409 來源、原生 HTTP |
 | C-08 | POST `/synthetic/orders/{order_id}/cancel` | 隔離 PASS | 受保護 cancel_order 200 候選真 PG PASS；真重複取消 Order 409 候選 SHA `45b0285` 真 PG PASS | OPEN：其他 409／CAS、原生 HTTP |
