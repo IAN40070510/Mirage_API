@@ -698,7 +698,8 @@ def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolat
                 "protected_http_operation_bindings,protected_world_read_sources,"
                 "read_admissions,session_heads,session_world_bindings,"
                 "generation_controls,trusted_key_revocations,world_snapshots,"
-                "world_commit_receipts,protected_world_commit_sources,synthetic_resources TO {}"
+                "world_commit_receipts,protected_world_commit_sources,synthetic_resources,"
+                "protected_cart_creations,guest_cart_creations TO {}"
             ).format(sql.Identifier(projector_login)))
 
         def cleanup_validator_role():
@@ -716,6 +717,12 @@ def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolat
             assert isolated_validator.execute(
                 "SELECT has_table_privilege('protected_medusa_rejection_sources','INSERT')"
             ).fetchone() == (False,)
+            assert isolated_validator.execute(
+                "SELECT has_table_privilege('protected_cart_creations','SELECT'),"
+                "has_table_privilege('protected_cart_creations','INSERT'),"
+                "has_table_privilege('guest_cart_creations','SELECT'),"
+                "has_table_privilege('guest_cart_creations','INSERT')"
+            ).fetchone() == (True, False, True, False)
         validator_dsn_file = tmp_path / "native-validator.dsn"
         validator_dsn_file.write_text(projector_dsn, encoding="utf-8")
         assert create_native_validator_service({
