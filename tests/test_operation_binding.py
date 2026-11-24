@@ -10,7 +10,8 @@ import pytest
 from deception.api.ingress import NormalizedRequest
 from deception.security.operation_binding import (
     OperationBindingError, decode_verified_cart_creation, decode_verified_cart_mutation,
-    decode_verified_cart_read, decode_verified_medusa_read, decode_verified_inventory_read,
+    decode_verified_cart_read, decode_verified_medusa_creation, decode_verified_medusa_read,
+    decode_verified_inventory_read,
     decode_verified_inventory_mutation,
     derive_verified_operation, _pinned_medusa_operations,
 )
@@ -334,6 +335,39 @@ def test_cart_creator_does_not_accept_duplicate_json_or_extra_world_settings():
                 derive_verified_operation(request), receipt_id=uuid4(),
                 raw_path=request.raw_path, raw_body=body,
             )
+
+
+def test_medusa_creator_only_accepts_fixed_empty_cart_and_receipt_derived_keys():
+    """M-01 僅原生固定匿名空購物車，重綁 Body／Operation 或注入庫存一律拒絕。"""
+    raw = b'{"email":"ci@example.invalid","items":[]}'
+    request = replace(original_request(path="/store/carts"), body=raw)
+    proof = derive_verified_operation(request)
+    fixed_context = {"region_id": "reg_mirage_usd", "sales_channel_id": "sc_mirage",
+                     "email": "ci@example.invalid", "metadata": {}}
+    args = dict(proof=proof, receipt_id=uuid4(), raw_path=request.raw_path,
+                raw_body=raw, expected_native_context=fixed_context)
+    first = decode_verified_medusa_creation(**args)
+    assert first == decode_verified_medusa_creation(**args)
+    assert first.idempotency_key.version == first.commit_attempt_id.version == 4
+    assert first.idempotency_key != first.commit_attempt_id
+    for body in (
+        b'{"email":"ci@example.invalid","items":[{"variant_id":"known","quantity":1}]}',
+        b'{"email":"attacker@example.invalid"}',
+        b'{"email":"ci@example.invalid","inventory":{"sku-1":999}}',
+        b'{"email":"ci@example.invalid","email":"attacker@example.invalid"}',
+        b'{"currency_code":"eur","email":"ci@example.invalid"}',
+    ):
+        altered = replace(request, body=body)
+        new_proof = derive_verified_operation(altered)
+        with pytest.raises(OperationBindingError, match="body_unapproved"):
+            decode_verified_medusa_creation(
+                new_proof, receipt_id=args["receipt_id"], raw_path=altered.raw_path,
+                raw_body=body, expected_native_context=fixed_context,
+            )
+    with pytest.raises(OperationBindingError, match="snapshot_mismatch"):
+        decode_verified_medusa_creation(**{**args, "raw_body": b"{}"})
+    with pytest.raises(OperationBindingError, match="snapshot_mismatch"):
+        decode_verified_medusa_creation(**{**args, "proof": replace(proof, operation_id="GetCartsId")})
 
 
 @pytest.mark.parametrize("path,operation", [

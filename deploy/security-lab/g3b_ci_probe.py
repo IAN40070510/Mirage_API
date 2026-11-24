@@ -467,6 +467,71 @@ def _gateway() -> None:
             "validated_native_status": 200, "source": "protected_cart_creations",
             "authorization_scope": "creator", "native_business_response": False,
         }, sort_keys=True))
+        # M-01 最小原生建立只接受部署固定 Email 與空 items；原生成功
+        # Payload 須由另一個獨立 Validator 從 Creator→Derived Cart Lineage 投影。
+        medusa_create_id = "g3b-ci-medusa-create"
+        medusa_create_body = b'{"email":"ci@example.invalid","items":[]}'
+        medusa_create = gateway.build_request(
+            "POST", origin + "/store/carts", content=medusa_create_body,
+            headers={"x-request-id": medusa_create_id, "content-type": "application/json",
+                     "x-publishable-api-key": "pk_g3b_ci_only"},
+        )
+        medusa_create.headers["x-trusted-session"] = _sign(
+            key, fingerprint=fingerprint_httpx_request(medusa_create, medusa_create_id),
+            session="g3b-ci-cart-creator", mode="cart",
+        )
+        medusa_created = gateway.send(medusa_create)
+        if medusa_created.status_code != 200:
+            raise RuntimeError("g3b_ci_medusa_create_rpc_unverifiable:" + str(medusa_created.status_code))
+        medusa_created_json = medusa_created.json()
+        medusa_created_meta = medusa_created_json.get("executor_result", {})
+        medusa_created_projection = medusa_created_json.get("native_projection", {})
+        medusa_created_source = medusa_created_projection.get("source", {})
+        medusa_created_bytes = base64.b64decode(
+            medusa_created_projection.get("body_b64", ""), validate=True,
+        )
+        medusa_created_payload = json.loads(medusa_created_bytes)
+        if (medusa_created_meta.get("kind") != "cart_created"
+                or medusa_created_meta.get("operation") != "PostCarts"
+                or medusa_created_meta.get("status") != "committed"
+                or medusa_created_projection.get("status_code") != 200
+                or medusa_created_source.get("kind") != "cart_creation"
+                or medusa_created_source.get("resource_id") != medusa_created_meta.get("resource_id")
+                or medusa_created_source.get("commit_attempt_id")
+                    != medusa_created_meta.get("commit_attempt_id")
+                or medusa_created_source.get("derived_session_id") == "g3b-ci-cart-creator"
+                or medusa_created_projection.get("scope", {}).get("session_id")
+                    != "g3b-ci-cart-creator"
+                or medusa_created_projection.get("delivery")
+                    != "candidate_only_no_send_authorization"
+                or medusa_created_payload.get("cart", {}).get("id")
+                    != medusa_created_meta.get("resource_id")
+                or medusa_created_payload.get("cart", {}).get("items") != []
+                or medusa_created_payload.get("cart", {}).get("currency_code") != "usd"
+                or medusa_created_payload.get("cart", {}).get("email") != "ci@example.invalid"
+                or "state_hash" in medusa_created_payload
+                or medusa_created_projection.get("envelope_hash") != response_hashes(
+                    200, read_headers, medusa_created_bytes)[0]
+                or gateway.send(medusa_create).status_code != 403):
+            raise RuntimeError("g3b_ci_medusa_create_validator_source_mismatch")
+        print("G3B_ROUTE_MEDUSA_CREATE_CANDIDATE " + json.dumps({
+            "operation_id": "PostCarts", "validated_native_status": 200,
+            "source": "protected_cart_creations", "authorization_scope": "creator",
+            "native_business_response": False, "native_validator_200": True,
+        }, sort_keys=True))
+        forbidden_body = b'{"email":"ci@example.invalid","items":[{"variant_id":"known","quantity":1}]}'
+        forbidden_request_id = "g3b-ci-medusa-create-items-denied"
+        forbidden_create = gateway.build_request(
+            "POST", origin + "/store/carts", content=forbidden_body,
+            headers={"x-request-id": forbidden_request_id, "content-type": "application/json",
+                     "x-publishable-api-key": "pk_g3b_ci_only"},
+        )
+        forbidden_create.headers["x-trusted-session"] = _sign(
+            key, fingerprint=fingerprint_httpx_request(forbidden_create, forbidden_request_id),
+            session="g3b-ci-cart-creator", mode="cart",
+        )
+        if gateway.send(forbidden_create).status_code != 503:
+            raise RuntimeError("g3b_ci_medusa_unapproved_initial_items_not_denied")
         # 新 JWS／JTI／Request ID 是另一張 Receipt，不可借用已提交的 Cart Source。
         duplicate_request_id = "g3b-ci-cart-cross-receipt-denied"
         cross_receipt = gateway.build_request(
@@ -1293,7 +1358,8 @@ def _gateway() -> None:
           "derived_order_get_200=1 derived_order_cancel_200=1 "
           "cart_historical_operation_200=1 cart_missing_operation_409=1 "
           "inventory_cancel_200=1 inventory_repeat_cancel_409=1 "
-          "medusa_400=1 medusa_404=1 medusa_get_cart_source=1 "
+          "medusa_400=1 medusa_404=1 medusa_create_candidate_200=1 "
+          "medusa_create_items=denied medusa_get_cart_source=1 "
           "medusa_get_order_source=1 medusa_get_cart_candidate_200=1 "
           "medusa_get_order_candidate_200=1 medusa_bad_key=denied "
           "replay=denied anonymous=denied "

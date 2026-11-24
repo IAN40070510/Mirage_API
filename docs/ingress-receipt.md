@@ -80,6 +80,9 @@ Fingerprint／publishable key／資源 Capability／native_context 建立可信
 ReadAdmission。唯讀 Validator 可另從相同 Receipt、目前快照與 SHA 固定
 Medusa 契約投影 Cart／Order 原生 200 **候選**，再由 Verifier 精確核對來源及
 封套；並未將回應交給 Client，也沒有執行 Medusa 原生交易或授權發送。
+M-01 最小原生空 Cart 建立現以 Creator Receipt、固定 Native Context／Publishable
+Key、精確原始 Body 與不可變提交鍵生成 Derived Cart；獨立 200 Validator
+及跨 Scope 來源對帳在隔離實作中，待真 PG／四服務 CI，非空初始品項仍拒絕。
 `protected_rpc.create_direct_verifier_app()` 現提供隔離的 ASGI 原始 HTTP
 Verifier 接入點，搭配 mTLS 專用 Gateway 憑證及單一 IngressTx 生成此證據；
 但尚未完成正式 Gateway 拓樸／Executor 呼叫，也不能透過這個入口獲得 Send。

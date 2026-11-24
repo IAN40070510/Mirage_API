@@ -17,7 +17,8 @@ from deception.security.key_revocation import PostgresTrustedKeyRevocations
 from deception.security.operation_binding import (
     VerifiedCartRead, VerifiedInventoryRead, VerifiedOperationBinding,
     decode_verified_cart_creation, decode_verified_cart_mutation,
-    decode_verified_cart_read, decode_verified_medusa_read, decode_verified_inventory_read,
+    decode_verified_cart_read, decode_verified_medusa_creation,
+    decode_verified_medusa_read, decode_verified_inventory_read,
     decode_verified_inventory_mutation,
 )
 
@@ -107,6 +108,15 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
                     "status": created.outcome.status}
         deadline = min(row[6], row[7] + 20)
         if proof.platform == "medusa-native-cart":
+            if proof.operation_id == "PostCarts":
+                created = self.create_verified_medusa_cart_http(
+                    receipt_id=receipt_id, creator=binding, proof=proof,
+                    raw_path=raw_path, raw_body=raw_body, original_http=original_http,
+                )
+                return {"kind": "cart_created", "operation": proof.operation_id,
+                        "resource_id": created.binding.resource_id,
+                        "commit_attempt_id": str(created.outcome.commit_attempt_id),
+                        "status": created.outcome.status}
             if proof.method == "GET":
                 return self._read_verified_medusa_http(
                     receipt_id=receipt_id, proof=proof, binding=binding,
@@ -175,6 +185,50 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
                 "status": result.status, "state_version": result.committed_state_version,
                 "state_hash": result.committed_state_hash,
                 "result_digest": result.result_digest}
+
+    def create_verified_medusa_cart_http(
+        self, *, receipt_id: UUID, creator: SessionBinding,
+        proof: VerifiedOperationBinding, raw_path: bytes, raw_body: bytes,
+        original_http: NormalizedRequest | None,
+    ) -> object:
+        """M-01 最小原生建立：真 HTTP／Key 與固定匿名 Context，原子寫入 Creator Lineage。
+
+        僅接受空 items、與部署相同的 USD／Email；原始 Header／Body 由
+        Verifier JWS Fingerprint 鎖定，Receipt 派生穩定 Commit ID。
+        本路徑只建立受保護業務來源，不交付 Client 或解封 Sender。
+        """
+        from deception.domains.ecommerce.carts import SyntheticCarts
+        from deception.security.operation_binding import OperationBindingError
+
+        if (not isinstance(self._world_store, SyntheticCarts)
+                or not self._medusa_publishable_key
+                or not isinstance(original_http, NormalizedRequest)
+                or not isinstance(self._cart_initial_state, dict)
+                or not isinstance(self._cart_initial_state.get("native_context"), dict)):
+            raise OperationBindingError("verified_medusa_creation_context_missing")
+        candidate = replace(original_http, method=proof.method, path=proof.request_path,
+                            raw_path=raw_path, body=raw_body)
+        if not hmac.compare_digest(fingerprint_request(candidate), proof.request_fingerprint):
+            raise OperationBindingError("verified_medusa_creation_fingerprint_denied")
+        keys = [value for name, value in candidate.headers
+                if name.lower() == "x-publishable-api-key"]
+        idempotency_headers = [value for name, value in candidate.headers
+                               if name.lower() == "idempotency-key"]
+        if (len(keys) != 1
+                or not hmac.compare_digest(keys[0], self._medusa_publishable_key)
+                or idempotency_headers or candidate.query_string or candidate.query):
+            raise OperationBindingError("verified_medusa_creation_key_or_query_denied")
+        intent = decode_verified_medusa_creation(
+            proof, receipt_id=receipt_id, raw_path=raw_path, raw_body=raw_body,
+            expected_native_context=self._cart_initial_state["native_context"],
+        )
+        return self.create_cart(
+            receipt_id=receipt_id, creator=creator,
+            request_fingerprint=proof.request_fingerprint,
+            idempotency_key=intent.idempotency_key,
+            commit_attempt_id=intent.commit_attempt_id,
+            creation_digest=intent.creation_digest, ttl=3600,
+        )
 
     def _read_verified_medusa_http(
         self, *, receipt_id: UUID, proof: VerifiedOperationBinding,

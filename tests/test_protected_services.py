@@ -1337,6 +1337,74 @@ def test_g3b_medusa_read_requires_pinned_local_contract(tmp_path):
         )
 
 
+def test_g3b_medusa_creation_validator_denies_scope_and_source_rebind(monkeypatch):
+    """M-01 狀態 200 及 Cross-Scope Creator Source 必須獨立固定，偽造不能交接。"""
+    from deception.security import protected_rpc
+
+    receipt, attempt = uuid4(), uuid4()
+    cart = "cart_" + uuid4().hex
+    creator, derived = uuid4().hex, uuid4().hex
+    source = {"kind": "cart_creation", "derived_session_id": derived,
+              "derived_world_generation_id": uuid4().hex,
+              "resource_id": cart, "commit_attempt_id": str(attempt),
+              "state_version": 1, "state_hash": "b" * 64}
+    body = json.dumps({"cart": {"id": cart, "items": []}},
+                      sort_keys=True, separators=(",", ":")).encode()
+    reply = {"receipt_id": str(receipt), "operation_id": "PostCarts",
+             "scope": {"environment_id": "env", "deployment_id": "deploy",
+                       "session_id": creator, "world_generation_id": uuid4().hex},
+             "request_fingerprint": "a" * 64, "status_code": 200,
+             "headers": [["content-type", "application/json"]],
+             "body_b64": base64.b64encode(body).decode(),
+             "envelope_hash": response_hashes(200, (("content-type", "application/json"),), body)[0],
+             "source": source, "trusted_send": "disabled"}
+
+    class FakeCreationValidator:
+        """隔離模擬只由 Receipt 查回的原生 Validator 回覆。"""
+
+        def __init__(self, **kwargs):
+            """mTLS 傳輸不得讀取環境代理。"""
+            assert kwargs["trust_env"] is False
+
+        async def __aenter__(self):
+            """開始模擬連線。"""
+            return self
+
+        async def __aexit__(self, *_):
+            """結束模擬連線。"""
+            return False
+
+        async def post(self, url, *, json):
+            """RPC 不准由 Verifier 選擇原生回應內容。"""
+            assert url == "https://validator.invalid:8445/internal/v1/project-medusa-creation"
+            assert json == {"receipt_id": str(receipt)}
+            return httpx.Response(200, json=reply)
+
+    monkeypatch.setattr(protected_rpc.httpx, "AsyncClient", FakeCreationValidator)
+    client = object.__new__(FixedNativeValidatorMTLSClient)
+    client._origin, client._tls = "https://validator.invalid:8445", object()
+    args = dict(receipt_id=receipt, operation_id="PostCarts", resource_id=cart,
+                commit_attempt_id=str(attempt), request_fingerprint="a" * 64,
+                expected_environment_id="env", expected_deployment_id="deploy",
+                expected_session_id=creator)
+    assert asyncio.run(client.project_medusa_creation(**args))["delivery"] == (
+        "candidate_only_no_send_authorization"
+    )
+    for change in (
+        {"status_code": 409}, {"trusted_send": "enabled"},
+        {"source": {**source, "resource_id": "cart_" + uuid4().hex}},
+        {"source": {**source, "state_version": 2}},
+        {"scope": {**reply["scope"], "session_id": derived}},
+        {"request_fingerprint": "c" * 64}, {"send_authorized": True},
+    ):
+        before = deepcopy(reply)
+        reply.update(change)
+        with pytest.raises(ProtectedRpcConfigurationError, match="medusa_creation_binding_mismatch"):
+            asyncio.run(client.project_medusa_creation(**args))
+        reply.clear()
+        reply.update(before)
+
+
 def test_g3b_real_container_ci_has_explicit_isolation_and_no_sender():
     """真正容器驗收需隔離 DB／三網／四服務，不能把範本靜態測試冒充部署證據。"""
     root = Path(__file__).resolve().parents[1]

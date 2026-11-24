@@ -470,7 +470,7 @@ Rejection Source 合計 4。**僅這組 I-01→I-02 正向／重複取消候選�
 | C-07 | GET `/synthetic/orders/{order_id}` | 隔離 PASS | 獨立 Validator 按受保護派生 Order、ReadAdmission 重建 200，SHA `eb118a7` 真 PG PASS；**C-06 真生成的 Order，獨立 Resource Capability／ReadAdmission 200（`5205e2a`、四服務 #85）PASS** | OPEN：409 來源、原生 HTTP |
 | C-08 | POST `/synthetic/orders/{order_id}/cancel` | 隔離 PASS | 受保護 cancel_order 200 候選真 PG PASS；真重複取消 Order 409 候選 SHA `45b0285` 真 PG PASS；**同 Derived Order 真取消版本 6→7 200（`5205e2a`、四服務 #85）PASS** | OPEN：其他 409／CAS、原生 HTTP |
 | C-09 | GET `/synthetic/carts/{cart_id}/operations/{attempt}` | 隔離 PASS | 唯讀 Validator 核對歷史 WorldOperation、Protected Commit Source／Commit Receipt、ReadAdmission 與快照，重建 200 或確定不存在的 409 候選；固定 SHA `20be55a` 另修補歷史 Cart／Order 的跨 Cart ID 重綁，真 PG/mTLS CI PASS；**新 Derived Cart 真四服務歷史版本 2 200＋缺 UUIDv4 409（`fcf7f81`、#86）隔離 PASS** | OPEN：客戶端原生 200／409、競態與故障路徑 |
-| M-01 | POST `/store/carts` | 隔離 PASS | 尚未執行 Native 建立 | OPEN：200／400／404／409 |
+| M-01 | POST `/store/carts` | 隔離 PASS | 僅部署固定 USD／Email、空 items 的原始 HTTP→Executor Creator→Derived Cart、獨立 Validator Medusa 200 候選與 Promotion／Grant 再驗實作；**新 SHA 真 PG／四服務 CI 待驗**，其他原生 Body 拒絕 | OPEN：Client 200／400／404／409，非空 items、其他建立欄位與所有故障 |
 | M-02 | GET `/store/carts/{id}` | 隔離 PASS | 原生 GET→Receipt／Key／Capability→ReadAdmission，`eb2c6ce` 真 PG／四服務隔離 PASS；唯讀 Validator 固定契約 Cart 200 候選 `3230ffa`、真四服務 #94／PG17.6 隔離 PASS | OPEN：Client 200／400／404／409 |
 | M-03 | POST `/store/carts/{id}/line-items` | 隔離 PASS | 特定 400／404 受保護拒絕來源／獨立 Validator mTLS 封套比對 | OPEN：正式 Client HTTP 400／404、200／409、其餘拒絕情形 |
 | M-04 | POST `/store/carts/{id}/line-items/{line_id}` | 隔離 PASS | 尚未執行 Native update | OPEN：200／400／404／409 |

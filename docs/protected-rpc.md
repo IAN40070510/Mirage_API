@@ -71,7 +71,16 @@ Executor 僅回 `medusa_read_admitted` 的 ID／世代／版本／Hash，mTLS Cl
 Verifier 再逐欄核對原始 Fingerprint、Session／Generation、ReadAdmission、
 狀態版本／Hash、原生 Entity ID、封套 Hash，**只回 candidate-only 內部結果**。
 未掛載固定契約、規格 SHA 錯誤或兩服務來源不一致時固定拒絕；無 Client
-原生 HTTP 200 或任何 Send／Grant 權。相同 Receipt 再次直接呼叫
+原生 HTTP 200 或任何 Send／Grant 權。
+M-01 `POST /store/carts` 的最小原生建立另以 Creator Receipt、完整 HTTP
+Fingerprint／唯一 Publishable Key、固定 USD Region／Sales Channel／Email、
+空 `items` 和不含額外 `idempotency-key` 的請求為限。Executor 原子建立全新
+Derived Cart／Creator Lineage，Commit Key 僅由 Receipt 決定；獨立 Validator
+再以 SHA 固定的 Medusa `StoreCartResponse` 投影 200。跨 Creator→Derived
+的 Promotion／Grant 仍重查不可變來源、精確候選 Hash 與 Scope。非空初始品項、
+任意 Email／額外世界資料與自選提交鍵仍 503；**本增量候選尚待真 PG／mTLS CI**，
+且不允許 Client 原生回應或正式 Trusted Send。
+相同 Receipt 再次直接呼叫
 ReadAdmission 由不可變來源唯一約束固定拒絕，不應假裝可無條件重試；
 真正 JWS Replay 則在 Verifier 階段拒絕。Medusa M-03 另允許已固定
 `POST /store/carts/{id}/line-items` 的合法拒絕：錯誤 publishable key／

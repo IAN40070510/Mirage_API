@@ -133,9 +133,24 @@ class ProtectedNativeProjection:
     source: ResponseSource
 
 
+def _medusa_cart_creation_platform(cursor, receipt_id: UUID) -> bool:
+    """只從不可變 Operation Proof 區分合成 C-01 與原生 M-01 建立來源。"""
+    cursor.execute(
+        "SELECT platform,operation_id,method,path_template FROM protected_http_operation_bindings "
+        "WHERE receipt_id=%s", (receipt_id,),
+    )
+    route = cursor.fetchone()
+    if route == ("medusa-native-cart", "PostCarts", "POST", "/store/carts"):
+        return True
+    if route == ("synthetic-carts", "createGuestCart", "POST", "/synthetic/carts"):
+        return False
+    raise ProtectedGrantError("protected_cart_creation_platform_unapproved")
+
+
 def _verified_cart_creation(cursor, receipt_id: UUID, *, expected_scope: WorldScope | None = None,
                             expected_fingerprint: str | None = None,
                             expected_source: CartCreationSource | None = None,
+                            medusa: bool = False,
                             ) -> tuple[WorldScope, str, CartCreationSource, dict]:
     """從 Creator Receipt 與不可變 Lineage 獨立驗證派生世界的一次建立結果。
 
@@ -176,9 +191,10 @@ def _verified_cart_creation(cursor, receipt_id: UUID, *, expected_scope: WorldSc
            FROM protected_http_operation_bindings WHERE receipt_id=%s""", (receipt_id,),
     )
     proof = cursor.fetchone()
-    if (proof is None or proof[:4] != (
-            "synthetic-carts", "createGuestCart", "POST", "/synthetic/carts")
-            or proof[4:6] != (fingerprint, "/synthetic/carts")
+    route = (("medusa-native-cart", "PostCarts", "POST", "/store/carts") if medusa
+             else ("synthetic-carts", "createGuestCart", "POST", "/synthetic/carts"))
+    if (proof is None or proof[:4] != route
+            or proof[4:6] != (fingerprint, route[3])
             or not isinstance(proof[6], str)
             or proof[6].split(";", 1)[0].strip().lower() != "application/json"
             or not isinstance(proof[7], str)
@@ -281,10 +297,23 @@ def _verified_cart_creation(cursor, receipt_id: UUID, *, expected_scope: WorldSc
                                 state_hash=snapshot.state_hash)
     if expected_source is not None and source != expected_source:
         raise ProtectedGrantError("protected_cart_creation_source_mismatch")
-    return creator_scope, fingerprint, source, {
-        "cart": creation[1], "state_version": snapshot.version,
-        "state_hash": snapshot.state_hash, "commit_attempt_id": str(attempt),
-    }
+    if medusa:
+        from deception.domains.ecommerce.medusa_cart_projection import cart_view
+
+        context = snapshot.state.get("native_context")
+        catalog = snapshot.state.get("catalog")
+        if not isinstance(context, dict) or not isinstance(catalog, dict):
+            raise ProtectedGrantError("protected_medusa_creation_context_missing")
+        try:
+            payload = {"cart": cart_view(
+                creation[1], {**context, "catalog": catalog},
+            )}
+        except (ValueError, KeyError, TypeError, OverflowError) as exc:
+            raise ProtectedGrantError("protected_medusa_creation_projection_invalid") from exc
+    else:
+        payload = {"cart": creation[1], "state_version": snapshot.version,
+                   "state_hash": snapshot.state_hash, "commit_attempt_id": str(attempt)}
+    return creator_scope, fingerprint, source, payload
 
 
 class PostgresProtectedNativeProjector(_ProtectedConnection):
@@ -325,6 +354,39 @@ class PostgresProtectedNativeProjector(_ProtectedConnection):
                           separators=(",", ":")).encode("utf-8")
         return ProtectedNativeProjection(
             receipt_id=receipt_id, scope=scope, operation_id="createGuestCart",
+            request_fingerprint=fingerprint, status_code=200, headers=headers,
+            body_bytes=body, envelope_hash=response_hashes(200, headers, body)[0],
+            source=source,
+        )
+
+    def project_medusa_creation(self, receipt_id: UUID) -> ProtectedNativeProjection:
+        """M-01：唯讀 Validator 只從固定 Creator Lineage 重建原生空 Cart 200 候選。"""
+        if self._medusa_specification is None:
+            raise ProtectedGrantError("protected_medusa_creation_contract_not_configured")
+        if not isinstance(receipt_id, UUID) or receipt_id.version != 4:
+            raise ProtectedGrantError("protected_medusa_creation_receipt_invalid")
+        from referencing import Registry, Resource
+        from referencing.jsonschema import DRAFT4
+        from openapi_schema_validator import OAS30Validator
+
+        with self._connection() as connection:
+            with connection.cursor() as cursor:
+                scope, fingerprint, source, payload = _verified_cart_creation(
+                    cursor, receipt_id, medusa=True,
+                )
+        registry = Registry().with_resource(
+            "urn:mirage:medusa-contract", Resource.from_contents(
+                self._medusa_specification, default_specification=DRAFT4,
+            ),
+        )
+        schema = {"$ref": "urn:mirage:medusa-contract#/components/schemas/StoreCartResponse"}
+        if not OAS30Validator(schema, registry=registry).is_valid(payload):
+            raise ProtectedGrantError("protected_medusa_creation_contract_invalid")
+        headers = (("content-type", "application/json"),)
+        body = json.dumps(payload, ensure_ascii=False, sort_keys=True,
+                          separators=(",", ":")).encode("utf-8")
+        return ProtectedNativeProjection(
+            receipt_id=receipt_id, scope=scope, operation_id="PostCarts",
             request_fingerprint=fingerprint, status_code=200, headers=headers,
             body_bytes=body, envelope_hash=response_hashes(200, headers, body)[0],
             source=source,

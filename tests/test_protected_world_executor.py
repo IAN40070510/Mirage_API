@@ -17,6 +17,7 @@ from deception.world import (CartCreationSource, CommitSource, SnapshotSource,
                              PostgresProtectedWorldExecutor,
                              PostgresProjectionRegistry, ProtectedGrantError, SecurityErrorSource)
 from deception.world.session import SessionBinding
+from deception.world.models import WorldScope
 from deception.world.protected_native_http import PostgresProtectedNativeProjector
 from deception.world.transmission import response_envelope, response_hashes
 from deception.domains.ecommerce.carts import SyntheticCarts
@@ -1478,6 +1479,115 @@ def test_verified_cart_creator_http_mints_one_derived_world(isolated_test_dsn):
         _candidate(dsn, scope=creator_scope, source=projected.source,
                    receipt_id=receipt, fingerprint=proof.request_fingerprint,
                    body=projected.body_bytes)
+
+
+def test_medusa_creator_empty_cart_is_independently_projected_and_promotable(isolated_test_dsn):
+    """M-01 真 PG：原生空建立→唯一派生 Cart→唯讀 Validator 200→Creator Promotion。"""
+    import psycopg
+
+    dsn, now = isolated_test_dsn, int(time.time())
+    creator = SessionBinding(environment_id="medusa-create-http", deployment_id="isolated",
+                             session_id=uuid4().hex, session_epoch=1, access_mode="cart")
+    state = {"catalog": {"known": {"sku": "sku-1", "unit_price": 100}},
+             "inventory": {"sku-1": 5},
+             "native_context": {"region_id": "reg_mirage_usd", "sales_channel_id": "sc_mirage",
+                                "email": "ci@example.invalid", "metadata": {}}}
+    store = SyntheticCarts(dsn)
+    store.resolve(creator, {"catalog": state["catalog"], "inventory": state["inventory"],
+                            "reservations": {}}, now=now, ttl=180)
+    body = b'{"email":"ci@example.invalid","items":[]}'
+    request = replace(original_request(path="/store/carts"), body=body,
+                      headers=(("host", "mirage.test"), ("content-type", "application/json"),
+                               ("x-publishable-api-key", "pk_only_executor")))
+    proof = derive_verified_operation(request)
+    receipt, jti = uuid4(), uuid4().hex
+    with psycopg.connect(dsn) as connection:
+        connection.execute("INSERT INTO replay_entries VALUES ('gateway','mirage',%s,%s)",
+                           (jti, now + 120))
+        connection.execute(
+            """INSERT INTO ingress_receipts (
+                   receipt_id,issuer,audience,jti,key_id,environment_id,deployment_id,
+                   session_id,session_epoch,request_fingerprint,assessment_digest,
+                   claims_digest,verification_policy_version,token_issued_at,
+                   token_not_before,token_expires_at,access_mode)
+               VALUES (%s,'gateway','mirage',%s,'kid',%s,%s,%s,1,%s,%s,%s,
+                       'trusted-session-v1.1',%s,%s,%s,'cart')""",
+            (receipt, jti, creator.environment_id, creator.deployment_id,
+             creator.session_id, proof.request_fingerprint, digest("b"), digest("c"),
+             now - 5, now - 5, now + 90),
+        )
+        connection.execute(
+            """INSERT INTO protected_http_operation_bindings (
+                   receipt_id,platform,operation_id,method,path_template,
+                   request_fingerprint,request_body_sha256,request_path,request_content_type)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+            (receipt, proof.platform, proof.operation_id, proof.method, proof.path_template,
+             proof.request_fingerprint, proof.request_body_sha256,
+             proof.request_path, proof.request_content_type),
+        )
+    executor = PostgresProtectedWorldExecutor(
+        dsn, expected_login=_real_login(dsn), world_store=store,
+        cart_initial_state=state, medusa_publishable_key="pk_only_executor",
+    )
+    with pytest.raises(OperationBindingError, match="fingerprint_denied"):
+        executor.execute_verified_http(
+            receipt_id=receipt, raw_path=request.raw_path,
+            raw_body=b'{"email":"attacker@example.invalid"}', original_http=request,
+        )
+    outcome = executor.execute_verified_http(
+        receipt_id=receipt, raw_path=request.raw_path, raw_body=body, original_http=request,
+    )
+    assert outcome["kind"] == "cart_created" and outcome["operation"] == "PostCarts"
+    assert outcome["status"] == "committed"
+    source_path = (Path(__file__).resolve().parents[1]
+                   / "domains/ecommerce/inputs/sources/medusa/openapi.yaml")
+    projector = PostgresProtectedNativeProjector(
+        dsn, expected_login=_real_login(dsn), medusa_source=source_path,
+    )
+    projected = projector.project_medusa_creation(receipt)
+    payload = json.loads(projected.body_bytes)
+    creator_scope = store.inspect_binding(creator, now=now).scope
+    assert projected.scope == creator_scope and projected.operation_id == "PostCarts"
+    assert projected.status_code == 200 and projected.source.kind == "cart_creation"
+    assert projected.source.resource_id == outcome["resource_id"]
+    assert projected.source.commit_attempt_id == outcome["commit_attempt_id"]
+    assert payload["cart"]["id"] == outcome["resource_id"]
+    assert payload["cart"]["email"] == "ci@example.invalid"
+    assert payload["cart"]["items"] == []
+    assert set(payload) == {"cart"}
+    assert projected.source.derived_session_id != creator.session_id
+    assert _candidate(dsn, scope=projected.scope, source=projected.source,
+                      receipt_id=receipt, fingerprint=proof.request_fingerprint,
+                      body=projected.body_bytes) == 1
+    evidence = projection_evidence()
+    PostgresProjectionRegistry(dsn).ensure_registered_batch((evidence,))
+    ref = uuid4().hex
+    envelope = response_envelope(200, projected.headers, projected.body_bytes)
+    envelope_hash, body_hash, header_hash = response_hashes(
+        200, projected.headers, projected.body_bytes,
+    )
+    PostgresCandidateStore(dsn).put(creator_scope, ref, envelope, expires_at=now + 80)
+    assert PostgresCandidatePromoter(dsn, expected_login=_real_login(dsn)).promote(
+        receipt_id=receipt, scope=creator_scope, candidate_ref=ref,
+        request_fingerprint=proof.request_fingerprint, envelope_hash=envelope_hash,
+        immutable_body_hash=body_hash, semantic_headers_hash=header_hash,
+        evidence=evidence, source=projected.source,
+    ) == 1
+    authorized = PostgresProtectedAuthorizer(dsn, expected_login=_real_login(dsn)).grant(
+        operation_id=uuid4(), receipt_id=receipt, scope=creator_scope,
+        candidate_ref=ref, candidate_version=1,
+        authorization_revision="medusa-creation-candidate-only-v1",
+        authorization_deadline=now + 40, transmission_deadline=now + 50,
+        evidence=evidence,
+    )
+    assert authorized.source == projected.source
+    with pytest.raises(ProtectedGrantError, match="candidate_source_unverifiable"):
+        _candidate(dsn, scope=WorldScope(environment_id=creator.environment_id,
+                                        deployment_id=creator.deployment_id,
+                                        session_id=projected.source.derived_session_id,
+                                        world_generation_id=projected.source.derived_world_generation_id),
+                   source=projected.source, receipt_id=receipt,
+                   fingerprint=proof.request_fingerprint, body=projected.body_bytes)
 
 
 def test_verified_cart_get_requires_creator_lineage_and_original_receipt(isolated_test_dsn):

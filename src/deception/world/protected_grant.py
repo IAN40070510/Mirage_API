@@ -247,12 +247,14 @@ class PostgresCandidatePromoter(_ProtectedConnection):
             return cursor.fetchone() is not None
         if source.kind == "cart_creation":
             # 只允許特殊 Creator→Derived 建立鏈；Promotion/Grant 仍使用 Creator Scope。
-            from .protected_native_http import _verified_cart_creation
+            from .protected_native_http import _medusa_cart_creation_platform, _verified_cart_creation
 
             try:
+                medusa = _medusa_cart_creation_platform(cursor, receipt_id)
                 _, _, _, payload = _verified_cart_creation(
                     cursor, receipt_id, expected_scope=scope,
                     expected_fingerprint=fingerprint, expected_source=source,
+                    medusa=medusa,
                 )
             except (ProtectedGrantError, ValueError):
                 return False
@@ -421,13 +423,15 @@ class PostgresProtectedAuthorizer(_ProtectedConnection):
                     # C-01 唯一跨 Scope Source：Promotion 與 Grant 之間派生世界可能
                     # 前進／封存；不能僅憑之前的 immutable Candidate 批准過期 Cart。
                     from .models import CartCreationSource
-                    from .protected_native_http import _verified_cart_creation
+                    from .protected_native_http import _medusa_cart_creation_platform, _verified_cart_creation
 
                     try:
                         source = CartCreationSource.model_validate(promoted[7])
+                        medusa = _medusa_cart_creation_platform(cursor, receipt_id)
                         _, _, _, payload = _verified_cart_creation(
                             cursor, receipt_id, expected_scope=scope,
                             expected_fingerprint=receipt[6], expected_source=source,
+                            medusa=medusa,
                         )
                     except (ProtectedGrantError, ValueError) as exc:
                         raise ProtectedGrantError("cart_creation_grant_source_unverifiable") from exc

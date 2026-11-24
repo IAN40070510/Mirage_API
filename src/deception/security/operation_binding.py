@@ -264,6 +264,51 @@ def decode_verified_cart_creation(
     )
 
 
+def decode_verified_medusa_creation(
+    proof: VerifiedOperationBinding, *, receipt_id: UUID,
+    raw_path: bytes, raw_body: bytes, expected_native_context: dict,
+) -> VerifiedCartCreation:
+    """僅核准 M-01 使用部署固定地區／Email 建立空 Cart；拒絕 Client 改世界。
+
+    原始 Operation／Path／Content-Type／Body Hash 必須與不可變 Proof 相等。
+    原生 items、非固定 Email 或擴充欄位在建立前 fail closed；提交鍵
+    僅從 Receipt 派生，不由 RPC 或 Client 指定。
+    """
+    from deception.domains.ecommerce.medusa_cart_http import NativeCreateBody
+
+    _receipt_uuid4(receipt_id, b"medusa-create")
+    if (not isinstance(proof, VerifiedOperationBinding)
+            or (proof.platform, proof.operation_id, proof.method, proof.path_template) != (
+                "medusa-native-cart", "PostCarts", "POST", "/store/carts")
+            or not isinstance(raw_path, bytes) or raw_path != b"/store/carts"
+            or raw_path != proof.request_path.encode("utf-8")
+            or not isinstance(raw_body, bytes) or len(raw_body) > MAX_BODY_BYTES
+            or not hmac.compare_digest(hashlib.sha256(raw_body).hexdigest(), proof.request_body_sha256)
+            or proof.request_content_type is None
+            or proof.request_content_type.split(";", 1)[0].strip().lower() != "application/json"
+            or not isinstance(expected_native_context, dict)):
+        raise OperationBindingError("verified_medusa_creation_snapshot_mismatch")
+    try:
+        parsed = json.loads(raw_body, object_pairs_hook=unique_object, parse_constant=reject_constant)
+        if not isinstance(parsed, dict):
+            raise ValueError("Medusa creation requires JSON object")
+        data = NativeCreateBody.model_validate(parsed).model_dump(mode="json")
+        if (data["items"] != [] or data["region_id"] != "reg_mirage_usd"
+                or data["sales_channel_id"] != "sc_mirage" or data["currency_code"] != "usd"
+                or {"region_id": data["region_id"], "sales_channel_id": data["sales_channel_id"],
+                    "email": data["email"], "metadata": {}} != expected_native_context):
+            raise ValueError("Medusa cart initialization out of approved scope")
+    except (ValueError, UnicodeError) as exc:
+        raise OperationBindingError("verified_medusa_creation_body_unapproved") from exc
+    return VerifiedCartCreation(
+        idempotency_key=_receipt_uuid4(receipt_id, b"medusa-create-key"),
+        commit_attempt_id=_receipt_uuid4(receipt_id, b"medusa-create-attempt"),
+        creation_digest=hashlib.sha256(json.dumps(
+            data, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        ).encode("utf-8")).hexdigest(),
+    )
+
+
 def _pinned_medusa_operations() -> tuple[tuple[str, str, str], ...]:
     """回傳已審核的七個固定路由，不在實際容器由工作目錄動態選擇業務 Handler。
 
