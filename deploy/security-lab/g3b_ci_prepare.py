@@ -278,7 +278,7 @@ def _identity_material(root: Path, dsns: dict[str, str]) -> None:
         shutil.copyfile(path, root / "probe" / name)
     _store(root, "runtime-dsn-ci-probe", dsns["runtime"])
     host_runtime = conninfo_to_dict(dsns["runtime"])
-    host_runtime.update(host="127.0.0.1", port="55433")
+    host_runtime.update(host="127.0.0.1", port=os.environ.get("G3B_CI_HOST_PORT", "55433"))
     (root / "probe" / "runtime-host.dsn").write_text(
         make_conninfo(**host_runtime), encoding="utf-8")
     override = {"secrets": {name: {"file": str(root / "secrets" / name), "external": False}

@@ -1,9 +1,9 @@
 # G3b 服務分離範本，需手動建立外部網路、不可把此檔直接視為正式放行。
 # 無公開埠／無 Sender；未經部署級 Secret／ACL 驗收不得接 staging/production。
-name: mirage-g3b-isolated
+name: ${G3B_CI_COMPOSE_PROJECT:-mirage-g3b-isolated}
 
 x-g3b-hardening: &g3b-hardening
-  image: mirage-api:standalone
+  image: ${G3B_CI_IMAGE:-mirage-api:standalone}
   restart: "no"
   read_only: true
   init: true
@@ -141,13 +141,13 @@ services:
 networks:
   g3b_gateway:
     external: true
-    name: mirage-g3b-gateway-net
+    name: ${G3B_CI_GATEWAY_NETWORK:-mirage-g3b-gateway-net}
   g3b_execution:
     external: true
-    name: mirage-g3b-execution-net
+    name: ${G3B_CI_EXECUTION_NETWORK:-mirage-g3b-execution-net}
   g3b_database:
     external: true
-    name: mirage-g3b-database-net
+    name: ${G3B_CI_DATABASE_NETWORK:-mirage-g3b-database-net}
 
 secrets:
   g3b_verifier_dsn: {external: true}

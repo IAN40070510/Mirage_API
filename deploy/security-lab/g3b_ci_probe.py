@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import os
 from pathlib import Path
 import re
 import socket
@@ -1734,9 +1735,9 @@ def _audit(root: Path) -> None:
     compose_file = Path("deploy/security-lab/g3b-compose.yaml")
     blueprint = yaml.safe_load(compose_file.read_text(encoding="utf-8"))
     actual_networks = {
-        "g3b_gateway": "mirage-g3b-gateway-net",
-        "g3b_execution": "mirage-g3b-execution-net",
-        "g3b_database": "mirage-g3b-database-net",
+        "g3b_gateway": os.environ.get("G3B_CI_GATEWAY_NETWORK", "mirage-g3b-gateway-net"),
+        "g3b_execution": os.environ.get("G3B_CI_EXECUTION_NETWORK", "mirage-g3b-execution-net"),
+        "g3b_database": os.environ.get("G3B_CI_DATABASE_NETWORK", "mirage-g3b-database-net"),
     }
     for name, service in blueprint["services"].items():
         result = subprocess.run([
@@ -1766,8 +1767,10 @@ def _audit(root: Path) -> None:
         ], check=True, capture_output=True, text=True)
         if set(json.loads(visible.stdout)) != set(service["secrets"]):
             raise RuntimeError("g3b_ci_cross_role_secret_exposure:" + name)
-    with psycopg.connect("postgresql://mirage_ci_owner:mirage_ci_only@127.0.0.1:55433/"
-                         "mirage_g3b_ci?connect_timeout=5") as admin:
+    admin_dsn = os.environ.get("G3B_CI_ADMIN_DSN")
+    if not admin_dsn:
+        raise RuntimeError("g3b_ci_admin_dsn_required")
+    with psycopg.connect(admin_dsn) as admin:
         if admin.execute("SELECT count(*) FROM protected_world_commit_sources").fetchone()[0] != 13:
             raise RuntimeError("g3b_ci_inventory_commit_evidence_missing")
         if admin.execute("SELECT count(*) FROM protected_medusa_rejection_sources").fetchone()[0] != 2:
@@ -1867,7 +1870,7 @@ def _audit(root: Path) -> None:
     # 真 SQL UPDATE 仍必須由不可變 Trigger 拒絕；不能只相信 Privilege Dump。
     cart_connection = conninfo_to_dict(
         (root / "secrets" / "g3b_cart_executor_dsn").read_text(encoding="utf-8"))
-    cart_connection.update(host="127.0.0.1", port="55433")
+    cart_connection.update(host="127.0.0.1", port=os.environ.get("G3B_CI_HOST_PORT", "55433"))
     with psycopg.connect(make_conninfo(**cart_connection)) as cart:
         try:
             cart.execute(
