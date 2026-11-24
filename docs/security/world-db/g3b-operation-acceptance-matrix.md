@@ -214,6 +214,43 @@ Promotion 及 Authorizer Admission；負面涵蓋錯 Scope、偽造派生來源�
 授權後到 Sender 前派生世界的競態、未知 COMMIT／跨進程 ACK、
 正式隔離角色與部署核對；上述和 G4/G5/G6 仍 OPEN。
 
+**C-01 真四服務 Creator→Derived 正向路徑增量（2026-11-24，隔離候選 PASS）**：
+固定提交 [`8f3aea4`](https://github.com/IAN40070510/Mirage_API/commit/8f3aea4472d7a4c2f6760583c591bec3aa69f1f0)
+的 [G3b 四服務 CI #68](https://github.com/IAN40070510/Mirage_API/actions/runs/45334119506)
+`success`；四個互異 Docker 服務、三個網路、三個 CA Root、隔離 Secret Mount
+及五個 PostgreSQL 登入身分，在正式 mTLS／真 PostgreSQL 17.6 上送入
+`POST /synthetic/carts` 的 JWS／原始 Creator Proof，得到
+`G3B_ROUTE_PROTECTED_CART_CREATION_CANDIDATE`：
+`operation_id=createGuestCart`、`source=protected_cart_creations`、
+`authorization_scope=creator`、`validated_native_status=200`、
+`outer_http_status=200`、`native_business_response=false`。
+同批 `G3B_GATEWAY_PASS` 確認 20/20 未簽章路由拒絕、重播／匿名拒絕、
+Executor 對外不可直連、Trusted Send `off`；`G3B_CONTAINER_AUDIT_PASS`
+確認實體 ACL／網路／Mount 隔離。前一成功 [#67](https://github.com/IAN40070510/Mirage_API/actions/runs/45333854373)
+亦驗證相同正向路徑；其後修正了虛擬 ACL 測試，使完整 CI 同版通過。
+
+**最小權限修補與負面證據**：Cart 建立必須寫入 `native_response_contexts`，
+而 `world_snapshots` 的 audit trigger 寫入 `world_initializations`；隔離
+Cart Login 只獲得相關 `INSERT`，Validator 只有建立來源的 `SELECT`。
+PostgreSQL 的 `SELECT ... FOR SHARE` 對 `synthetic_resources` 另要求
+更新權限，因此僅允許 Cart Login 使用單一欄位 `UPDATE(resource_kind)`
+供 row lock 檢查，不授予 table-wide `UPDATE`；migration
+`028_immutable_synthetic_resource_lock.sql` 的 `BEFORE UPDATE OR DELETE`
+Trigger 無條件阻止實際修改。真實 Cart Login 的 SQL 更新嘗試必須被拒，
+CI 逐次核對列級權限與其他角色不能繞過不可變性。此為防止增權的隔離
+技術子項，不代表任何 Production Role 已被核驗。
+
+**失敗與重新驗證**：首次四服務 C-01 探針 [#60](https://github.com/IAN40070510/Mirage_API/actions/runs/45332128830)
+因 Executor 503 FAIL；[#61～#66](https://github.com/IAN40070510/Mirage_API/actions/runs/45333527962)
+依次定位並補齊真實角色／Trigger／Row-lock 權限，均未作 PASS。
+修補 immutable lock 後 #67 PASS，但該 SHA 的 PG 模擬 ACL 測試有
+`1 failed / 154 passed`；`8f3aea4` 修正測試後，
+[真 PostgreSQL 契約 CI 45334128980](https://github.com/IAN40070510/Mirage_API/actions/runs/45334128980)
+完整 `155 passed`、實體 mTLS `5 passed`、G5 密碼學 `9 passed`，
+[容器示範 CI 45334128988](https://github.com/IAN40070510/Mirage_API/actions/runs/45334128988)
+`success`。此增量仍**未提供客戶端原生 200／409、未知 ACK／COMMIT、
+正式 Sender／Restore Fence，也未簽收 C-01 整路由**。
+
 | G3b 子門檻 | 獨立實測結果 | 正式簽收 |
 | --- | --- | --- |
 | 真 HTTPS Gateway→Verifier→Executor、互異 Client CA、拒絕重播／竄改 | 隔離 CI PASS | 僅實驗室傳輸子項 PASS |
@@ -224,6 +261,7 @@ Promotion 及 Authorizer Admission；負面涵蓋錯 Scope、偽造派生來源�
 | Medusa M-03 Validator→Verifier 完整候選 Status／Headers／Body 交接 | 固定 400／404 bytes／Scope 綁定及篡改拒絕；真四容器 CI [45211431898](https://github.com/IAN40070510/Mirage_API/actions/runs/45211431898) PASS | **候選交接隔離 PASS**；外層仍為內部 HTTP 200、正式 Client 400／404 OPEN |
 | Synthetic 固定 mutation Handler rejected→可信 409 來源→獨立 Validator | I-01／I-02、C-03～C-06、C-08 固定 409 候選能力；隔離四服務實測 I-01 `unknown_synthetic_sku` 409，I-02 真 PG 重複取消 `reservation_not_active` 409，以及 C-03／C-06／C-08 五種真業務拒絕候選 SHA `45b0285` 真 PG PASS | **指定拒絕來源候選隔離 PASS**；其餘 Handler 情境／CAS conflict／原生 HTTP 仍 OPEN |
 | Inventory I-04 GET ReadAdmission→唯讀 WorldSnapshot→獨立 Validator 200／409 | 獨立 Validator 按 Receipt 重建精確 JSON／Scope／Hash，與 Executor ReadAdmission ID／Generation／Version／State Hash 逐欄相符；既有 SKU 200、真缺 SKU 409 與正規編碼 URI 均已真 PG/mTLS CI PASS | **I-04 200／409 與 SKU 編碼來源候選隔離 PASS**；客戶端原生 HTTP 與 G4 Send OPEN |
+| C-01 Creator→Derived 實體四服務候選 200、最小權限 Row Lock／不可變資源拒絕 | [四服務 #68](https://github.com/IAN40070510/Mirage_API/actions/runs/45334119506) PASS，`source=protected_cart_creations`、`authorization_scope=creator`、`native_business_response=false`；真 PG／mTLS／Trigger SQL 拒絕 PASS | **C-01 實體候選子項隔離 PASS**；客戶端原生 200／409、正式發送及未知 COMMIT OPEN |
 | 正式獨立服務部署、Secret Mount／網路來源、無共享憑證可見性 | 一次性 Docker CI 真容器角色隔離 PASS | 隔離環境 PASS；staging／production 正式部署 OPEN |
 | 20 條正式原生 2xx／4xx Payload 與獨立來源／Validator | 20 條均未具全套證據 | OPEN |
 | G3b 整體解封並移交 G4 Sender | 前述兩項未完成 | **NO-GO** |
@@ -234,7 +272,7 @@ Promotion 及 Authorizer Admission；負面涵蓋錯 Scope、偽造派生來源�
 | I-02 | POST `/synthetic/inventory/reservations/{reservation_id}/cancel` | 隔離 PASS | 受保護 cancel；真 Reservation 200＋重複取消 `reservation_not_active` 409 候選，SHA `6f42a51` 真 PG PASS | OPEN：CAS conflict、其他 409、原生 HTTP |
 | I-03 | GET `/synthetic/operations/{attempt}` | 隔離 PASS | 固定 UUID4／空 Body Proof → ReadAdmission；獨立 Validator 核對 WorldOperation、Commit Receipt、Snapshot／Epoch／Key，重建歷史 200 或確定不存在的 409 候選；固定 SHA `88d286f` 真 PG/mTLS CI PASS | OPEN：客戶端原生 200／409、競態與故障路徑 |
 | I-04 | GET `/synthetic/inventory/{sku}` | 隔離 PASS | 固定 SKU／空 Body Proof → Executor ReadAdmission → 獨立 Validator 200 成功／真正缺 SKU 409 候選；SHA `c1769b9` 原始 UTF-8、SHA `4e2cecc` 正規 percent URL 候選真 PG/mTLS PASS | OPEN：Client 原生 200／409、全 URL 相容、G4 Send |
-| C-01 | POST `/synthetic/carts` | 隔離 PASS | Creator→Derived `cart_creation` 固定 200 候選、獨立 Validator／Promotion／Creator Admission 真 PG 隔離 PASS（SHA `f4ef309`），來源漂移在 Grant 拒絕 | OPEN：Client 原生 200／409、未知 COMMIT、Grant→Sender 競態、實體部署 |
+| C-01 | POST `/synthetic/carts` | 隔離 PASS | Creator→Derived `cart_creation` 200 候選、獨立 Validator／Promotion／Creator Admission 真 PG（`f4ef309`）；真四服務實際 JWS／mTLS／Cart-only DB Role 候選 200、越權更新拒絕（`8f3aea4`、CI #68），來源漂移在 Grant 拒絕 | OPEN：Client 原生 200／409、未知 COMMIT、Grant→Sender 競態、正式部署 |
 | C-02 | GET `/synthetic/carts/{cart_id}` | 隔離 PASS | 受保護 ReadAdmission＋來源 ID；獨立 Validator 按派生 Cart、目前 Snapshot 重建 200 候選，真 PG 測試 PASS | OPEN：409 來源、客戶端原生 HTTP |
 | C-03 | POST `/synthetic/carts/{cart_id}/line-items` | 隔離 PASS | 受保護 add 200 Commit／Validator 候選真 PG PASS；真未知 Variant／庫存不足 409 候選 SHA `45b0285` 真 PG PASS；舊版本 CAS fail-closed SHA `c62c79c` 真 PG PASS | OPEN：其餘 409／CAS 並行、原生 HTTP |
 | C-04 | POST `/synthetic/carts/{cart_id}/line-items/{item_id}` | 隔離 PASS | 受保護 update；真品項 200、缺品項 409、重送與 Proof 防替換，SHA `bcb0c68` 真 PG PASS | OPEN：其他 409／CAS、原生 HTTP、實體部署 |
