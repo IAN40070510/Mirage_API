@@ -124,6 +124,7 @@ def _provision_roles(admin_dsn: str) -> dict[str, str]:
             ("cart", "INSERT", "read_admissions,protected_world_read_sources,world_operations,"
              "world_events,world_commit_receipts,protected_world_commit_sources,"
              "protected_cart_creations,synthetic_resources,guest_cart_creations,"
+             "native_response_contexts,"
              "protected_medusa_rejection_sources,session_heads,session_world_bindings,"
              "generation_controls,world_snapshots,protected_world_rejection_sources"),
             ("cart", "UPDATE", "session_heads,session_world_bindings,"
