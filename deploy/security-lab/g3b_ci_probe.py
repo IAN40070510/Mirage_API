@@ -655,6 +655,75 @@ def _gateway() -> None:
         )
         if gateway.send(missing_update).status_code != 503:
             raise RuntimeError("g3b_ci_medusa_missing_update_not_failed_closed")
+        # M-05 僅可刪除 M-03／M-04 真實 Commit 的同一個 Item；原生 DELETE
+        # 200 回應是刪除封套，不是 {cart}。第二次 Receipt 無 Item 固定 503。
+        medusa_delete_id = "g3b-ci-medusa-derived-delete-200"
+        medusa_delete = gateway.build_request(
+            "DELETE", origin + "/store/carts/" + medusa_cart_id + "/line-items/" + medusa_item_id,
+            content=b"", headers={"x-request-id": medusa_delete_id,
+                                  "content-type": "application/json",
+                                  "x-publishable-api-key": "pk_g3b_ci_only"},
+        )
+        medusa_delete.headers["x-trusted-session"] = _sign(
+            key, fingerprint=fingerprint_httpx_request(medusa_delete, medusa_delete_id),
+            session=medusa_cart_session, mode="cart", resource_id=medusa_cart_id,
+        )
+        medusa_deleted = gateway.send(medusa_delete)
+        if medusa_deleted.status_code != 200:
+            detail = medusa_deleted.json().get("detail") if (
+                medusa_deleted.headers.get("content-type", "").startswith("application/json")) else None
+            raise RuntimeError("g3b_ci_medusa_delete_rpc_unverifiable:"
+                               + str(medusa_deleted.status_code) + ":" + str(detail)[:90])
+        medusa_delete_result = medusa_deleted.json()
+        medusa_delete_meta = medusa_delete_result.get("executor_result", {})
+        medusa_delete_projection = medusa_delete_result.get("native_projection", {})
+        medusa_delete_source = medusa_delete_projection.get("source", {})
+        medusa_delete_bytes = base64.b64decode(
+            medusa_delete_projection.get("body_b64", ""), validate=True,
+        )
+        medusa_deleted_payload = json.loads(medusa_delete_bytes)
+        if (medusa_delete_meta.get("kind") != "medusa_mutation"
+                or medusa_delete_meta.get("operation") != "DeleteCartsIdLineItemsLine_id"
+                or medusa_delete_meta.get("status") != "committed"
+                or medusa_delete_meta.get("state_version") != 4
+                or medusa_delete_projection.get("status_code") != 200
+                or medusa_delete_source.get("kind") != "committed_operation"
+                or medusa_delete_source.get("operation_result_digest")
+                    != medusa_delete_meta.get("result_digest")
+                or medusa_delete_source.get("committed_state_version") != 4
+                or medusa_delete_source.get("committed_state_hash")
+                    != medusa_delete_meta.get("state_hash")
+                or set(medusa_deleted_payload) != {"id", "object", "deleted", "parent"}
+                or medusa_deleted_payload.get("id") != medusa_item_id
+                or medusa_deleted_payload.get("object") != "line-item"
+                or medusa_deleted_payload.get("deleted") is not True
+                or medusa_deleted_payload.get("parent", {}).get("id") != medusa_cart_id
+                or medusa_deleted_payload.get("parent", {}).get("items") != []
+                or medusa_deleted_payload.get("parent", {}).get("total") != 0.0
+                or medusa_delete_projection.get("delivery")
+                    != "candidate_only_no_send_authorization"
+                or medusa_delete_projection.get("envelope_hash") != response_hashes(
+                    200, read_headers, medusa_delete_bytes)[0]
+                or gateway.send(medusa_delete).status_code != 403):
+            raise RuntimeError("g3b_ci_medusa_delete_candidate_source_mismatch")
+        missing_delete_id = "g3b-ci-medusa-delete-missing-item-denied"
+        missing_delete = gateway.build_request(
+            "DELETE", origin + "/store/carts/" + medusa_cart_id + "/line-items/"
+            + medusa_item_id, content=b"",
+            headers={"x-request-id": missing_delete_id, "content-type": "application/json",
+                     "x-publishable-api-key": "pk_g3b_ci_only"},
+        )
+        missing_delete.headers["x-trusted-session"] = _sign(
+            key, fingerprint=fingerprint_httpx_request(missing_delete, missing_delete_id),
+            session=medusa_cart_session, mode="cart", resource_id=medusa_cart_id,
+        )
+        if gateway.send(missing_delete).status_code != 503:
+            raise RuntimeError("g3b_ci_medusa_missing_delete_not_failed_closed")
+        print("G3B_ROUTE_MEDUSA_DELETE_CANDIDATE " + json.dumps({
+            "operation_id": "DeleteCartsIdLineItemsLine_id",
+            "source": "protected_world_commit_sources", "validated_native_status": 200,
+            "state_version": 4, "native_business_response": False, "trusted_send": "off",
+        }, sort_keys=True))
         forbidden_body = b'{"email":"ci@example.invalid","items":[{"variant_id":"known","quantity":1}]}'
         forbidden_request_id = "g3b-ci-medusa-create-items-denied"
         forbidden_create = gateway.build_request(
@@ -1586,7 +1655,7 @@ def _audit(root: Path) -> None:
             raise RuntimeError("g3b_ci_cross_role_secret_exposure:" + name)
     with psycopg.connect("postgresql://mirage_ci_owner:mirage_ci_only@127.0.0.1:55433/"
                          "mirage_g3b_ci?connect_timeout=5") as admin:
-        if admin.execute("SELECT count(*) FROM protected_world_commit_sources").fetchone()[0] != 10:
+        if admin.execute("SELECT count(*) FROM protected_world_commit_sources").fetchone()[0] != 11:
             raise RuntimeError("g3b_ci_inventory_commit_evidence_missing")
         if admin.execute("SELECT count(*) FROM protected_medusa_rejection_sources").fetchone()[0] != 2:
             raise RuntimeError("g3b_ci_medusa_rejection_evidence_missing")
@@ -1617,6 +1686,7 @@ def _audit(root: Path) -> None:
                 "PostCarts": 8,
                 "PostCartsIdLineItems": 3,
                 "PostCartsIdLineItemsLine_id": 2,
+                "DeleteCartsIdLineItemsLine_id": 2,
         }:
             raise RuntimeError("g3b_ci_operation_proof_count_mismatch")
         # Owner fixture、synthetic HTTP 與受限 Medusa M-01 各建立一筆；

@@ -297,8 +297,9 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
     ) -> dict[str, object]:
         """以原始 Fingerprint+固定 Body Model/World 判定 Medusa 400 或 404。
 
-        此隔離增量涵蓋 Cart line-items 加入與數量更新：原生 header/body 400、
-        缺少 Variant／Item 的 404，以及有效 Mutation 的受保護 Commit。
+        此隔離增量涵蓋 Cart line-items 加入、數量更新、可信刪除：新增／更新的
+        原生 header/body 400、缺少 Variant 的 404，以及有效 Mutation Commit。
+        刪除僅開放空 Body／無 Query 的真 Item；未核准 404 一律 503。
         所有其餘原生操作維持 503；成功 Commit 不代表 Client 已獲准接收 200。
         400／404 都須有同一 Receipt 的可信 Read Source；拒絕表
         與既有 Runtime SecurityErrorSource 完全隔離且資料不可更新。
@@ -316,6 +317,10 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
             ),
             "PostCartsIdLineItemsLine_id": (
                 "POST", "/store/carts/{id}/line-items/{line_id}",
+                rb"/store/carts/(cart_[0-9a-f]{32})/line-items/(item_[0-9a-f]{32})",
+            ),
+            "DeleteCartsIdLineItemsLine_id": (
+                "DELETE", "/store/carts/{id}/line-items/{line_id}",
                 rb"/store/carts/(cart_[0-9a-f]{32})/line-items/(item_[0-9a-f]{32})",
             ),
         }
@@ -342,17 +347,26 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
             raise OperationBindingError("verified_medusa_full_fingerprint_denied")
         keys = [value for name, value in candidate.headers
                 if name.lower() == "x-publishable-api-key"]
+        is_delete = proof.operation_id == "DeleteCartsIdLineItemsLine_id"
+        if is_delete and (candidate.query_string or candidate.query
+                          or raw_body != b""
+                          or any(name.lower() == "idempotency-key"
+                                 for name, _ in candidate.headers)
+                          or len(keys) != 1
+                          or not hmac.compare_digest(keys[0], self._medusa_publishable_key)):
+            raise OperationBindingError("verified_medusa_delete_unapproved_request")
         reason = None
         if len(keys) != 1 or not hmac.compare_digest(keys[0], self._medusa_publishable_key):
             reason = "native_bad_key"
         else:
             try:
                 # 錯誤格式須與現有 NativeItemBody 路徑使用相同驗證器。
-                body_type = (NativeItemBody if proof.operation_id == "PostCartsIdLineItems"
-                             else NativeQuantityBody)
-                InventoryHTTP._json_body(candidate, body_type)
-                json.loads(raw_body, object_pairs_hook=unique_object,
-                           parse_constant=reject_constant)
+                if not is_delete:
+                    body_type = (NativeItemBody if proof.operation_id == "PostCartsIdLineItems"
+                                 else NativeQuantityBody)
+                    InventoryHTTP._json_body(candidate, body_type)
+                    json.loads(raw_body, object_pairs_hook=unique_object,
+                               parse_constant=reject_constant)
             except (ValueError, UnicodeError):
                 reason = "native_bad_item_body"
         # 已通過原生路由；每種錯誤都要先綁定真實世界讀取，重放只重用來源。
@@ -364,6 +378,8 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
                 (receipt_id, proof.request_fingerprint),
             ).fetchone()
         if previous is not None:
+            if is_delete:
+                raise ProtectedGrantError("verified_medusa_delete_prior_rejection_invalid")
             if previous[0] != (reason or (
                     "native_variant_absent" if proof.operation_id == "PostCartsIdLineItems"
                     else None)):
@@ -390,17 +406,23 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
                 )
                 missing = "native_variant_absent"
             else:
-                native = NativeQuantityBody.model_validate_json(raw_body)
                 item_id = match[2].decode("ascii")
                 cart = read.snapshot.state.get("cart")
                 if (not isinstance(cart, dict) or cart.get("id") != binding.resource_id
                         or not isinstance(cart.get("items"), dict)):
                     raise ProtectedGrantError("verified_medusa_update_snapshot_unverifiable")
                 found = item_id in cart["items"]
-                action, command, marker = (
-                    "cart.update", {"resource_id": binding.resource_id,
-                                    "item_id": item_id, "quantity": native.quantity}, "m04-update",
-                )
+                if is_delete:
+                    action, command, marker = (
+                        "cart.remove", {"resource_id": binding.resource_id,
+                                        "item_id": item_id}, "m05-delete",
+                    )
+                else:
+                    native = NativeQuantityBody.model_validate_json(raw_body)
+                    action, command, marker = (
+                        "cart.update", {"resource_id": binding.resource_id,
+                                        "item_id": item_id, "quantity": native.quantity}, "m04-update",
+                    )
                 missing = None
             if found:
                 if any(name.lower() == "idempotency-key" for name, _ in candidate.headers):
@@ -410,7 +432,7 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
                     read=read, action=action, command=command, marker=marker,
                 )
             if missing is None:
-                # 尚未取得 M-04 缺品項 404 的不可變來源／契約簽收；固定 503。
+                # M-04／M-05 缺品項 404 尚未簽收，不猜測原生錯誤。
                 raise ProtectedGrantError("verified_medusa_update_item_missing")
             reason = missing
         return self._record_verified_medusa_rejection(
@@ -424,7 +446,7 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
         proof: VerifiedOperationBinding, read: WorldRead, action: str,
         command: dict[str, object], marker: str,
     ) -> dict[str, object]:
-        """M-03／M-04 僅依原始 Receipt 與受保護 Snapshot 版本提交一次。
+        """M-03／M-04／M-05 僅依原始 Receipt 與受保護 Snapshot 版本提交一次。
 
         驗證派生 Cart Lineage，並用同張 Receipt 派生不可由 Client 選擇的
         Idempotency Key／Attempt；CAS、結果不明或業務拒絕一律不得報成功。
@@ -433,7 +455,8 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
         from deception.security.operation_binding import _receipt_uuid4
 
         if (action, marker) not in {("cart.add", "m03-add"),
-                                   ("cart.update", "m04-update")}:
+                                   ("cart.update", "m04-update"),
+                                   ("cart.remove", "m05-delete")}:
             raise ProtectedGrantError("verified_medusa_mutation_action_unapproved")
         with self._connection() as connection:
             lineage = connection.execute(
@@ -452,8 +475,8 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
             authorized_scope=read.snapshot.scope, operation=action,
             command=command,
             expected_version=read.snapshot.version,
-            idempotency_key=("medusa-m03-" if action == "cart.add"
-                             else "medusa-m04-") + receipt_id.hex,
+            idempotency_key=({"cart.add": "medusa-m03-", "cart.update": "medusa-m04-",
+                              "cart.remove": "medusa-m05-"}[action]) + receipt_id.hex,
             commit_attempt_id=_receipt_uuid4(receipt_id, ("medusa-" + marker).encode()),
         )
         if result.status not in {"committed", "already_committed"}:
