@@ -641,15 +641,20 @@ class FixedNativeValidatorMTLSClient:
         expected_commit_attempt_id: str, expected_result_digest: str,
         expected_state_version: int, expected_state_hash: str,
     ) -> dict[str, object]:
-        """mTLS 核對 M-03 Commit 的固定 Medusa 200 候選，絕不賦予 Send 權限。"""
+        """mTLS 核對 M-03／M-04 Commit 的固定 Medusa 200 候選，絕不賦予 Send 權限。"""
         from deception.world.transmission import response_hashes
         from deception.security.operation_binding import _receipt_uuid4
 
-        if (operation_id != "PostCartsIdLineItems"
+        markers = {
+            "PostCartsIdLineItems": b"medusa-m03-add",
+            "PostCartsIdLineItemsLine_id": b"medusa-m04-update",
+        }
+        marker = markers.get(operation_id)
+        if (marker is None
                 or not isinstance(resource_id, str)
                 or re.fullmatch(r"cart_[0-9a-f]{32}", resource_id) is None
                 or expected_commit_attempt_id != str(
-                    _receipt_uuid4(receipt_id, b"medusa-m03-add"))):
+                    _receipt_uuid4(receipt_id, marker))):
             raise ProtectedRpcConfigurationError("medusa_add_validator_operation_unapproved")
         async with httpx.AsyncClient(verify=self._tls, trust_env=False, timeout=8.0) as client:
             response = await client.post(
@@ -1469,12 +1474,14 @@ def create_direct_verifier_app(
                 raise HTTPException(status_code=503,
                                     detail="direct_verifier_native_projection_unverifiable") from exc
         elif (isinstance(outcome, dict) and outcome.get("kind") == "medusa_mutation"
-              and operation.operation_id == "PostCartsIdLineItems"):
+              and operation.operation_id in {"PostCartsIdLineItems", "PostCartsIdLineItemsLine_id"}):
             if native_validator_client is None:
                 raise HTTPException(status_code=503,
                                     detail="direct_verifier_medusa_validator_not_wired")
-            match = re.fullmatch(r"/store/carts/(cart_[0-9a-f]{32})/line-items",
-                                 normalized.path)
+            pattern = (r"/store/carts/(cart_[0-9a-f]{32})/line-items" if
+                       operation.operation_id == "PostCartsIdLineItems" else
+                       r"/store/carts/(cart_[0-9a-f]{32})/line-items/item_[0-9a-f]{32}")
+            match = re.fullmatch(pattern, normalized.path)
             if match is None:
                 raise HTTPException(status_code=503,
                                     detail="direct_verifier_medusa_resource_invalid")

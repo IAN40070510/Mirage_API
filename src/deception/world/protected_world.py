@@ -297,23 +297,33 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
     ) -> dict[str, object]:
         """以原始 Fingerprint+固定 Body Model/World 判定 Medusa 400 或 404。
 
-        此隔離增量涵蓋 Cart line-items 加入：原生 header/body 400、
-        固定 Cart catalog 缺少 variant 的 404，以及已知 variant 的受保護 Commit。
+        此隔離增量涵蓋 Cart line-items 加入與數量更新：原生 header/body 400、
+        缺少 Variant／Item 的 404，以及有效 Mutation 的受保護 Commit。
         所有其餘原生操作維持 503；成功 Commit 不代表 Client 已獲准接收 200。
         400／404 都須有同一 Receipt 的可信 Read Source；拒絕表
         與既有 Runtime SecurityErrorSource 完全隔離且資料不可更新。
         """
         from deception.domains.ecommerce.carts import SyntheticCarts
         from deception.domains.ecommerce.inventory_http import InventoryHTTP
-        from deception.domains.ecommerce.medusa_cart_http import NativeItemBody
+        from deception.domains.ecommerce.medusa_cart_http import NativeItemBody, NativeQuantityBody
         from deception.security.operation_binding import OperationBindingError
         from mirage_validator.json_utils import reject_constant, unique_object
 
+        paths = {
+            "PostCartsIdLineItems": (
+                "POST", "/store/carts/{id}/line-items",
+                rb"/store/carts/(cart_[0-9a-f]{32})/line-items",
+            ),
+            "PostCartsIdLineItemsLine_id": (
+                "POST", "/store/carts/{id}/line-items/{line_id}",
+                rb"/store/carts/(cart_[0-9a-f]{32})/line-items/(item_[0-9a-f]{32})",
+            ),
+        }
+        selected = paths.get(proof.operation_id)
         if (not isinstance(self._world_store, SyntheticCarts)
                 or not self._medusa_publishable_key
-                or proof.operation_id != "PostCartsIdLineItems"
-                or proof.method != "POST"
-                or proof.path_template != "/store/carts/{id}/line-items"
+                or selected is None
+                or (proof.method, proof.path_template) != selected[:2]
                 or not isinstance(original_http, NormalizedRequest)
                 or not isinstance(raw_path, bytes) or not isinstance(raw_body, bytes)
                 or len(raw_body) > 1048576
@@ -322,7 +332,7 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
                 or not hmac.compare_digest(hashlib.sha256(raw_body).hexdigest(),
                                            proof.request_body_sha256)):
             raise OperationBindingError("verified_medusa_http_snapshot_denied")
-        match = re.fullmatch(rb"/store/carts/(cart_[0-9a-f]{32})/line-items", raw_path)
+        match = re.fullmatch(selected[2], raw_path)
         if (match is None or binding.access_mode != "cart"
                 or binding.resource_id != match[1].decode("ascii")):
             raise OperationBindingError("verified_medusa_resource_denied")
@@ -338,7 +348,9 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
         else:
             try:
                 # 錯誤格式須與現有 NativeItemBody 路徑使用相同驗證器。
-                InventoryHTTP._json_body(candidate, NativeItemBody)
+                body_type = (NativeItemBody if proof.operation_id == "PostCartsIdLineItems"
+                             else NativeQuantityBody)
+                InventoryHTTP._json_body(candidate, body_type)
                 json.loads(raw_body, object_pairs_hook=unique_object,
                            parse_constant=reject_constant)
             except (ValueError, UnicodeError):
@@ -352,7 +364,9 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
                 (receipt_id, proof.request_fingerprint),
             ).fetchone()
         if previous is not None:
-            if previous[0] != (reason or "native_variant_absent"):
+            if previous[0] != (reason or (
+                    "native_variant_absent" if proof.operation_id == "PostCartsIdLineItems"
+                    else None)):
                 raise ProtectedGrantError("verified_medusa_prior_rejection_invalid")
             return self._record_verified_medusa_rejection(
                 receipt_id=receipt_id, binding=binding, fingerprint=proof.request_fingerprint,
@@ -367,26 +381,50 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
                  or not isinstance(read.snapshot.state.get("catalog"), dict))):
             raise ProtectedGrantError("verified_medusa_native_context_missing")
         if reason is None:
-            native = NativeItemBody.model_validate_json(raw_body)
-            if native.variant_id in read.snapshot.state["catalog"]:
+            if proof.operation_id == "PostCartsIdLineItems":
+                native = NativeItemBody.model_validate_json(raw_body)
+                found = native.variant_id in read.snapshot.state["catalog"]
+                action, command, marker = (
+                    "cart.add", {"resource_id": binding.resource_id,
+                                 "variant_id": native.variant_id, "quantity": native.quantity}, "m03-add",
+                )
+                missing = "native_variant_absent"
+            else:
+                native = NativeQuantityBody.model_validate_json(raw_body)
+                item_id = match[2].decode("ascii")
+                cart = read.snapshot.state.get("cart")
+                if (not isinstance(cart, dict) or cart.get("id") != binding.resource_id
+                        or not isinstance(cart.get("items"), dict)):
+                    raise ProtectedGrantError("verified_medusa_update_snapshot_unverifiable")
+                found = item_id in cart["items"]
+                action, command, marker = (
+                    "cart.update", {"resource_id": binding.resource_id,
+                                    "item_id": item_id, "quantity": native.quantity}, "m04-update",
+                )
+                missing = None
+            if found:
                 if any(name.lower() == "idempotency-key" for name, _ in candidate.headers):
                     raise OperationBindingError("verified_medusa_client_commit_key_denied")
-                return self._commit_verified_medusa_add(
+                return self._commit_verified_medusa_mutation(
                     receipt_id=receipt_id, binding=binding, proof=proof,
-                    read=read, native=native,
+                    read=read, action=action, command=command, marker=marker,
                 )
-            reason = "native_variant_absent"
+            if missing is None:
+                # 尚未取得 M-04 缺品項 404 的不可變來源／契約簽收；固定 503。
+                raise ProtectedGrantError("verified_medusa_update_item_missing")
+            reason = missing
         return self._record_verified_medusa_rejection(
             receipt_id=receipt_id, binding=binding, fingerprint=proof.request_fingerprint,
             operation_id=proof.operation_id, reason=reason,
             read_admission_id=read.source.read_admission_id,
         )
 
-    def _commit_verified_medusa_add(
+    def _commit_verified_medusa_mutation(
         self, *, receipt_id: UUID, binding: SessionBinding,
-        proof: VerifiedOperationBinding, read: WorldRead, native: object,
+        proof: VerifiedOperationBinding, read: WorldRead, action: str,
+        command: dict[str, object], marker: str,
     ) -> dict[str, object]:
-        """M-03 已知 Variant 只依原始 Receipt 與受保護 Snapshot 版本提交一次。
+        """M-03／M-04 僅依原始 Receipt 與受保護 Snapshot 版本提交一次。
 
         驗證派生 Cart Lineage，並用同張 Receipt 派生不可由 Client 選擇的
         Idempotency Key／Attempt；CAS、結果不明或業務拒絕一律不得報成功。
@@ -394,6 +432,9 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
         """
         from deception.security.operation_binding import _receipt_uuid4
 
+        if (action, marker) not in {("cart.add", "m03-add"),
+                                   ("cart.update", "m04-update")}:
+            raise ProtectedGrantError("verified_medusa_mutation_action_unapproved")
         with self._connection() as connection:
             lineage = connection.execute(
                 """SELECT 1 FROM protected_cart_creations
@@ -408,12 +449,12 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
         result = self.commit_event(
             receipt_id=receipt_id, binding=binding,
             request_fingerprint=proof.request_fingerprint,
-            authorized_scope=read.snapshot.scope, operation="cart.add",
-            command={"resource_id": binding.resource_id,
-                     "variant_id": native.variant_id, "quantity": native.quantity},
+            authorized_scope=read.snapshot.scope, operation=action,
+            command=command,
             expected_version=read.snapshot.version,
-            idempotency_key="medusa-m03-" + receipt_id.hex,
-            commit_attempt_id=_receipt_uuid4(receipt_id, b"medusa-m03-add"),
+            idempotency_key=("medusa-m03-" if action == "cart.add"
+                             else "medusa-m04-") + receipt_id.hex,
+            commit_attempt_id=_receipt_uuid4(receipt_id, ("medusa-" + marker).encode()),
         )
         if result.status not in {"committed", "already_committed"}:
             raise ProtectedGrantError("verified_medusa_add_commit_not_verified")

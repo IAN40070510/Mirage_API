@@ -789,6 +789,47 @@ def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolat
                 "SELECT version FROM world_snapshots WHERE world_generation_id=%s",
                 (snapshot.scope.world_generation_id,),
             ).fetchone()[0] == 2
+        # M-04 由上一次受保護 Commit 的真 Item ID 更新；跨 Receipt 改 Body
+        # 或重送都不得寫第二次，唯一 200 候選只能由獨立 Validator 投影。
+        native_item_id = native_cart["items"][0]["id"]
+        update_path = path + "/" + native_item_id
+        native_update, update_receipt, update_proof, update_wire = prepare_request(
+            b'{"quantity":3}', route=update_path,
+        )
+        assert update_proof.operation_id == "PostCartsIdLineItemsLine_id"
+        assert client.post("/internal/v1/execute", json={
+            **update_wire, "raw_body_b64": base64.b64encode(b'{"quantity":4}').decode(),
+        }).status_code == 503
+        updated = client.post("/internal/v1/execute", json=update_wire)
+        assert updated.status_code == 200
+        update_metadata = updated.json()
+        assert (update_metadata["kind"], update_metadata["operation"],
+                update_metadata["status"], update_metadata["state_version"]) == (
+            "medusa_mutation", "PostCartsIdLineItemsLine_id", "committed", 3,
+        )
+        projected_update = add_projector.project_medusa_add_success(update_receipt)
+        updated_cart = json.loads(projected_update.body_bytes)["cart"]
+        assert (projected_update.operation_id, projected_update.status_code,
+                projected_update.source.kind, updated_cart["total"]) == (
+            "PostCartsIdLineItemsLine_id", 200, "committed_operation", 3.0,
+        )
+        assert updated_cart["items"][0]["id"] == native_item_id
+        assert updated_cart["items"][0]["quantity"] == 3
+        assert projected_update.source.operation_result_digest == update_metadata["result_digest"]
+        assert _candidate(dsn, scope=snapshot.scope, source=projected_update.source,
+                          receipt_id=update_receipt,
+                          fingerprint=update_proof.request_fingerprint,
+                          status=200, body=projected_update.body_bytes) == 1
+        assert client.post("/internal/v1/execute", json=update_wire).status_code == 503
+        with psycopg.connect(dsn) as connection:
+            assert connection.execute(
+                "SELECT operation,status FROM world_operations WHERE commit_attempt_id=%s",
+                (update_metadata["commit_attempt_id"],),
+            ).fetchone() == ("cart.update", "committed")
+            assert connection.execute(
+                "SELECT version FROM world_snapshots WHERE world_generation_id=%s",
+                (snapshot.scope.world_generation_id,),
+            ).fetchone()[0] == 3
         _, denied_receipt, _, denied_wire = prepare_request(
             b"", route="/store/carts/" + binding.resource_id,
             method="GET", key="incorrect_public_key",
@@ -891,12 +932,12 @@ def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolat
         assert connection.execute("SELECT status_code,reason_code,read_admission_id IS NOT NULL "
                                   "FROM protected_medusa_rejection_sources ORDER BY status_code").fetchall() == [
             (400, "native_bad_item_body", True), (404, "native_variant_absent", True)]
-        assert connection.execute("SELECT count(*) FROM protected_world_read_sources ").fetchone()[0] == 4
-        assert connection.execute("SELECT count(*) FROM world_events").fetchone()[0] == 1
-    # M-07 沿用本次受保護 M-03 真加入品項的世界版本 2；
+        assert connection.execute("SELECT count(*) FROM protected_world_read_sources ").fetchone()[0] == 5
+        assert connection.execute("SELECT count(*) FROM world_events").fetchone()[0] == 2
+    # M-07 沿用本次 M-03 加入、M-04 更新後的世界版本 3；
     # 不可拿假的 order_ ID 或 Creator Cart Capability 代替。
     completed = store.mutate_cart(binding, action="complete", command={},
-        expected_version=2, idempotency_key="native-test-complete",
+        expected_version=3, idempotency_key="native-test-complete",
         commit_attempt_id=uuid4(), now=now)
     assert completed.status == "committed"
     order_id = completed.result["id"]

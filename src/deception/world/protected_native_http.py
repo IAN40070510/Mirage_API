@@ -1173,11 +1173,22 @@ class PostgresProtectedNativeProjector(_ProtectedConnection):
                  actual_version, actual_hash, encoding, actual_digest, epoch, issuer,
                  key_id, token_deadline, mode, resource, operation_id, platform, method,
                  template, raw_path, content_type, proof_fingerprint) = row
+                medusa_handlers = {
+                    "PostCartsIdLineItems": (
+                        "medusa-native-cart", "POST", "/store/carts/{id}/line-items", "cart.add",
+                        r"/store/carts/(cart_[0-9a-f]{32})/line-items",
+                    ),
+                    "PostCartsIdLineItemsLine_id": (
+                        "medusa-native-cart", "POST", "/store/carts/{id}/line-items/{line_id}",
+                        "cart.update",
+                        r"/store/carts/(cart_[0-9a-f]{32})/line-items/item_[0-9a-f]{32}",
+                    ),
+                }
+                medusa_handler = medusa_handlers.get(operation_id) if medusa else None
                 selected = (_SYNTHETIC_MUTATION_HANDLERS.get(operation_id) if not medusa else
-                            ("medusa-native-cart", "POST", "/store/carts/{id}/line-items",
-                             "cart.add") if operation_id == "PostCartsIdLineItems" else None)
+                            medusa_handler[:4] if medusa_handler is not None else None)
                 path_pattern = (_SYNTHETIC_MUTATION_PATHS.get(operation_id) if not medusa else
-                                r"/store/carts/(cart_[0-9a-f]{32})/line-items")
+                                medusa_handler[4] if medusa_handler is not None else None)
                 match = re.fullmatch(path_pattern, raw_path) if (
                     path_pattern is not None and isinstance(raw_path, str)) else None
                 if (selected is None or match is None
@@ -1381,12 +1392,13 @@ class PostgresProtectedNativeProjector(_ProtectedConnection):
                     raise ProtectedGrantError("protected_native_source_missing")
                 (environment, deployment, session, generation, fingerprint, operation,
                  status, reason, template, revision, envelope, read_id) = source
-                if (operation != "PostCartsIdLineItems" or revision != "medusa-cart-1"
+                if (operation not in {"PostCartsIdLineItems", "PostCartsIdLineItemsLine_id"}
+                        or revision != "medusa-cart-1"
                         or (status, reason, template) not in {
                             (400, "native_bad_key", "native-cart-invalid"),
                             (400, "native_bad_item_body", "native-cart-invalid"),
                             (404, "native_variant_absent", "native-cart-rejected"),
-                        }):
+                        } or operation == "PostCartsIdLineItemsLine_id" and status != 400):
                     raise ProtectedGrantError("protected_native_source_policy_denied")
                 cursor.execute(
                     """SELECT environment_id,deployment_id,session_id,session_epoch,
@@ -1406,10 +1418,16 @@ class PostgresProtectedNativeProjector(_ProtectedConnection):
                        WHERE receipt_id=%s""", (receipt_id,),
                 )
                 proof = cursor.fetchone()
+                route = ("/store/carts/{id}/line-items" if operation == "PostCartsIdLineItems"
+                         else "/store/carts/{id}/line-items/{line_id}")
+                path_pattern = (r"/store/carts/(cart_[0-9a-f]{32})/line-items" if
+                                operation == "PostCartsIdLineItems" else
+                                r"/store/carts/(cart_[0-9a-f]{32})/line-items/item_[0-9a-f]{32}")
+                path_match = (re.fullmatch(path_pattern, proof[5]) if
+                              proof is not None and isinstance(proof[5], str) else None)
                 if (proof is None or proof[:5] != (
-                        "medusa-native-cart", operation, "POST",
-                        "/store/carts/{id}/line-items", fingerprint)
-                        or proof[5] != "/store/carts/" + ingress[9] + "/line-items"):
+                        "medusa-native-cart", operation, "POST", route, fingerprint)
+                        or path_match is None or path_match[1] != ingress[9]):
                     raise ProtectedGrantError("protected_native_operation_mismatch")
                 cursor.execute(
                     """SELECT environment_id,deployment_id,session_id,world_generation_id,
