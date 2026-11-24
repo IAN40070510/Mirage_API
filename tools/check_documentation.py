@@ -7,8 +7,9 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
-FUNCTION_ROOTS = ("src/deception", "mirage_validator", "tests", "tools", "integrations")
+FUNCTION_ROOTS = ("src/deception", "mirage_validator", "tests", "tools")
 GUIDES = {
+    "standalone": ("src/deception/security/trusted_deployment.py", "docs/standalone.md"),
     "httpx_fingerprint": ("src/deception/api/fingerprint.py", "docs/trusted-session.md"),
     "request_audit": ("src/deception/world/request_audit.py", "docs/request-audit.md"),
     "commit_result": ("src/deception/world/commit.py", "docs/commit-results.md"),
@@ -22,8 +23,6 @@ GUIDES = {
     "medusa_cart_http": ("src/deception/domains/ecommerce/medusa_cart_http.py", "docs/medusa-carts.md"),
     "medusa_cart_projection": ("src/deception/domains/ecommerce/medusa_cart_projection.py", "docs/medusa-carts.md"),
     "native_resource_time": ("src/deception/domains/ecommerce/native_time.py", "docs/medusa-carts.md"),
-    "gateway_compatibility": ("integrations/msdss/requirements.compatibility-test.txt", "docs/gateway-bootstrap.md"),
-    "gateway_bootstrap": ("integrations/msdss/gateway_bootstrap.py", "docs/gateway-bootstrap.md"),
     "runtime_archive": ("tools/package_runtime.py", "docs/runtime-operations.md"),
     "schema_migration": ("tools/apply_migrations.py", "docs/runtime-operations.md"),
     "migration_engine": ("src/deception/world/migrations.py", "docs/runtime-operations.md"),
@@ -38,7 +37,6 @@ GUIDES = {
     "resource_identity": ("src/deception/security/resource_identity.py", "docs/carts.md"),
     "inventory_events": ("src/deception/domains/ecommerce/inventory.py", "docs/inventory.md"),
     "trusted_session": ("src/deception/security/trusted_deployment.py", "docs/trusted-session.md"),
-    "trusted_gateway": ("integrations/msdss", "docs/trusted-session.md"),
     "ingress": ("src/deception/api", "docs/ingress.md"),
     "identification": ("src/deception/discovery", "docs/identifier.md"),
     "orchestration": ("src/deception/core/orchestrator.py", "docs/orchestration.md"),
