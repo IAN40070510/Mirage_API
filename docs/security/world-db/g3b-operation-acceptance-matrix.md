@@ -549,6 +549,29 @@ Query 實際 `status=403`，#101 依既有 Verifier 前置拒絕規則修正預�
 重跑四服務及 Container／ACL 全部 `success`。這**只補輸入拒絕子項**，
 不等於 Client 正式業務錯誤或全部 Medusa 功能已通過。
 
+**M-03 已知 Variant Cart add 200 候選（2026-11-24，隔離 PASS）**：
+原始 `POST /store/carts/{id}/line-items` 以衍生 Cart 的獨立有效 JWS、
+不可變 HTTP Proof／ReadAdmission 觸發真正 `cart.add` Commit，並以獨立唯讀
+Validator 從 `protected_world_commit_sources`、Commit Receipt、
+`native_response_contexts` Hash、目前 WorldSnapshot 及固定 Medusa Schema
+重建 `StoreCartResponse` **200 候選**。第一次含完整來源的結果版本為 2，
+同一 JWS 重播拒絕 403，`native_business_response=false`，Trusted Send OFF。
+固定修補 SHA [`a9eda2d`](https://github.com/IAN40070510/Mirage_API/commit/a9eda2d186009454aafb9806b655f6a598e50248)，
+[真四服務 #45396264049](https://github.com/IAN40070510/Mirage_API/actions/runs/45396264049)
+**success**：真 mTLS、四容器、獨立 Secret、三網路與實體 PostgreSQL ACL
+稽核均通過，日誌 `G3B_ROUTE_MEDUSA_ADD_CANDIDATE` 記錄本次 Commit 來源。
+上一版 [#45381239098](https://github.com/IAN40070510/Mirage_API/actions/runs/45381239098)
+因 Validator 缺少 `native_response_contexts SELECT` 而固定 503；修補只補
+Validator 的 SELECT 且納入啟動前檢查，沒有允許其寫入、沒有降低來源驗證。
+再於 SHA [`3055a1d`](https://github.com/IAN40070510/Mirage_API/commit/3055a1d71c8b18f7d4ae32928bd830e8901f3ce1)
+修復真 PG 測試治具，新增撤銷該 SELECT 必須拒絕啟動的負面回歸；
+[真 PostgreSQL 17.6 #45396777965](https://github.com/IAN40070510/Mirage_API/actions/runs/45396777965)
+**166 passed／5 real mTLS passed／9 G5 simulation passed**，
+[Container #45396778022](https://github.com/IAN40070510/Mirage_API/actions/runs/45396778022)
+**success**。此簽收只涵蓋單一 M-03 成功候選與上述 ACL 防護；未完成
+原生 Client HTTP 200、完整 400／404／衝突／併行故障矩陣、M-04～M-06、
+真正 G4 Sender、G5 Restore Fence 或 G6。**整體 G3b OPEN／NO-GO**。
+
 **Medusa M-02／M-07 原生 GET 的受保護讀取來源（2026-11-24，隔離 PASS；原生 200 OPEN）**：
 固定修正 SHA [`eb2c6ce`](https://github.com/IAN40070510/Mirage_API/commit/eb2c6ce71daeeb8e8352825b71acc6c2661c6ffb)
 在[真四服務 G3b #91](https://github.com/IAN40070510/Mirage_API/actions/runs/45362710702)

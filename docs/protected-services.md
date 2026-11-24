@@ -75,8 +75,14 @@ M-03 四服務增量曾在 [CI #45381239098](https://github.com/IAN40070510/Mira
 SCRAM Validator 原先未取得該表 `SELECT`。修補只補 Validator `SELECT`，
 並將它列入啟動前必要 ACL 與真 CI 權限稽核；Cart Executor 保留原有 INSERT，
 Validator 仍禁止 INSERT／UPDATE／DELETE，Runtime 仍禁止 SELECT。這是
-**針對可重現環境差異的最小權限修補，需以新 SHA 真四服務 CI 重跑確認**，
+**針對可重現環境差異的最小權限修補，當時仍須真四服務 CI 重跑確認**，
 不得因 PostgreSQL 管理員角色的單元測試通過就宣告 M-03 路由 PASS。
+
+後續固定 SHA `a9eda2d` 的[真四服務 CI #45396264049](https://github.com/IAN40070510/Mirage_API/actions/runs/45396264049)
+已 `success`，含 M-03 真 Commit／獨立 200 候選、角色 ACL 及 Secret 稽核；
+SHA `3055a1d` 的[真 PostgreSQL 17.6 #45396777965](https://github.com/IAN40070510/Mirage_API/actions/runs/45396777965)
+亦已 `166 passed`（另有真 mTLS 5 passed、模擬 G5 9 passed）。僅這些隔離
+子項可判 PASS；正式 Client HTTP、G4～G6 與 Release 簽核仍未完成。
 
 I-04 庫存 GET 新增另一個固定 mTLS 路徑
 `POST /internal/v1/project-inventory-snapshot`；Validator 唯讀重建原始
