@@ -973,6 +973,36 @@ def test_cart_http_verified_receipt_drives_real_fixed_world_handler(isolated_tes
                 (rejection_receipt,),
             ).fetchone()[0] == 1
 
+    # CAS：另一個有效原始 Receipt 若仍聲稱舊版本，必須停在不可驗證狀態。
+    # 不能把版本衝突偽裝成 Handler 的 409，也不能發出 Commit/Rejection Source。
+    from deception.world.store import WorldStoreError
+
+    stale_attempt = uuid4()
+    stale_body = json.dumps({"variant_id": "v1", "quantity": 1,
+                             "expected_version": 1, "idempotency_key": "stale-version",
+                             "commit_attempt_id": str(stale_attempt)}).encode()
+    stale_receipt, stale_path = issue_cart_http_proof(path, body=stale_body, resource=binding)
+    for _ in range(2):
+        with pytest.raises(WorldStoreError, match="version_conflict"):
+            executor.execute_verified_http(
+                receipt_id=stale_receipt, raw_path=stale_path, raw_body=stale_body,
+            )
+        with pytest.raises(ProtectedGrantError, match="rejection_source_missing"):
+            projector.project_synthetic_rejection(stale_receipt)
+    with psycopg.connect(dsn) as connection:
+        assert connection.execute(
+            "SELECT version FROM world_snapshots WHERE world_generation_id=%s",
+            (snapshot.scope.world_generation_id,),
+        ).fetchone()[0] == 2
+        assert connection.execute(
+            "SELECT count(*) FROM world_operations WHERE commit_attempt_id=%s",
+            (stale_attempt,),
+        ).fetchone()[0] == 0
+        assert connection.execute(
+            "SELECT count(*) FROM protected_world_commit_sources WHERE receipt_id=%s",
+            (stale_receipt,),
+        ).fetchone()[0] == 0
+
     # C-03：只准由已提交的真正 Handler 拒絕核發 409；未知變體與庫存不足
     # 都不能改動已存在的 Cart 品項或假稱一次成功 Commit。
     for variant, quantity, code, idempotency in (
