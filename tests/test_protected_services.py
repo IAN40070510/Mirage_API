@@ -108,6 +108,7 @@ def test_g3b_cart_creation_validator_rejects_cross_scope_and_forged_projection(m
 def test_g3b_cart_executor_requires_medusa_insert_but_inventory_denies_it(monkeypatch):
     """模擬實體 ACL：Cart 可寫固定拒絕來源，Inventory 不得借用這項特權。"""
     import psycopg
+    resource_acl = {"table_wide_update": False}
 
     class FakeConnection:
         """僅模擬角色身分與 ACL 查詢，強制觀察是否錯判 Cart 權限。"""
@@ -132,6 +133,8 @@ def test_g3b_cart_executor_requires_medusa_insert_but_inventory_denies_it(monkey
                 self.value = (False,)
             elif "FROM pg_auth_members" in statement:
                 self.value = (0,)
+            elif "has_column_privilege" in statement:
+                self.value = (True, resource_acl["table_wide_update"])
             elif "has_table_privilege" in statement:
                 table, privilege = params
                 denied = {("ingress_receipts", "INSERT"),
@@ -151,6 +154,11 @@ def test_g3b_cart_executor_requires_medusa_insert_but_inventory_denies_it(monkey
     monkeypatch.setattr(psycopg, "connect", lambda *_args, **_kwargs: FakeConnection())
     _login_preflight("postgresql://unused", "cart_login", role="executor",
                      schema="public", platform="synthetic-carts")
+    resource_acl["table_wide_update"] = True
+    with pytest.raises(ProtectedRpcConfigurationError, match="resource_lock_acl_invalid"):
+        _login_preflight("postgresql://unused", "cart_login", role="executor",
+                         schema="public", platform="synthetic-carts")
+    resource_acl["table_wide_update"] = False
     with pytest.raises(ProtectedRpcConfigurationError, match="forbidden_acl_detected"):
         _login_preflight("postgresql://unused", "cart_login", role="executor",
                          schema="public", platform="synthetic-inventory")
