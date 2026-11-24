@@ -158,7 +158,7 @@ BD-05 automated Quarantine transition or Sender/Purge concurrency test.
 
 ## Deployment guardrails
 
-### 2026-11-24 第二 PostgreSQL Fence Ledger 隔離增量（待 CI）
+### 2026-11-24 第二 PostgreSQL Fence Ledger 隔離增量（固定 SHA 隔離 PASS）
 
 `deploy/security-lab/g5-fence-schema.sql` 專供**不同於 World DB 的隔離 Fence
 資料庫**，不納入 World DB 的 `migrations/`。Schema 有不可改寫 Checkpoint、
@@ -182,6 +182,23 @@ Publisher／Reader／Runtime 的資料表 ACL、真正持久化 Head、舊世界
 重送／缺口／錯簽章、直接 DML 防護，另以兩條獨立連線競爭相同下一個
 Checkpoint，核對唯一成功與 Ledger 不重複。只允許專用 CI／Lab 啟用
 `MIRAGE_G5_FENCE_TEST_DSN`；沒有變數必須 SKIP，不可算 PASS。
+
+**固定來源／CI 證據**：程式 SHA
+[`e36d4bb7c498cd591d0ab7546a1e0f831f68209a`](https://github.com/IAN40070510/Mirage_API/commit/e36d4bb7c498cd591d0ab7546a1e0f831f68209a)。
+[隔離 PostgreSQL 17.6 #45408339195](https://github.com/IAN40070510/Mirage_API/actions/runs/45408339195)
+`success`：既有受保護合約 `166 passed`、真 mTLS `5 passed`、
+G5 密碼學模擬 `9 passed`、**第二個 PostgreSQL 服務／真實三角色
+SCRAM 與兩連線並行 Fence Ledger `4 passed`**。
+[Python #45408339208](https://github.com/IAN40070510/Mirage_API/actions/runs/45408339208)
+`success`：`1449 passed / 25 skipped / 2 warnings`；新增的四個
+G5 實體 DB 案例在此流程因未設第二 DSN 而明確 SKIP，不能重複算為 PASS。
+[Container #45408339359](https://github.com/IAN40070510/Mirage_API/actions/runs/45408339359)
+`success`。本地曾執行同版聚焦 `9 passed / 4 skipped`、
+`tools/check_documentation.py` PASS、`git diff --check` PASS。
+
+這是**獨立測試資料庫的真實持久化表（測後清除）／角色／並行交易子項**，不是
+實際生產環境、實際 World DB `pg_restore` 後的原子 Quarantine
+或 `RESTORE-ANCHOR-01`～`06` 完整簽核；不得因子項成功解除 Sender。
 
 **此項狀態仍是 G5 PARTIAL／NO-GO**：CI 只有兩個測試資料庫與用後即刪的
 隔離角色，尚未完成正式憑證隔離、不可回退的獨立最高 Head Authority、
