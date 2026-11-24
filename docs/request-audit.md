@@ -60,7 +60,7 @@ python -m pytest tests/test_request_audit.py tests/test_request_audit_http.py -q
 python tools/check_documentation.py
 ```
 
-需設定專用 `MIRAGE_POSTGRES_TEST_DSN`；HTTP 驗收另需 `MSDSS_ROOT` 指向實際 Gateway 的 wire adapter。未配置 skip 不算通過。Windows 執行 pytest、JWS、ASGI 與 TCP 故障代理；SSH Ubuntu 只執行隔離 PostgreSQL。測試包括真實 SQL 約束故障、整張 Grant 回滾、COMMIT 回覆遺失、跨世界初始化、原始內容 canary 與業務可能已提交的拒絕路徑。試作與實際套回的證據需分開記錄於[進度](implementation-progress.md)。
+需設定專用 `MIRAGE_POSTGRES_TEST_DSN`；舊版跨倉 HTTP 驗收依賴已移交外部消費端；本倉庫原生 HTTP 驗收無需外部檢出。未配置 skip 不算通過。Windows 執行 pytest、JWS、ASGI 與 TCP 故障代理；SSH Ubuntu 只執行隔離 PostgreSQL。測試包括真實 SQL 約束故障、整張 Grant 回滾、COMMIT 回覆遺失、跨世界初始化、原始內容 canary 與業務可能已提交的拒絕路徑。試作與實際套回的證據需分開記錄於[進度](implementation-progress.md)。
 
 停止與 Grant 的並行案例使用不同 PostgreSQL backend，先以 pg_blocking_pids 確認第二交易真的等待第一個結果鍵，再提交第一交易。Grant 先提交則未知停止不覆寫；停止先提交則等待中的 Grant 回滾。這是實際交易排序，不是兩個 OS 程序或 HTTP 傳輸證明。
 
