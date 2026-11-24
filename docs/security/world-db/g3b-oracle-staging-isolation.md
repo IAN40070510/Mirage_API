@@ -17,7 +17,10 @@
   `G3B_CI_{GATEWAY,EXECUTION,DATABASE}_NETWORK` 覆寫新網路名稱；
   `G3B_CI_IMAGE` 使用不可與既有 `mirage-api:standalone` 混用的新 Tag。
 - 新 DB 連線字串只經 `G3B_CI_ADMIN_DSN`（host-only）傳入準備與 Audit
-  程式，避免硬編碼。`G3B_CI_HOST_PORT` 指向本次 Loopback 埠。
+  程式，避免硬編碼。`G3B_CI_HOST_PORT` 指向本次 Loopback 埠；若
+  Docker `internal` 網路使 Loopback 不可達，Audit 應改由一次性 DB
+  網路執行，設定 `G3B_CI_AUDIT_DB_HOST=g3b-postgres` 與
+  `G3B_CI_AUDIT_DB_PORT=5432`，不得因此開通正式外部埠。
 - 設定 `MIRAGE_G3B_CI_EXPLICIT=ephemeral-four-services-only`；
   `MIRAGE_TRUSTED_SEND_ENABLE=false`、不連正式外部發送端或真實 Store。
 

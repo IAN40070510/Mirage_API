@@ -1770,6 +1770,10 @@ def _audit(root: Path) -> None:
     admin_dsn = os.environ.get("G3B_CI_ADMIN_DSN")
     if not admin_dsn:
         raise RuntimeError("g3b_ci_admin_dsn_required")
+    # Oracle internal bridge 不把 DB 發布埠回送 Host；Audit 僅經本次 DB 專網。
+    audit_host = os.environ.get("G3B_CI_AUDIT_DB_HOST", "127.0.0.1")
+    audit_port = os.environ.get(
+        "G3B_CI_AUDIT_DB_PORT", os.environ.get("G3B_CI_HOST_PORT", "55433"))
     with psycopg.connect(admin_dsn) as admin:
         if admin.execute("SELECT count(*) FROM protected_world_commit_sources").fetchone()[0] != 13:
             raise RuntimeError("g3b_ci_inventory_commit_evidence_missing")
@@ -1870,7 +1874,7 @@ def _audit(root: Path) -> None:
     # 真 SQL UPDATE 仍必須由不可變 Trigger 拒絕；不能只相信 Privilege Dump。
     cart_connection = conninfo_to_dict(
         (root / "secrets" / "g3b_cart_executor_dsn").read_text(encoding="utf-8"))
-    cart_connection.update(host="127.0.0.1", port=os.environ.get("G3B_CI_HOST_PORT", "55433"))
+    cart_connection.update(host=audit_host, port=audit_port)
     with psycopg.connect(make_conninfo(**cart_connection)) as cart:
         try:
             cart.execute(
@@ -1881,8 +1885,10 @@ def _audit(root: Path) -> None:
             pass
         else:
             raise RuntimeError("g3b_ci_synthetic_resource_immutable_trigger_missing")
-    runtime_dsn = (root / "probe" / "runtime-host.dsn").read_text(encoding="utf-8")
-    with psycopg.connect(runtime_dsn) as runtime:
+    runtime_connection = conninfo_to_dict(
+        (root / "probe" / "runtime-host.dsn").read_text(encoding="utf-8"))
+    runtime_connection.update(host=audit_host, port=audit_port)
+    with psycopg.connect(make_conninfo(**runtime_connection)) as runtime:
         if runtime.execute("SELECT current_user,session_user").fetchone() != (
                 "mirage_g3b_ci_runtime", "mirage_g3b_ci_runtime"):
             raise RuntimeError("g3b_ci_runtime_login_mismatch")
