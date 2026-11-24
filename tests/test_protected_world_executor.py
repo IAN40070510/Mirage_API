@@ -781,7 +781,8 @@ def test_cart_http_verified_receipt_drives_real_fixed_world_handler(isolated_tes
         )
     executor = PostgresProtectedWorldExecutor(dsn, expected_login=_real_login(dsn),
                                                world_store=store,
-                                               cart_initial_state={"catalog": catalog, "inventory": inventory})
+                                               cart_initial_state={"catalog": catalog, "inventory": inventory},
+                                               rejection_templates={"cart_item_not_found": "synthetic-carts-1"})
     created = executor.create_cart(receipt_id=creator_receipt, creator=creator,
                                    request_fingerprint=digest("a"), idempotency_key=uuid4(),
                                    commit_attempt_id=uuid4(), creation_digest=digest("d"), ttl=180)
@@ -901,7 +902,8 @@ def test_cart_http_verified_receipt_drives_real_fixed_world_handler(isolated_tes
     with pytest.raises(ProtectedGrantError, match="source_missing"):
         projector.project_cart_read(uuid4())
 
-    # C-06／C-07／C-08：沿用同一受保護派生世代的 Cart→Order 正向生命週期。
+    # C-04／C-05 先更新與刪除真品項，再以新 add 建立可供下單的同世代品項；
+    # C-06／C-07／C-08 沿用該受保護派生世代完成 Cart→Order 生命週期。
     def issue_cart_http_proof(path: str, *, body: bytes, resource: SessionBinding,
                               method: str = "POST") -> tuple[UUID, bytes]:
         """在實驗室真 PG 登錄不可變原始 HTTP Proof 與對應 Cart／Order Receipt。"""
@@ -935,7 +937,118 @@ def test_cart_http_verified_receipt_drives_real_fixed_world_handler(isolated_tes
             )
         return new_receipt, original.raw_path
 
-    complete_body = json.dumps({"expected_version": 2, "idempotency_key": "complete-cart",
+    item_id = cart_payload["cart"]["items"][0]["id"]
+    item_path = path + "/" + item_id
+    update_body = json.dumps({"quantity": 3, "expected_version": 2,
+                              "idempotency_key": "update-real-item",
+                              "commit_attempt_id": str(uuid4())}).encode()
+    update_receipt, update_path = issue_cart_http_proof(
+        item_path, body=update_body, resource=binding,
+    )
+    with pytest.raises(OperationBindingError, match="snapshot_mismatch"):
+        executor.execute_verified_http(
+            receipt_id=update_receipt, raw_path=update_path, raw_body=update_body.replace(b'"quantity": 3', b'"quantity": 5'),
+        )
+    with pytest.raises(OperationBindingError, match="snapshot_mismatch"):
+        executor.execute_verified_http(
+            receipt_id=update_receipt, raw_path=update_path.replace(item_id.encode(), b"item_" + b"e" * 32),
+            raw_body=update_body,
+        )
+    update_result = executor.execute_verified_http(
+        receipt_id=update_receipt, raw_path=update_path, raw_body=update_body,
+    )
+    assert update_result["operation"] == "updateGuestCartItem"
+    assert update_result["status"] == "committed" and update_result["state_version"] == 3
+    assert executor.execute_verified_http(
+        receipt_id=update_receipt, raw_path=update_path, raw_body=update_body,
+    )["status"] == "already_committed"
+    updated = projector.project_synthetic_success(update_receipt)
+    updated_payload = json.loads(updated.body_bytes)
+    assert updated.operation_id == "updateGuestCartItem" and updated.status_code == 200
+    assert updated_payload["cart"]["items"][0]["id"] == item_id
+    assert updated_payload["cart"]["items"][0]["quantity"] == 3
+    assert updated_payload["cart"]["total"] == 300
+
+    # 不存在的 item_id 是真正 Handler 409，不能靠 RPC 選擇錯誤來源；
+    # 失敗不推進 World 版本，同時驗證原始路徑對應的不可變 Proof。
+    absent_item_path = path + "/item_" + "f" * 32
+    absent_body = json.dumps({"quantity": 1, "expected_version": 3,
+                              "idempotency_key": "update-absent-item",
+                              "commit_attempt_id": str(uuid4())}).encode()
+    absent_receipt, absent_path = issue_cart_http_proof(
+        absent_item_path, body=absent_body, resource=binding,
+    )
+    absent_result = executor.execute_verified_http(
+        receipt_id=absent_receipt, raw_path=absent_path, raw_body=absent_body,
+    )
+    assert absent_result["operation"] == "updateGuestCartItem"
+    assert absent_result["status"] == "rejected" and absent_result["state_version"] is None
+    absent_projection = projector.project_synthetic_rejection(absent_receipt)
+    assert absent_projection.operation_id == "updateGuestCartItem"
+    assert absent_projection.status_code == 409
+    assert absent_projection.body_bytes == b'{"code":"cart_item_not_found"}'
+    with psycopg.connect(dsn) as connection:
+        assert connection.execute(
+            "SELECT version FROM world_snapshots WHERE world_generation_id=%s",
+            (snapshot.scope.world_generation_id,),
+        ).fetchone()[0] == 3
+
+    remove_body = json.dumps({"expected_version": 3, "idempotency_key": "remove-real-item",
+                              "commit_attempt_id": str(uuid4())}).encode()
+    remove_receipt, remove_path = issue_cart_http_proof(
+        item_path, body=remove_body, resource=binding, method="DELETE",
+    )
+    with pytest.raises(OperationBindingError, match="snapshot_mismatch"):
+        executor.execute_verified_http(
+            receipt_id=remove_receipt, raw_path=remove_path, raw_body=remove_body + b" ",
+        )
+    remove_result = executor.execute_verified_http(
+        receipt_id=remove_receipt, raw_path=remove_path, raw_body=remove_body,
+    )
+    assert remove_result["operation"] == "removeGuestCartItem"
+    assert remove_result["status"] == "committed" and remove_result["state_version"] == 4
+    assert executor.execute_verified_http(
+        receipt_id=remove_receipt, raw_path=remove_path, raw_body=remove_body,
+    )["status"] == "already_committed"
+    removed = projector.project_synthetic_success(remove_receipt)
+    removed_payload = json.loads(removed.body_bytes)
+    assert removed.operation_id == "removeGuestCartItem" and removed.status_code == 200
+    assert removed_payload["cart"]["items"] == [] and removed_payload["cart"]["total"] == 0
+
+    removed_again_body = json.dumps({"expected_version": 4,
+                                     "idempotency_key": "remove-already-removed",
+                                     "commit_attempt_id": str(uuid4())}).encode()
+    removed_again_receipt, removed_again_path = issue_cart_http_proof(
+        item_path, body=removed_again_body, resource=binding, method="DELETE",
+    )
+    removed_again_result = executor.execute_verified_http(
+        receipt_id=removed_again_receipt, raw_path=removed_again_path,
+        raw_body=removed_again_body,
+    )
+    assert removed_again_result["status"] == "rejected"
+    assert removed_again_result["state_version"] is None
+    removed_again_projection = projector.project_synthetic_rejection(removed_again_receipt)
+    assert removed_again_projection.operation_id == "removeGuestCartItem"
+    assert removed_again_projection.status_code == 409
+    assert removed_again_projection.body_bytes == b'{"code":"cart_item_not_found"}'
+    with psycopg.connect(dsn) as connection:
+        assert connection.execute(
+            "SELECT version FROM world_snapshots WHERE world_generation_id=%s",
+            (snapshot.scope.world_generation_id,),
+        ).fetchone()[0] == 4
+
+    refill_body = json.dumps({"variant_id": "v1", "quantity": 2, "expected_version": 4,
+                              "idempotency_key": "refill-for-complete",
+                              "commit_attempt_id": str(uuid4())}).encode()
+    refill_receipt, refill_path = issue_cart_http_proof(path, body=refill_body, resource=binding)
+    refill_result = executor.execute_verified_http(
+        receipt_id=refill_receipt, raw_path=refill_path, raw_body=refill_body,
+    )
+    assert refill_result["operation"] == "addGuestCartItem"
+    assert refill_result["status"] == "committed" and refill_result["state_version"] == 5
+    assert projector.project_synthetic_success(refill_receipt).status_code == 200
+
+    complete_body = json.dumps({"expected_version": 5, "idempotency_key": "complete-cart",
                                 "commit_attempt_id": str(uuid4())}).encode()
     complete_receipt, complete_path = issue_cart_http_proof(
         "/synthetic/carts/" + binding.resource_id + "/complete",
@@ -946,11 +1059,11 @@ def test_cart_http_verified_receipt_drives_real_fixed_world_handler(isolated_tes
         raw_body=complete_body,
     )
     assert complete_result["operation"] == "completeGuestCart"
-    assert complete_result["status"] == "committed" and complete_result["state_version"] == 3
+    assert complete_result["status"] == "committed" and complete_result["state_version"] == 6
     completed = projector.project_synthetic_success(complete_receipt)
     complete_payload = json.loads(completed.body_bytes)
     assert completed.operation_id == "completeGuestCart" and completed.status_code == 200
-    assert complete_payload["state_version"] == 3
+    assert complete_payload["state_version"] == 6
     assert complete_payload["order"]["cart_id"] == binding.resource_id
     assert complete_payload["order"]["status"] == "placed"
     order_id = complete_payload["order"]["id"]
@@ -972,9 +1085,9 @@ def test_cart_http_verified_receipt_drives_real_fixed_world_handler(isolated_tes
     assert order_projection.operation_id == "getSyntheticOrder" and order_projection.status_code == 200
     assert order_projection.source.read_admission_id == order_result["read_admission_id"]
     assert order_payload["order"] == complete_payload["order"]
-    assert order_payload["state_version"] == 3 and order_payload["commit_attempt_id"] is None
+    assert order_payload["state_version"] == 6 and order_payload["commit_attempt_id"] is None
 
-    cancel_body = json.dumps({"expected_version": 3, "idempotency_key": "cancel-order",
+    cancel_body = json.dumps({"expected_version": 6, "idempotency_key": "cancel-order",
                               "commit_attempt_id": str(uuid4())}).encode()
     cancel_receipt, cancel_path = issue_cart_http_proof(
         "/synthetic/orders/" + order_id + "/cancel", body=cancel_body, resource=order_binding,
@@ -982,14 +1095,14 @@ def test_cart_http_verified_receipt_drives_real_fixed_world_handler(isolated_tes
     cancel_result = executor.execute_verified_http(
         receipt_id=cancel_receipt, raw_path=cancel_path, raw_body=cancel_body,
     )
-    assert cancel_result["status"] == "committed" and cancel_result["state_version"] == 4
+    assert cancel_result["status"] == "committed" and cancel_result["state_version"] == 7
     cancelled = projector.project_synthetic_success(cancel_receipt)
     cancelled_payload = json.loads(cancelled.body_bytes)
     assert cancelled.operation_id == "cancelSyntheticOrder" and cancelled.status_code == 200
     assert cancelled_payload["order"]["id"] == order_id
     assert cancelled_payload["order"]["cart_id"] == binding.resource_id
     assert cancelled_payload["order"]["status"] == "cancelled"
-    assert cancelled_payload["state_version"] == 4
+    assert cancelled_payload["state_version"] == 7
 
 
 def test_untrusted_legacy_cart_cannot_enter_verified_http_executor(isolated_test_dsn):
