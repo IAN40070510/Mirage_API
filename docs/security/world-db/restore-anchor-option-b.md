@@ -63,6 +63,38 @@ crash-window reconciliation, release certificate, active Sender or Purge race
 was exercised. The lab comparison must not be treated as an implemented runtime
 quarantine guard, a production Anchor, or authorization to lift the Release Fuse.
 
+## 2026-11-24 cryptographic anchor verifier increment — local unit PASS, G5 OPEN
+
+`src/deception/world/restore_anchor.py` adds a fail-closed, **verification-only**
+Ed25519 contract with separate pinned Publisher and Head Authority public keys.
+The Head Authority must sign fresh 32-byte challenges together with the
+independent **latest** namespace/epoch/sequence/digest **before and after** chain
+verification; an advancing Head invalidates the comparison. The verifier checks every
+checkpoint signature, previous-checkpoint hash, exact event sequence coverage,
+unique publication identity, COMMITTED-only state, and the restored World's
+digest against its historical checkpoint. An older restored DB receives
+`RESTORE_BEHIND`; matching the latest Head receives `HEAD_MATCHED`, but
+**neither result permits release** (`release_authorized=False`). Read failure,
+missing link, stale/tampered signature, nonce mismatch, PREPARED publication,
+or untrusted Head fails closed.
+
+`tests/test_restore_anchor.py` provides nine isolated cryptographic contract
+tests (including mismatch, rollback, outage, tampering, replay and coverage
+gaps). Local command `PYTHONPATH=src python -m unittest discover -s tests -p
+test_restore_anchor.py -v`: **9 passed**, no physical DB/restore/container
+involved; GitHub isolated contract CI is configured to retain JUnit separately.
+This is **only a code-level subcomponent** and must not be counted as
+`RESTORE-ANCHOR-01` through `06` or `RESTORE-RELEASE-01` through `07`.
+
+To make this enforceable, a subsequent isolated implementation must supply
+an independently credentialed durable Publisher and fresh monotonic Head Reader,
+with an auditable append-only event ledger that proves completeness (not just
+contiguous declared event numbers). It must bind exact restore-epoch/World DB
+state, perform two-domain COMMIT/ACK reconciliation and atomic BD-05 quarantine
+transitions, and serialize Sender/Purge. The Reader/Head expected epoch and
+public keys cannot be supplied by the restored World DB or untrusted Runtime.
+No production or staging service is connected to this helper.
+
 ## Deployment guardrails
 
 Use only the dedicated `mir-sec-world001-lab` resources for implementation and tests. Do not attach the existing staging networks, restart the seven existing containers, reuse production secrets, merge the Draft PR, or enable trusted send.

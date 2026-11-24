@@ -95,6 +95,76 @@ def test_send_lease_insert_error_rolls_back_send_started(isolated_test_dsn):
         assert connection.execute("SELECT count(*) FROM response_audit").fetchone()[0] == 0
 
 
+def test_send_started_audit_failure_rolls_back_lease_and_state(isolated_test_dsn):
+    """首筆必要 Audit 寫入故障時回滾一次性 Lease 與 SEND_STARTED，不放出起送結果。"""
+    import psycopg
+
+    admission, owner, envelope, seeded = _authorized_pin(isolated_test_dsn)
+    sender = PostgresProtectedSender(isolated_test_dsn, expected_login=_login(isolated_test_dsn))
+    with psycopg.connect(isolated_test_dsn) as connection:
+        connection.execute(
+            """CREATE TRIGGER injected_first_audit_failure BEFORE INSERT ON response_audit
+               FOR EACH ROW EXECUTE FUNCTION reject_protected_mutation()""",
+        )
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        sender.start_send(
+            admission_id=admission.admission_id, receipt_id=seeded[3], owner=owner,
+            request_fingerprint=admission.request_binding_digest,
+            expected_envelope=envelope,
+        )
+    with psycopg.connect(isolated_test_dsn) as connection:
+        assert connection.execute(
+            "SELECT state FROM response_admissions WHERE admission_id=%s",
+            (admission.admission_id,),
+        ).fetchone()[0] == "SEND_AUTHORIZED"
+        assert connection.execute(
+            "SELECT count(*) FROM protected_send_leases WHERE admission_id=%s",
+            (admission.admission_id,),
+        ).fetchone()[0] == 0
+        assert connection.execute(
+            "SELECT count(*) FROM response_audit WHERE admission_id=%s",
+            (admission.admission_id,),
+        ).fetchone()[0] == 0
+
+
+def test_terminal_audit_failure_keeps_prior_lease_nonretryable(isolated_test_dsn):
+    """終態 Audit INSERT 失敗時完整回滾狀態，保留原 Lease 且禁止重新起送。"""
+    import psycopg
+
+    admission, owner, envelope, seeded = _authorized_pin(isolated_test_dsn)
+    sender = PostgresProtectedSender(isolated_test_dsn, expected_login=_login(isolated_test_dsn))
+    args = dict(admission_id=admission.admission_id, receipt_id=seeded[3], owner=owner,
+                request_fingerprint=admission.request_binding_digest,
+                expected_envelope=envelope)
+    lease = sender.start_send(**args)
+    assert lease is not None
+    with psycopg.connect(isolated_test_dsn) as connection:
+        connection.execute(
+            """CREATE TRIGGER injected_terminal_audit_failure BEFORE INSERT ON response_audit
+               FOR EACH ROW WHEN (NEW.sequence = 2)
+               EXECUTE FUNCTION reject_protected_mutation()""",
+        )
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        sender.finish_send(
+            admission_id=admission.admission_id, owner=owner, lease_id=lease.lease_id,
+            outcome=AdmissionState.SEND_COMPLETED, attempted=True,
+        )
+    assert sender.start_send(**args) is None
+    with psycopg.connect(isolated_test_dsn) as connection:
+        assert connection.execute(
+            "SELECT state FROM response_admissions WHERE admission_id=%s",
+            (admission.admission_id,),
+        ).fetchone()[0] == "SEND_STARTED"
+        assert connection.execute(
+            "SELECT count(*) FROM protected_send_leases WHERE admission_id=%s",
+            (admission.admission_id,),
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT sequence,event_name FROM response_audit WHERE admission_id=%s ORDER BY sequence",
+            (admission.admission_id,),
+        ).fetchall() == [(0, "send_started")]
+
+
 def test_concurrent_send_starts_only_one_lease(isolated_test_dsn):
     """兩個獨立 PostgreSQL 連線同時起送時，Row Lock＋唯一鍵只核准一方。"""
     import psycopg
