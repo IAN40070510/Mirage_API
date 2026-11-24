@@ -76,7 +76,7 @@ class AdmissionTransmission:
         self._require(self.control.authorize_send(admission.admission_id, now=self.clock()))
 
     def start(self) -> None:
-        """在任何 ASGI 訊息前持久化起送，確認期限、owner 與撤銷。"""
+        """在 ASGI 起送前提交 single-use／owner／期限，保留已核准授權的 Freeze v1 語意。"""
         self._require(self.control.start_send(self.admission.admission_id, owner=self.owner, now=self.clock()))
 
     def check_deadline(self) -> None:

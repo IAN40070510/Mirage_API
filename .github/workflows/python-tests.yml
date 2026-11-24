@@ -4,9 +4,8 @@ on:
   push:
     branches:
       - main
+      - 'refactor/mirage-*-standalone-20261125'
   pull_request:
-    branches:
-      - main
   workflow_dispatch:
 
 permissions:
@@ -33,6 +32,7 @@ jobs:
           --health-retries 12
     env:
       MIRAGE_POSTGRES_TEST_DSN: postgresql://mirage:mirage_ci_only@127.0.0.1:5432/mirage_test?connect_timeout=5
+      MIRAGE_WORLD_ROLE_TEST_ISOLATED: "true"
     steps:
       - name: Checkout
         uses: actions/checkout@v4

@@ -1,5 +1,7 @@
 # Mirage_API — 通用型 API 誘餌平台
 
+Mirage 為可獨立安裝、執行及測試的合成 API 服務；世界、Session、Grant、Replay、受保護傳輸與原生稽核均由 Mirage 管理。外部安全偵測、分類、客戶端簽章及其原判定持久化由獨立消費端負責，無須安裝其他專案。參見 [獨立運作與驗收](docs/standalone.md)。本次去耦不是 G3b～G6 發布簽核：正式傳輸仍須各 Gate 驗收核准。
+
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 
 Mirage_API 用來回應被判定為攻擊的 API 請求。它的目標不是只產生一份通過 schema 的 JSON，而是在符合原本 API 契約與真實可能業務語意的前提下，維持一個可跨請求查詢的合成世界，讓真實回應銜接到合成回應時不易被辨識為誘餌環境。是否為攻擊由外部安全檢查工具判斷，Mirage_API 負責後面的回應流程。
@@ -7,6 +9,9 @@ Mirage_API 用來回應被判定為攻擊的 API 請求。它的目標不是只�
 目前可以直接使用的業務類別是電商，設定名稱為 `ecommerce`。電商設定與資料集中在 [domains/ecommerce](domains/ecommerce/README.md)，商品處理程式位於 `src/deception/domains/ecommerce/`。其他業務也能沿用共用流程，但需要補上自己的資料處理程式、情境規則、API 規格、驗證方式及文件，再由部署程式把它們接進共用流程。測試已用工單案例確認這種接法可行，尚未提供可直接部署的工單版本。
 
 各工具的輸入、輸出、用法、失敗處理、驗證與授權見 [工具文件索引](docs/README.md)。
+
+**Security Architecture（文件提案，不是已部署控制）**：[MIR-SEC-WORLD-001 ADR v0.2 Contract Freeze candidate](docs/adr/MIR-SEC-WORLD-001-world-db-trust-boundary.md) 與 [World DB 文件／驗收索引](docs/security/world-db/README.md) 已將 Send Authorization Freeze v1、Snapshot Write-Once、權威時間、未知 COMMIT、GC／Restore／Mixed Runtime 合約收斂。**Architecture Proposed／MIR-SEC-WORLD-001 OPEN／MSDSS P2 NO-GO／production DECEIVE OFF；新安全控制與驗收均 NOT_IMPLEMENTED／NOT_RUN。**
+
 
 首次使用可直接執行：
 
@@ -51,7 +56,6 @@ docker compose up --build -d --wait --wait-timeout 180
 
 使用者已要求擴充 Medusa `/store` 映射。首組原生購物車、品項增刪改、完成及訂單查詢已接到同一合成引擎，原生回應不包含內部 CAS／hash 欄位；來源、金額轉換、匿名有效投影與支援範圍見[原生映射說明](docs/medusa-carts.md)。這項能力須另外明確啟用，尚未切換 staging，也不代表整套 Store／付款配送 API 都已支援。
 
-Gateway 的部署組裝器位於 Mirage 的 `integrations/msdss/gateway_bootstrap.py`：把固定身份服務、匿名分組及資源 ID 綁定接到既有 dispatcher，秘密由分開的檔案提供，預設維持 observe-only。外部 Gateway lifespan 的五行注入點已經使用者核准，套用至本機與 SSH 原始碼；未啟用設定、安裝依賴或切換 staging。依賴差異與啟用邊界見[部署組裝說明](docs/gateway-bootstrap.md)。
 
 ## 系統架構
 

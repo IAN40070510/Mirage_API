@@ -74,6 +74,27 @@ class PostgresTrustedKeyRevocations:
                 self._lock(cursor, issuer, kid)
                 yield self._select(cursor, issuer, kid)
 
+    def consume_guarded_replay(self, replay_store, *, issuer: str, kid: str,
+                               audience: str, jti: str, expires_at: int, now: int):
+        """以同一實體連線與交易持有 Key 鎖並消費 Replay；確認 COMMIT 後才回報結果。
+
+        不接受分離的 Replay DSN 或其他儲存實作，以免呼叫端誤以為跨連線已
+        原子提交。傳回 (revocation, replay_result)，遭撤銷時不寫入 Replay。
+        """
+        from deception.world.postgres_replay import PostgresReplayStore
+
+        if not isinstance(replay_store, PostgresReplayStore) or replay_store._dsn != self._dsn:
+            raise KeyRevocationError("ingress_requires_same_postgres_connection_domain")
+        with self._connection() as connection:
+            with connection.cursor() as cursor:
+                self._lock(cursor, issuer, kid)
+                revoked = self._select(cursor, issuer, kid)
+                if revoked is not None:
+                    return revoked, None
+                result = replay_store._consume_on_cursor(cursor, issuer=issuer, audience=audience,
+                                                          jti=jti, expires_at=expires_at, now=now)
+                return None, result
+
     def revocation(self, issuer: str, kid: str) -> KeyRevocation | None:
         """以新交易查目前永久墓碑，未知提交結果只查回，不盲目重做撤銷。"""
         with self.guard(issuer, kid) as state:

@@ -15,6 +15,7 @@
 | revoke | issuer、kid、正整數 revision（最大 int64，不接受 bool）；提交後回傳 KeyRevocation。 |
 | revocation | issuer／kid；新交易查墓碑，存在回傳版本，否則 None，儲存故障拋錯。 |
 | guard | issuer／kid；持共享控制鎖至呼叫端 Replay 消費結束，只有 None 表示此控制邊界尚未撤銷。 |
+| consume_guarded_replay | issuer／kid、Replay Store、audience／JTI／有效期；要求兩者 DSN 相同，在 Key 撤銷鎖與 Replay INSERT 同一實體連線／交易中完成，確認 COMMIT 後回傳撤銷或 Replay 結果。 |
 
 控制域為 environment_id、deployment_id、issuer、kid。其他部署或另一 kid 不受影響。尚未設定的 kid 也能預先撤銷；日後加入設定仍會拒絕。版本只在同一墓碑內單調遞增，與 Session epoch、Profile revision 或 Replay 序列無關。沒有刪除、恢復或自動 GC API。
 
@@ -56,7 +57,7 @@ current = manager.revocation("gateway", "retired-kid")
 
 控制器須使用同一可寫 primary／schema，autocommit=False、Read Committed。控制鎖以實際墓碑表 OID 與完整身份摘要區分；取得鎖與查墓碑是兩個 statement，避免使用等待前快照。Repeatable Read、Serializable 或 autocommit 明確拒絕。不能使用延遲副本或舊版程序宣稱撤銷有效。
 
-若驗證先持共享鎖並消費 Replay，撤銷等待它完成；若撤銷先提交，後續驗證讀到墓碑後拒絕，JTI 不消費。共享鎖保持到 Replay 操作完成，但兩者不是同一資料庫交易；Replay 已提交後，控制連線 COMMIT 回覆遺失仍會使本次驗證拒絕，不能把它當成 JTI 未用。不可自動重送原授權或在未知結果時換 JTI 重做業務。
+若驗證先持共享鎖並消費 Replay，撤銷等待它完成；若撤銷先提交，後續驗證讀到墓碑後拒絕，JTI 不消費。獨立修補分支的 PostgreSQL provider 已把 **Key guard 與 Replay INSERT** 收斂為同一條連線／交易，任一寫入前錯誤或明確 rollback 均不可留下 Replay；COMMIT 回覆遺失時仍不能推定 JTI 未用。對不同 DSN 或非 PostgreSQL Replay Store 直接拒絕。**本階段尚未建立獨立可信 Ingress Receipt writer、受保護 DB 角色與完整 IngressTx**，因此不能把此局部改良稱為 `MIR-SEC-WORLD-001` 修復完成，也不可開正式發送。
 
 連線期限 5 秒、控制 statement_timeout 5 秒，不代表整個 HTTP 操作的總期限。缺 migration、儲存不可達、鎖等待逾時或無法確定結果都停止新驗證，沒有記憶體空名冊降級。管理撤銷 COMMIT 回覆遺失只能用新連線查 revocation，不盲目重寫或自動升 revision。從撤銷前舊備份恢復會遺失新墓碑，正式恢復需另有可信安全基線，不能直接回滾即宣稱安全。
 
@@ -69,7 +70,7 @@ python tools/check_documentation.py
 
 資料庫案例須提供專用 MIRAGE_POSTGRES_TEST_DSN；雙服務案例另需本機 MSDSS checkout 及 openssl。skip 不是通過。案例包含有效簽章後撤銷、不消費 Replay、真正鎖等待的兩種順序、讀寫隔離拒絕、真實 TCP COMMIT 回覆遺失、重建／同 kid 換公鑰仍拒絕，以及兩個真正 TLS 業務服務不重啟輪替並保留原世界。合成測試私鑰只留本機，不用於正式環境。
 
-另以真實 TCP 代理分別丟棄 Replay 及 key guard 的 COMMIT 回覆：驗證必須拋錯，已提交 JTI 仍只一筆且後續拒絕重放；控制鎖可釋放並允許管理端撤銷。隔離映像的最後一項 opt-in 測試與停止寫入後的備份還原檢查見[運維說明](runtime-operations.md)。
+另以真實 TCP 代理丟棄**合併後單一 Ingress Key／Replay 交易**的 COMMIT 回覆：驗證必須拋錯，已提交 JTI 仍只一筆且後續拒絕重放；再測試 Replay INSERT 後故障的整筆回滾、Replay 禁止開第二連線、不同 DSN 事前拒絕。隔離映像的最後一項 opt-in 測試與停止寫入後的備份還原檢查見[運維說明](runtime-operations.md)。
 
 ## 授權與目前限制
 

@@ -1,10 +1,18 @@
 # 工具說明文件索引
 
+[Mirage 獨立安裝與驗收](standalone.md)。外部消費者的組裝程式、資料持久化及相容性測試不在本倉庫維護；歷史整合測試紀錄僅作當時證據保存。
+
 想知道某個工具做什麼、需要哪些資料、怎麼使用，可以從下面的表格找到說明。各份文件也會交代設定方式、檢查方法、授權，以及哪些部分還沒有實作。
 
 首次使用請先看[安裝與第一次使用](getting-started.md)；各節點分工見 [README 架構總覽](../README.md#系統架構)，部署組裝、快取及錯誤分支詳見 [詳細架構與執行邊界](architecture.md)。
 
 專案自有程式採 Apache-2.0；Medusa 規格、OWASP 分類資料、套件及模型的個別授權與封裝聲明見 [專案授權與第三方材料](licensing.md)。
+
+**v0.2 契約基準**：Mirage 上游 `main` `88dc2008fd35a2d3873949a769653dc9f18e8980`；MSDSS Freeze v1 整合基準 `main` `5a1ee26dcf79f04cf29345a0403e3f3f8082358b`；文件前置分支 `docs/mir-sec-world-001-adr-v0.1`／HEAD `003c918f142296588d2fe14b70fafe3cc5cf8458`（**main 尚未包含 ADR**）。此 Draft 不是 Runtime 或 PostgreSQL ACL 已實作。測試 ID 與 NOT_RUN 的唯一清單見 [Verification Plan](security/world-db/verification-plan.md)；文件工具應執行 `python tools/check_documentation.py`。
+
+安全架構提案（**尚未實作／尚未驗收**）：[MIR-SEC-WORLD-001 World DB 信任邊界 ADR v0.2](adr/MIR-SEC-WORLD-001-world-db-trust-boundary.md)；[決策歷史、權威證據、交易鎖與負面測試索引](security/world-db/README.md)。狀態：Architecture Proposed／Weakness OPEN／MSDSS P2 NO-GO。
+
+**ADR 三層證據狀態**：MSDSS Freeze v1 baseline **ACCEPTED**、Mirage Owner adoption **PENDING**、Mirage native conformance **NOT_RUN**；新增 `WORLD-PROTOCOL-MATRIX-01`、`WORLD-RESTORE-FENCE-01`、`WORLD-PURGE-BOUNDARY-01` 仍為設計中的驗收，完整內容見 [World DB 驗收計畫](security/world-db/verification-plan.md)，並非已通過測試。
 
 | 工具／介面 | 程式位置 | 說明文件 |
 | --- | --- | --- |
@@ -15,19 +23,18 @@
 | JWS 固定拒絕碼與簽發向量 | `tests/fixtures/golden_vectors/trusted_session_errors.json`、`sign_trusted_errors.mjs` | [格式、clock、撤銷及 Replay 邊界](trusted-session.md) |
 | 固定安全錯誤 Renderer | `src/deception/core/security_error.py` | [獨立模板、精確封套與請求綁定](security-errors.md) |
 | 可信簽章金鑰撤銷 | `src/deception/security/key_revocation.py`、`migrations/014_trusted_key_revocations.sql` | [永久墓碑、Replay 排序與輪替](key-revocation.md) |
+| World DB 隔離權限驗收 Lab | `deploy/security-lab/compose.yaml`、`provision.py`、`migrate_receipts.py`、`probe.py`、`atomic_ingress_probe.py`、`receipt_schema_probe.py` | [單機獨立 Docker 網路、SCRAM Role、SQLSTATE 42501、Replay／Receipt 交易實測](security/world-db/isolated-oracle-lab.md) |
 | 可信入口拒絕稽核 | `src/deception/security/ingress_audit.py`、`migrations/013_ingress_refusal_audit.sql` | [固定分類、資料最小化與故障處理](ingress-audit.md) |
 | Profile 整體撤銷 | `src/deception/world/projection_registry.py`、`admission.py`、`postgres_admission.py` | [一般／緊急墓碑、控制邊界與驗證](profile-revocation.md) |
 | Medusa 原生購物車映射 | `src/deception/domains/ecommerce/medusa_cart_http.py`、`medusa_cart_projection.py` | [原生路由、金額、匿名投影與隔離驗收](medusa-carts.md) |
 | 原生資源時間 | `src/deception/domains/ecommerce/native_time.py` | [UTC 格式、單調時間與歷史拒絕](medusa-carts.md) |
-| Gateway 部署組裝與已核准注入點 | `integrations/msdss/gateway_bootstrap.py` | [預設觀察政策、秘密檔與外部變更](gateway-bootstrap.md) |
-| Gateway 原版框架相容性環境 | `integrations/msdss/requirements.compatibility-test.txt` | [隔離版本清單與驗收邊界](gateway-bootstrap.md) |
 | 脫敏封裝與版本化資料庫更新 | `tools/package_runtime.py`、`tools/apply_migrations.py` | [操作邊界、輸入與驗證](runtime-operations.md) |
 | 匿名合成購物車與訂單 | `src/deception/domains/ecommerce/carts.py`、`cart_http.py` | [cart.id、訪客狀態、下單與取消](carts.md) |
 | 原生 Medusa 購物車範圍審查 | 固定來源與獨立 scoped Profile | [合成契約與原生接線的差異](medusa-cart-integration-review.md) |
 | 合成庫存預留與取消 | `src/deception/domains/ecommerce/inventory.py` | [交易、冪等與結果恢復](inventory.md) |
 | Session 世界映射與讀取准入 | `src/deception/world/session.py` | [Session、epoch 與 Watermark](world-runtime.md) |
 | Medusa 身份與匿名唯讀分組 | `src/deception/security/medusa_identity.py`、`anonymous_identity.py` | [驗證介面與啟用範圍](trusted-session.md) |
-| Trusted Session 部署與 Gateway | `src/deception/security/trusted_deployment.py`、`integrations/msdss/` | [JWS 接線、Replay 與限制](trusted-session.md) |
+| Trusted Session 驗章與 Replay | `src/deception/security/trusted_deployment.py` | [原生可信接收、拒絕與限制](trusted-session.md) |
 | 共用模型與資料交換 | `src/deception/common/` | [嚴格型別、隔離範圍與通用資料投影](common-data.md) |
 | Synthetic World Runtime | `src/deception/world/` | [WorldScope、Snapshot、CAS 與 ResponseAdmission](world-runtime.md) |
 | 實作進度追蹤 | `docs/implementation-progress.md` | [目前完成項目、驗證紀錄與下一步](implementation-progress.md) |
