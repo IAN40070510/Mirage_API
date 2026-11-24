@@ -86,6 +86,14 @@ involved; GitHub isolated contract CI is configured to retain JUnit separately.
 This is **only a code-level subcomponent** and must not be counted as
 `RESTORE-ANCHOR-01` through `06` or `RESTORE-RELEASE-01` through `07`.
 
+At fixed code SHA `4be39923bbffb76ded388035cd250517ff732e57`,
+[PostgreSQL contract CI 45325688577](https://github.com/IAN40070510/Mirage_API/actions/runs/45325688577)
+reported 154 protected PG passes, 5 mTLS passes and **9 separate anchor
+cryptography passes**. [Python CI 45325688529](https://github.com/IAN40070510/Mirage_API/actions/runs/45325688529)
+reported `1436 passed / 21 skipped / 2 warnings`;
+[container CI 45325688534](https://github.com/IAN40070510/Mirage_API/actions/runs/45325688534)
+was successful. The skipped cases remain skipped.
+
 To make this enforceable, a subsequent isolated implementation must supply
 an independently credentialed durable Publisher and fresh monotonic Head Reader,
 with an auditable append-only event ledger that proves completeness (not just
@@ -94,6 +102,59 @@ state, perform two-domain COMMIT/ACK reconciliation and atomic BD-05 quarantine
 transitions, and serialize Sender/Purge. The Reader/Head expected epoch and
 public keys cannot be supplied by the restored World DB or untrusted Runtime.
 No production or staging service is connected to this helper.
+
+## 2026-11-24 actual pg_dump/pg_restore against separate lab Fence — bounded PASS
+
+An additional **host-only disposable test** on `msdss-oracle-arm64-test`
+used the existing `mir-sec-world001-pg` World Lab and the separate
+`mir-sec-world001-fence-pg` PostgreSQL 17.6 Fence Lab (distinct containers,
+data volumes, and administrator logins). It never touched a staging or
+production database. Two uniquely named empty World test databases and a
+single dedicated Fence schema were created after verifying none existed.
+
+1. In World source test DB, commit event 1 (`REPLAY_CONSUMED`); persist an
+   independently calculated SHA-256 state digest in Fence checkpoint 1.
+   Jobs `job_01M85WR4RC0020QMDBAJ4GXN43` and
+   `job_01M85WRHM700JQ4B44CEX43VW7`.
+2. Take a **real PostgreSQL custom-format `pg_dump`** before event 2:
+   `job_01M85WSAXP00YZAAVFZDWKA7QB` exited 0; archive SHA-256
+   `979bada0cd18b7ec89d9c475c3c3bc9c1ab33f055b330257632812d5a77a68bb`
+   from `job_01M85WSNVD00HDBF6WVA7RG75T`.
+3. Commit event 2 (`SNAPSHOT_PURGE_FENCE`) **after backup** and append
+   Fence checkpoint 2 linked to checkpoint 1. Jobs
+   `job_01M85WT4NR00Q59E1H5JRAVVFW` and
+   `job_01M85WTH6B009H9MN3PEDXSZ5V`.
+4. Run actual `pg_restore --exit-on-error` into a **different empty World
+   test database**, job `job_01M85WTW0D00D7K8B84YECRGP3` exit 0.
+   Source was sequence 2 / digest `35002ada60aa676b...`, restored was
+   sequence 1 / digest `451f92386c058839...`, independently stored
+   Fence Head was sequence 2. Fence checkpoint count and SHA-256 previous
+   links verified `2|2|t|t`: source/restore/Fence query jobs
+   `job_01M85WWE3S00ECZGFH34KH702A`,
+   `job_01M85WW3S300FG1FXBH5E1DRGT`,
+   `job_01M85WVSDJ006Z2C75SW3G05WS`,
+   `job_01M85WVF2Y00RM0V91H3YKV5QC`.
+   Comparison result: **`G5_LAB_PGDUMP_RESTORE QUARANTINE_REQUIRED=YES`**.
+5. Drop **only** the two one-off databases, one Fence schema, and its archive;
+   jobs `job_01M85WX3HX00F3TH0N27RKWYM4`,
+   `job_01M85WY0XX00664D6JR1SCBS72`,
+   `job_01M85WXPW200G8AP6VMEAJE93W`,
+   `job_01M85WXC9E00NPRH55G31WSH8A` all succeeded.
+   Independent post-cleanup checks found `0` matching databases,
+   `0` matching Fence schemas and no archive: jobs
+   `job_01M85WYCYE00DG0P41GKCE1RWX`,
+   `job_01M85WYXGG002MRYVMCS3FPRBV`,
+   `job_01M85WYN6C00ZTFSE8D0DZFGBP`.
+
+This is stronger than deleting a probe table to simulate rollback: the
+restored World contents were actually produced by PostgreSQL backup/restore.
+**It is nevertheless a disposable ledger probe**, not a full application
+World DB restore or production Anchor. The host SQL probe uses hash chaining,
+not the new signed-checkpoint Reader; it has no complete Publisher/Head
+credential isolation proof, no signed monotonic freshness protocol, no
+real business effects, no crash-window/unknown-ACK reconciliation, and no
+BD-05 automated Quarantine transition or Sender/Purge concurrency test.
+`RESTORE-ANCHOR-01` through `06` and G5 overall remain **OPEN/NOT_RUN**.
 
 ## Deployment guardrails
 

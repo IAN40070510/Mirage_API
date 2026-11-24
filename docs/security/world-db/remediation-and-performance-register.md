@@ -99,8 +99,8 @@
 | **P0 / G0** | 固定 affected SHA、確認三項 SQL 缺口與正常功能基準、建立隔離 DB；敏感 PoC 不公開擴散 | Mirage Owner／Security 保存固定版本與負面重現；未修補前保持 release fuse | **先前已重現；整體 G0 仍不應推定 PASS** |
 | **P0 / G1–G2** | 正式 Verifier/Authorizer Role、Secret/來源隔離；可信 IngressTx Receipt、Replay 同交易 | 真實容器 Secret/Role/ACL，交易故障與跨 request 綁定測試 | **局部隔離 Lab PASS，正式接線未完** |
 | **P0 / G3** | Candidate Clean Cutover、Validator/Promotion、Grant Binding、Session/Admission 受保護函式、禁止舊 Runtime DML | 三項原 SQL 越權必遭拒；新正常商城交易可用；未知 COMMIT 不重做 | **待實作／整體 NOT_RUN** |
-| **P0 / G4** | 獨立 Snapshot 物件與 Pin、兩種 Purge Fence、所有發送路徑接強制 StartSend/Lease/ASGI 邊界 | Payload 替換、Purge/GC/Send 並行、Partial/Unknown HTTP fault 驗收 | **待實作／整體 NOT_RUN** |
-| **P0 / G5** | 外部耐久 Fence/Highest Head、DB-first／Anchor-first 對帳、Restore Quarantine 與自動解禁證據 | 還原、故障、跨 DB commit 未知不得放行；人工修復不等於人工猜測已安全 | **部署與故障注入未完** |
+| **P0 / G4** | 獨立 Snapshot 物件與 Pin、兩種 Purge Fence、所有發送路徑接強制 StartSend/Lease/ASGI 邊界 | Payload 替換、Purge/GC/Send 並行、Partial/Unknown HTTP fault 驗收 | **Audit INSERT 回滾／Lease non-retryable 真 PG 子項 PASS（SHA `4be3992`）；整體 NOT_RUN** |
+| **P0 / G5** | 外部耐久 Fence/Highest Head、DB-first／Anchor-first 對帳、Restore Quarantine 與自動解禁證據 | 還原、故障、跨 DB commit 未知不得放行；人工修復不等於人工猜測已安全 | **簽章鏈 9 項 CI、Lab 真 pg_dump/restore 落後檢出子項 PASS；部署與完整故障注入未完** |
 | **P1 / G6** | 全契約 Freeze v1、Mixed Binary、Migration rollback、真實 PostgreSQL 負面／正向及效能分段測試 | 固定 commit、DB/schema、SQLSTATE、JUnit、fault logs；依 [Solo Developer Security Acceptance v1](solo-developer-security-acceptance-v1.md) 由 Owner 逐項核對、最終核准，外部人工審查建議但非強制 | **完整安全驗收 NOT_RUN** |
 | **P1 / PERF** | 計時 → 健康負載基準 → Role-bounded pool → 預先生成／推論分流 → 再測量 | 有效回應率與 P50/P95/P99 同時驗收；不影響 P0 Gate | **僅連線微基準 MEASURED，HTTP NOT_RUN** |
 

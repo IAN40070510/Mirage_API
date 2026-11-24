@@ -153,8 +153,15 @@ Renderer 首 byte 順序在隔離測試內驗證；仍需真 PostgreSQL CI 及
 `send_started` 必要稽核 INSERT 故障及終態稽核 INSERT 故障兩種真
 PostgreSQL trigger 場景。前者預期整筆 StartSend rollback，後者預期
 保留唯一既有 Lease／`SEND_STARTED`，不得重新取 Lease；這是 G4
-交易原子性子案例，須以本次固定 SHA 的隔離 PG CI 結果判定，
-不能用本地靜態檢查取代，也沒有解除 G5 Restore Fence 的阻塞。
+交易原子性子案例。固定程式 SHA `4be39923bbffb76ded388035cd250517ff732e57`：
+[隔離 PG17.6 CI 45325688577](https://github.com/IAN40070510/Mirage_API/actions/runs/45325688577)
+受保護合約 `154 passed`（增加兩個真 DB fault case）、mTLS `5 passed`、
+獨立 G5 密碼學測試 `9 passed`；
+[Python CI 45325688529](https://github.com/IAN40070510/Mirage_API/actions/runs/45325688529)
+`1436 passed / 21 skipped / 2 warnings`；
+[容器 CI 45325688534](https://github.com/IAN40070510/Mirage_API/actions/runs/45325688534)
+`success`。**兩種 Audit 故障的隔離交易原子性子案例 PASS**，
+但沒有解除 G5 Restore Fence、真正 mTLS Sender 發送或 G4 整體阻塞。
 
 `fix/mir-sec-world-001-resume-20261122` 新增 `020_protected_cart_lineage.sql` 與
 `PostgresProtectedWorldExecutor.create_cart()`，把 creator Receipt 與新建 cart
