@@ -26,6 +26,43 @@ The Restore Anchor MUST be outside the World DB backup and restore domain. Its c
 - RESTORE-ANCHOR-05: verified contiguous coverage and operator release certificate required to exit quarantine.
 - RESTORE-ANCHOR-06: restore during concurrent StartSend, active sender and Snapshot purge => no second transport or resurrection.
 
+## 2026-11-24 one-time Oracle Arm64 lab preflight — bounded PASS, G5 OPEN
+
+On `msdss-oracle-arm64-test`, authenticated Gateway sudo access inspected two **already
+existing** `postgres:17.6-alpine` containers:
+`mir-sec-world001-pg` (World Lab, separate `mir-sec-world001-pgdata` volume,
+`mir_sec_owner` login) and `mir-sec-world001-fence-pg` (Fence Lab, separate
+`mir-sec-world001-fence-data` volume, `fence_admin` login). Both use the dedicated
+Lab Docker network, not a staging network. This proves distinct PostgreSQL
+instances, physical data volumes and admin logins, **not** credential invisibility
+to a malicious host root or a deployed independent checkpoint authority.
+
+A temporary `mir_g5_oneoff_20261124` schema was created in each **Lab database
+only**. Test records advanced World and independent Fence to sequence 2, with
+SHA-256 digests and a previous-record hash. The test then removed sequence 2
+**only from the temporary World probe table**, simulating a rollback to sequence 1.
+Fence still reported sequence 2, its one-step hash chain verified, and an external
+comparison failed closed:
+
+```text
+G5_ONEOFF WORLD_HEAD=1 FENCE_HEAD=2 QUARANTINE_REQUIRED=YES
+```
+
+Gateway evidence: cross-DB comparison job `job_01M85VFNS30025JTG3PT9CA5RQ`
+(exit 0).
+One-time schemas were then deleted from both Lab databases and verified absent:
+Fence cleanup job `job_01M85VGH3S001KMJ813MW7NCYQ`, World cleanup job
+`job_01M85VG8CP00DHMPWRFWD81SN9`. No existing app tables, containers,
+Docker volumes or staging/production resources were modified or removed.
+
+**Acceptance boundary:** this is a physical-isolation and rollback-*simulation*
+preflight only, not `RESTORE-ANCHOR-01` through `06` acceptance. No actual World
+DB backup/restore, durable publication protocol with external highest-head
+anti-replay trust, independent publisher ACL, checkpoint coverage proof,
+crash-window reconciliation, release certificate, active Sender or Purge race
+was exercised. The lab comparison must not be treated as an implemented runtime
+quarantine guard, a production Anchor, or authorization to lift the Release Fuse.
+
 ## Deployment guardrails
 
 Use only the dedicated `mir-sec-world001-lab` resources for implementation and tests. Do not attach the existing staging networks, restart the seven existing containers, reuse production secrets, merge the Draft PR, or enable trusted send.
