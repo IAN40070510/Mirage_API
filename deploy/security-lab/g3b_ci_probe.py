@@ -493,6 +493,69 @@ def _gateway() -> None:
             "operation_id": "getGuestCart", "outcome": "fail_closed",
             "native_business_response": False,
         }, sort_keys=True))
+        # C-03：C-01 真建立、C-02 真讀取的 Derived Cart 可在同 Scope 依
+        # 版本 1 CAS 加入合法 variant；Commit 和獨立 Validator 200 必須
+        # 同時核對精確 Receipt／State Hash／Envelope，不把內部 RPC 當 Client Send。
+        add_request_id = "g3b-ci-cart-derived-add-200"
+        add_attempt = str(uuid4())
+        add_body = json.dumps({
+            "variant_id": "known", "quantity": 2, "expected_version": 1,
+            "idempotency_key": "g3b-cart-derived-add-once",
+            "commit_attempt_id": add_attempt,
+        }, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        add_request = gateway.build_request(
+            "POST", origin + "/synthetic/carts/" + derived_id + "/line-items",
+            content=add_body,
+            headers={"x-request-id": add_request_id, "content-type": "application/json"},
+        )
+        add_request.headers["x-trusted-session"] = _sign(
+            key, fingerprint=fingerprint_httpx_request(add_request, add_request_id),
+            session=derived_session, mode="cart", resource_id=derived_id,
+        )
+        added = gateway.send(add_request)
+        if added.status_code != 200:
+            raise RuntimeError("g3b_ci_derived_cart_add_rpc_unverifiable")
+        added_result = added.json()
+        add_metadata = added_result.get("executor_result", {})
+        add_projection = added_result.get("native_projection", {})
+        add_source = add_projection.get("source", {})
+        add_payload_bytes = base64.b64decode(add_projection.get("body_b64", ""), validate=True)
+        add_payload = json.loads(add_payload_bytes)
+        items = add_payload.get("cart", {}).get("items", [])
+        if (add_metadata.get("kind") != "world_mutation"
+                or add_metadata.get("operation") != "addGuestCartItem"
+                or add_metadata.get("status") != "committed"
+                or add_metadata.get("commit_attempt_id") != add_attempt
+                or add_metadata.get("state_version") != 2
+                or add_projection.get("status_code") != 200
+                or add_source.get("kind") != "committed_operation"
+                or add_source.get("operation_result_digest") != add_metadata.get("result_digest")
+                or add_source.get("committed_state_version") != 2
+                or add_source.get("committed_state_hash") != add_metadata.get("state_hash")
+                or add_projection.get("scope", {}).get("session_id") != derived_session
+                or add_projection.get("scope", {}).get("world_generation_id")
+                    != created_source.get("derived_world_generation_id")
+                or add_projection.get("delivery") != "candidate_only_no_send_authorization"
+                or add_payload.get("state_version") != 2
+                or add_payload.get("state_hash") != add_metadata.get("state_hash")
+                or add_payload.get("commit_attempt_id") != add_attempt
+                or add_payload.get("cart", {}).get("id") != derived_id
+                or add_payload.get("cart", {}).get("status") != "active"
+                or add_payload.get("cart", {}).get("total") != 200
+                or not isinstance(items, list) or len(items) != 1
+                or items[0].get("variant_id") != "known"
+                or items[0].get("sku") != "sku-1"
+                or items[0].get("unit_price") != 100
+                or items[0].get("quantity") != 2
+                or add_projection.get("envelope_hash") != response_hashes(
+                    200, read_headers, add_payload_bytes)[0]
+                or gateway.send(add_request).status_code != 403):
+            raise RuntimeError("g3b_ci_derived_cart_add_candidate_source_mismatch")
+        print("G3B_ROUTE_CART_CREATED_READ_THEN_ADD_CANDIDATE " + json.dumps({
+            "operation_id": "addGuestCartItem", "source": "protected_world_commit_sources",
+            "validated_native_status": 200, "derived_scope": True,
+            "state_version": 2, "native_business_response": False,
+        }, sort_keys=True))
         # C-02：同樣透過真 Gateway→Cart Executor→獨立唯讀 Validator，
         # 只能查驗與既有派生 Cart Session 相符的原生成功 JSON 候選。
         cart_request_id = "g3b-ci-cart-get-200"
@@ -583,7 +646,8 @@ def _gateway() -> None:
           "synthetic_409=1 cart_create_200=1 cart_cross_receipt_key=denied "
           "cart_invalid_body=2_denied "
           "cart_read_200=1 cart_created_then_read_200=1 "
-          "cart_creator_cross_scope_read=denied medusa_400=1 medusa_404=1 "
+          "cart_creator_cross_scope_read=denied cart_derived_add_200=1 "
+          "medusa_400=1 medusa_404=1 "
           "replay=denied anonymous=denied "
           "execution_network=unreachable trusted_send=off")
 
@@ -633,7 +697,7 @@ def _audit(root: Path) -> None:
             raise RuntimeError("g3b_ci_cross_role_secret_exposure:" + name)
     with psycopg.connect("postgresql://mirage_ci_owner:mirage_ci_only@127.0.0.1:55433/"
                          "mirage_g3b_ci?connect_timeout=5") as admin:
-        if admin.execute("SELECT count(*) FROM protected_world_commit_sources").fetchone()[0] != 1:
+        if admin.execute("SELECT count(*) FROM protected_world_commit_sources").fetchone()[0] != 2:
             raise RuntimeError("g3b_ci_inventory_commit_evidence_missing")
         if admin.execute("SELECT count(*) FROM protected_medusa_rejection_sources").fetchone()[0] != 2:
             raise RuntimeError("g3b_ci_medusa_rejection_evidence_missing")
@@ -649,6 +713,7 @@ def _audit(root: Path) -> None:
                 "getSyntheticOperation": 2,
                 "createGuestCart": 4,
                 "getGuestCart": 3,
+                "addGuestCartItem": 1,
                 "PostCartsIdLineItems": 2,
         }:
             raise RuntimeError("g3b_ci_operation_proof_count_mismatch")
