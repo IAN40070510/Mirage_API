@@ -1230,6 +1230,113 @@ def test_g3b_medusa_get_executor_metadata_has_no_native_success_bypass(
         asyncio.run(client.execute_receipt(**{**kwargs, "raw_body": b"{}"}))
 
 
+@pytest.mark.parametrize("operation,payload_key,prefix", [
+    ("GetCartsId", "cart", "cart_"),
+    ("GetOrdersId", "order", "order_"),
+])
+def test_g3b_medusa_read_validator_rejects_rebound_native_200(
+    monkeypatch, operation, payload_key, prefix,
+):
+    """原生 200 的來源、Payload ID、Scope、Hash／交接欄位均不可由 RPC 偽造。"""
+    from deception.security import protected_rpc
+    from deception.world.transmission import response_hashes
+
+    receipt = uuid4()
+    resource = prefix + uuid4().hex
+    fingerprint = "a" * 64
+    read_id, generation = uuid4().hex, uuid4().hex
+    environment, deployment, session = "medusa", "lab", uuid4().hex
+    payload = {payload_key: {"id": resource}}
+    body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    reply = {
+        "receipt_id": str(receipt), "operation_id": operation,
+        "scope": {"environment_id": environment, "deployment_id": deployment,
+                  "session_id": session, "world_generation_id": generation},
+        "request_fingerprint": fingerprint, "status_code": 200,
+        "headers": [["content-type", "application/json"]],
+        "body_b64": base64.b64encode(body).decode(),
+        "envelope_hash": response_hashes(200, (("content-type", "application/json"),), body)[0],
+        "source": {"kind": "snapshot", "read_admission_id": read_id,
+                   "world_generation_id": generation, "state_version": 1,
+                   "state_hash": "b" * 64},
+        "trusted_send": "disabled",
+    }
+
+    class NativeReadValidator:
+        """僅提供測試回覆，不會在 HTTP Validator 之外重建受信任來源。"""
+
+        def __init__(self, **kwargs):
+            """拒絕環境代理混入 mTLS 專線。"""
+            assert kwargs["trust_env"] is False
+
+        async def __aenter__(self):
+            """進入測試用受控 HTTP 端。"""
+            return self
+
+        async def __aexit__(self, *_):
+            """離開受控 HTTP 端。"""
+            return False
+
+        async def post(self, url, *, json):
+            """只容許 Receipt，拒絕 Caller 提供 Body／Status 或 Scope。"""
+            assert url == "https://validator.invalid:8445/internal/v1/project-medusa-read"
+            assert json == {"receipt_id": str(receipt)}
+            return httpx.Response(200, json=reply)
+
+    monkeypatch.setattr(protected_rpc.httpx, "AsyncClient", NativeReadValidator)
+    client = object.__new__(FixedNativeValidatorMTLSClient)
+    client._origin, client._tls = "https://validator.invalid:8445", object()
+    kwargs = dict(receipt_id=receipt, operation_id=operation, resource_id=resource,
+                  request_fingerprint=fingerprint, expected_environment_id=environment,
+                  expected_deployment_id=deployment, expected_session_id=session,
+                  expected_read_admission_id=read_id, expected_world_generation_id=generation,
+                  expected_state_version=1, expected_state_hash="b" * 64)
+    accepted = asyncio.run(client.project_medusa_read(**kwargs))
+    assert (accepted["status_code"], accepted["source"], accepted["delivery"]) == (
+        200, reply["source"], "candidate_only_no_send_authorization",
+    )
+    for change in (
+        {"status_code": 409}, {"trusted_send": "enabled"},
+        {"request_fingerprint": "c" * 64}, {"operation_id": "other"},
+        {"scope": {**reply["scope"], "session_id": "attacker"}},
+        {"source": {**reply["source"], "state_version": 2}},
+        {"envelope_hash": "c" * 64}, {"send_authorized": True},
+    ):
+        before = deepcopy(reply)
+        reply.update(change)
+        with pytest.raises(ProtectedRpcConfigurationError, match="medusa_validator_binding_mismatch"):
+            asyncio.run(client.project_medusa_read(**kwargs))
+        reply.clear()
+        reply.update(before)
+    altered = {payload_key: {"id": prefix + uuid4().hex}}
+    altered_body = json.dumps(altered, sort_keys=True, separators=(",", ":")).encode()
+    reply["body_b64"] = base64.b64encode(altered_body).decode()
+    reply["envelope_hash"] = response_hashes(
+        200, (("content-type", "application/json"),), altered_body,
+    )[0]
+    with pytest.raises(ProtectedRpcConfigurationError, match="medusa_validator_binding_mismatch"):
+        asyncio.run(client.project_medusa_read(**kwargs))
+
+
+def test_g3b_medusa_read_requires_pinned_local_contract(tmp_path):
+    """唯讀 Validator 未掛 Medusa 契約或契約 bytes 漂移時，不得輸出成功候選。"""
+    from deception.world.protected_grant import ProtectedGrantError
+    from deception.world.protected_native_http import PostgresProtectedNativeProjector
+
+    validator = PostgresProtectedNativeProjector(
+        "postgresql://unused.invalid/isolated", expected_login="isolated_validator",
+    )
+    with pytest.raises(ProtectedGrantError, match="protected_medusa_read_contract_not_configured"):
+        validator.project_medusa_read(uuid4())
+    corrupted = tmp_path / "openapi.yaml"
+    corrupted.write_bytes(b"openapi: 3.0.3\n")
+    with pytest.raises(ValueError, match="source hash is not the reviewed version"):
+        PostgresProtectedNativeProjector(
+            "postgresql://unused.invalid/isolated", expected_login="isolated_validator",
+            medusa_source=corrupted,
+        )
+
+
 def test_g3b_real_container_ci_has_explicit_isolation_and_no_sender():
     """真正容器驗收需隔離 DB／三網／四服務，不能把範本靜態測試冒充部署證據。"""
     root = Path(__file__).resolve().parents[1]

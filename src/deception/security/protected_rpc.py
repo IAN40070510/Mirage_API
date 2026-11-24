@@ -457,6 +457,84 @@ class FixedNativeValidatorMTLSClient:
             "scope": dict(scope), "delivery": "candidate_only_no_send_authorization",
         }
 
+    async def project_medusa_read(
+        self, *, receipt_id: UUID, operation_id: str, resource_id: str,
+        request_fingerprint: str, expected_environment_id: str,
+        expected_deployment_id: str, expected_session_id: str,
+        expected_read_admission_id: str, expected_world_generation_id: str,
+        expected_state_version: int, expected_state_hash: str,
+    ) -> dict[str, object]:
+        """從獨立 Medusa Validator 對帳 M-02／M-07 200：固定原生 JSON／來源。
+
+        與已提交的 Executor ReadAdmission 和原始 JWS Session 逐欄相符才接收；
+        附帶或遺漏任何未核准欄位、錯誤資源、未驗封套即 503，不構成發送權。
+        """
+        from deception.world.transmission import response_hashes
+
+        routes = {"GetCartsId": ("cart", "cart_"),
+                  "GetOrdersId": ("order", "order_")}
+        chosen = routes.get(operation_id)
+        if (chosen is None or not isinstance(resource_id, str)
+                or re.fullmatch(re.escape(chosen[1]) + r"[0-9a-f]{32}", resource_id) is None):
+            raise ProtectedRpcConfigurationError("medusa_validator_operation_unapproved")
+        async with httpx.AsyncClient(verify=self._tls, trust_env=False, timeout=8.0) as client:
+            response = await client.post(
+                self._origin + "/internal/v1/project-medusa-read",
+                json={"receipt_id": str(receipt_id)},
+            )
+        if response.status_code != 200:
+            raise ProtectedRpcConfigurationError("medusa_validator_projection_unverifiable")
+        try:
+            result = json.loads(response.content, object_pairs_hook=unique_object,
+                                parse_constant=reject_constant)
+            if not isinstance(result, dict) or set(result) != {
+                    "receipt_id", "operation_id", "scope", "request_fingerprint",
+                    "status_code", "headers", "body_b64", "envelope_hash", "source",
+                    "trusted_send"}:
+                raise ValueError("medusa_validator_shape_invalid")
+            body = _canonical_base64(result["body_b64"], max_bytes=1048576)
+            payload = json.loads(body, object_pairs_hook=unique_object,
+                                 parse_constant=reject_constant)
+            source, scope = result["source"], result["scope"]
+            if (not isinstance(payload, dict) or set(payload) != {chosen[0]}
+                    or not isinstance(payload[chosen[0]], dict)
+                    or payload[chosen[0]].get("id") != resource_id
+                    or not isinstance(source, dict) or set(source) != {
+                        "kind", "read_admission_id", "world_generation_id",
+                        "state_version", "state_hash"}
+                    or source != {
+                        "kind": "snapshot", "read_admission_id": expected_read_admission_id,
+                        "world_generation_id": expected_world_generation_id,
+                        "state_version": expected_state_version,
+                        "state_hash": expected_state_hash,
+                    }
+                    or not isinstance(scope, dict) or scope != {
+                        "environment_id": expected_environment_id,
+                        "deployment_id": expected_deployment_id,
+                        "session_id": expected_session_id,
+                        "world_generation_id": expected_world_generation_id,
+                    }
+                    or result["receipt_id"] != str(receipt_id)
+                    or result["operation_id"] != operation_id
+                    or result["request_fingerprint"] != request_fingerprint
+                    or type(result["status_code"]) is not int or result["status_code"] != 200
+                    or result["headers"] != [["content-type", "application/json"]]
+                    or result["trusted_send"] != "disabled"
+                    or body != json.dumps(payload, ensure_ascii=False, sort_keys=True,
+                                          separators=(",", ":")).encode("utf-8")
+                    or result["envelope_hash"] != response_hashes(
+                        200, (("content-type", "application/json"),), body)[0]):
+                raise ValueError("medusa_validator_binding_mismatch")
+        except (ValueError, TypeError, KeyError, UnicodeError) as exc:
+            raise ProtectedRpcConfigurationError("medusa_validator_binding_mismatch") from exc
+        return {
+            "status_code": 200, "headers": [["content-type", "application/json"]],
+            "body_b64": base64.b64encode(body).decode("ascii"),
+            "body_sha256": response_hashes(200, (("content-type", "application/json"),), body)[1],
+            "envelope_hash": result["envelope_hash"], "source": dict(source),
+            "scope": dict(scope), "delivery": "candidate_only_no_send_authorization",
+        }
+
     async def project_receipt(self, *, receipt_id: UUID, operation_id: str,
                               request_fingerprint: str, expected_status: int,
                               expected_envelope_hash: str,
@@ -1014,6 +1092,7 @@ def create_native_validator_app(*, projector) -> FastAPI:
     @app.post("/internal/v1/project-inventory-snapshot")
     @app.post("/internal/v1/project-inventory-operation")
     @app.post("/internal/v1/project-cart-read")
+    @app.post("/internal/v1/project-medusa-read")
     @app.post("/internal/v1/project-cart-creation")
     @app.post("/internal/v1/project-synthetic-success")
     @app.post("/internal/v1/project-synthetic-rejection")
@@ -1042,6 +1121,8 @@ def create_native_validator_app(*, projector) -> FastAPI:
                 projected = projector.project_inventory_operation(UUID(str(call.receipt_id)))
             elif request.scope.get("path") == "/internal/v1/project-cart-read":
                 projected = projector.project_cart_read(UUID(str(call.receipt_id)))
+            elif request.scope.get("path") == "/internal/v1/project-medusa-read":
+                projected = projector.project_medusa_read(UUID(str(call.receipt_id)))
             elif request.scope.get("path") == "/internal/v1/project-cart-creation":
                 projected = projector.project_cart_creation(UUID(str(call.receipt_id)))
             elif request.scope.get("path") == "/internal/v1/project-synthetic-success":
@@ -1211,6 +1292,27 @@ def create_direct_verifier_app(
             except Exception as exc:
                 raise HTTPException(status_code=503,
                                     detail="direct_verifier_native_projection_unverifiable") from exc
+        elif (isinstance(outcome, dict) and outcome.get("kind") == "medusa_read_admitted"
+              and operation.operation_id in {"GetCartsId", "GetOrdersId"}):
+            if native_validator_client is None:
+                raise HTTPException(status_code=503,
+                                    detail="direct_verifier_medusa_validator_not_wired")
+            try:
+                projection = await native_validator_client.project_medusa_read(
+                    receipt_id=receipt_id, operation_id=operation.operation_id,
+                    resource_id=outcome["resource_id"],
+                    request_fingerprint=fingerprint_request(normalized),
+                    expected_environment_id=claims.environment_id,
+                    expected_deployment_id=claims.deployment_id,
+                    expected_session_id=claims.session_id,
+                    expected_read_admission_id=outcome["read_admission_id"],
+                    expected_world_generation_id=outcome["world_generation_id"],
+                    expected_state_version=outcome["state_version"],
+                    expected_state_hash=outcome["state_hash"],
+                )
+            except Exception as exc:
+                raise HTTPException(status_code=503,
+                                    detail="direct_verifier_medusa_projection_unverifiable") from exc
         elif (isinstance(outcome, dict) and outcome.get("kind") == "inventory_read_admitted"
               and operation.operation_id == "getSyntheticInventory"):
             if native_validator_client is None:

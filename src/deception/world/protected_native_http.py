@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+from pathlib import Path
 import re
 from uuid import UUID
 
@@ -289,6 +290,22 @@ def _verified_cart_creation(cursor, receipt_id: UUID, *, expected_scope: WorldSc
 class PostgresProtectedNativeProjector(_ProtectedConnection):
     """以與 Verifier／Executor 不同的讀取 Login 查核拒絕及固定 HTTP Envelope。"""
 
+    def __init__(self, dsn: str, *, expected_login: str,
+                 medusa_source: Path | None = None) -> None:
+        """以唯讀實體 Login 建立來源驗證器；Medusa 成功投影另須 SHA 固定契約。
+
+        未提供受審核的 Medusa 來源時，舊 Synthetic／原生拒絕路徑保持可用，
+        但 M-02／M-07 原生 200 一律 fail closed；不從 Runtime 下載規格。
+        """
+        super().__init__(dsn, expected_login=expected_login)
+        self._medusa_specification = None
+        if medusa_source is not None:
+            from deception.domains.ecommerce.medusa_cart_projection import load_contract
+
+            if not isinstance(medusa_source, Path):
+                raise ProtectedGrantError("protected_medusa_source_path_invalid")
+            self._medusa_specification = load_contract(medusa_source)[1]
+
     def project_cart_creation(self, receipt_id: UUID) -> ProtectedNativeProjection:
         """以獨立唯讀證據建立 C-01 200：授權 Scope 保持原始 Creator。"""
         from jsonschema import Draft202012Validator
@@ -320,6 +337,20 @@ class PostgresProtectedNativeProjector(_ProtectedConnection):
         與已驗 Hash 的當前快照；找不到資源、版本漂移或任何 ACL 不明時
         拒絕產生候選，絕不將無法查證的 409 當成合法業務拒絕。
         """
+        return self._project_cart_read(receipt_id, medusa=False)
+
+    def project_medusa_read(self, receipt_id: UUID) -> ProtectedNativeProjection:
+        """M-02／M-07：從同一 Read Source 建立經固定 Medusa 契約驗證的 200 候選。
+
+        只接受唯讀 Connector 取得的 Snapshot、真原始 GET Proof、派生資源與
+        獨立 Validator 的 SHA 固定 OpenAPI；不降級至 Synthetic JSON 或 409。
+        """
+        if self._medusa_specification is None:
+            raise ProtectedGrantError("protected_medusa_read_contract_not_configured")
+        return self._project_cart_read(receipt_id, medusa=True)
+
+    def _project_cart_read(self, receipt_id: UUID, *, medusa: bool) -> ProtectedNativeProjection:
+        """共用 Cart/Order 可信來源、Scope／Key／Epoch／Head 檢查，分離原生格式。"""
         from jsonschema import Draft202012Validator
 
         from deception.domains.ecommerce.cart_http import cart_specification
@@ -367,12 +398,15 @@ class PostgresProtectedNativeProjector(_ProtectedConnection):
                     (receipt_id,),
                 )
                 proof = cursor.fetchone()
-                choices = {
+                choices = ({
+                    "GetCartsId": ("/store/carts/{id}", "/store/carts/", "cart"),
+                    "GetOrdersId": ("/store/orders/{id}", "/store/orders/", "order"),
+                } if medusa else {
                     "getGuestCart": ("/synthetic/carts/{cart_id}", "/synthetic/carts/", "cart"),
                     "getSyntheticOrder": ("/synthetic/orders/{order_id}", "/synthetic/orders/", "order"),
                     "getCartOperation": ("/synthetic/carts/{cart_id}/operations/{attempt}",
                                          "/synthetic/carts/", "cart"),
-                }
+                })
                 selected = choices.get(proof[1]) if proof is not None else None
                 attempt = None
                 if selected is not None and proof[1] == "getCartOperation":
@@ -389,7 +423,8 @@ class PostgresProtectedNativeProjector(_ProtectedConnection):
                                     and str(attempt) == path_match[1])
                 else:
                     path_matches = selected is not None and proof[5] == selected[1] + resource
-                if (selected is None or proof[:3] != ("synthetic-carts", proof[1], "GET")
+                if (selected is None or proof[:3] != (
+                        "medusa-native-cart" if medusa else "synthetic-carts", proof[1], "GET")
                         or proof[3:5] != (selected[0], fingerprint)
                         or not path_matches
                         or not resource.startswith(selected[2] + "_")
@@ -423,7 +458,7 @@ class PostgresProtectedNativeProjector(_ProtectedConnection):
                     raise ProtectedGrantError("protected_cart_read_snapshot_invalid") from exc
                 if snapshot.version != version or snapshot.state_hash != state_hash:
                     raise ProtectedGrantError("protected_cart_read_snapshot_stale")
-                if proof[1] in {"getGuestCart", "getCartOperation"}:
+                if proof[1] in {"getGuestCart", "getCartOperation", "GetCartsId"}:
                     saved_cart = snapshot.state.get("cart")
                     if (not isinstance(saved_cart, dict) or saved_cart.get("id") != resource
                             or set(saved_cart) != {"id", "items", "currency_code", "total", "status"}
@@ -507,14 +542,41 @@ class PostgresProtectedNativeProjector(_ProtectedConnection):
                         # 只有同世代、已驗證 ReadAdmission 下確定查無 UUID4 才有 409。
                         payload = {"code": "operation_not_found"}
                         path = "/carts/{cart_id}/operations/{attempt}"
-                else:
+                elif not medusa:
                     payload = {kind: entity, "state_version": version,
                                "state_hash": state_hash, "commit_attempt_id": None}
-                native_status = 409 if missing_operation else 200
-                schema = cart_specification()["paths"][path]["get"]["responses"][
-                    str(native_status)]["content"]["application/json"]["schema"]
-                if not Draft202012Validator(schema).is_valid(payload):
-                    raise ProtectedGrantError("protected_cart_read_contract_invalid")
+                if medusa:
+                    from referencing import Registry, Resource
+                    from referencing.jsonschema import DRAFT4
+                    from openapi_schema_validator import OAS30Validator
+                    from deception.domains.ecommerce.medusa_cart_projection import cart_view, order_view
+
+                    context = snapshot.state.get("native_context")
+                    catalog = snapshot.state.get("catalog")
+                    if (not isinstance(context, dict) or not isinstance(catalog, dict)):
+                        raise ProtectedGrantError("protected_medusa_read_context_missing")
+                    try:
+                        context = {**context, "catalog": catalog}
+                        payload = ({"cart": cart_view(entity, context)} if kind == "cart"
+                                   else {"order": order_view(entity, context)})
+                    except (ValueError, KeyError, TypeError, OverflowError) as exc:
+                        raise ProtectedGrantError("protected_medusa_read_projection_invalid") from exc
+                    registry = Registry().with_resource(
+                        "urn:mirage:medusa-contract", Resource.from_contents(
+                            self._medusa_specification, default_specification=DRAFT4,
+                        ),
+                    )
+                    schema_name = "StoreCartResponse" if kind == "cart" else "StoreOrderResponse"
+                    schema = {"$ref": "urn:mirage:medusa-contract#/components/schemas/" + schema_name}
+                    if not OAS30Validator(schema, registry=registry).is_valid(payload):
+                        raise ProtectedGrantError("protected_medusa_read_contract_invalid")
+                else:
+                    native_status = 409 if missing_operation else 200
+                    schema = cart_specification()["paths"][path]["get"]["responses"][
+                        str(native_status)]["content"]["application/json"]["schema"]
+                    if not Draft202012Validator(schema).is_valid(payload):
+                        raise ProtectedGrantError("protected_cart_read_contract_invalid")
+                native_status = 200 if medusa else 409 if missing_operation else 200
                 cursor.execute("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
                 now = cursor.fetchone()[0]
                 if (token_deadline <= now or read_deadline <= now or resource_row[1] <= now

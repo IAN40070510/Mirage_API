@@ -6,6 +6,7 @@ import secrets
 import json
 from copy import deepcopy
 from dataclasses import replace
+from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
@@ -589,6 +590,8 @@ def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolat
         creation_digest=digest("d"), ttl=180,
     )
     binding = created.binding
+    medusa_source = (Path(__file__).resolve().parents[1]
+                     / "domains/ecommerce/inputs/sources/medusa/openapi.yaml")
     snapshot = store.inspect_binding(binding, now=now)
     path = "/store/carts/" + binding.resource_id + "/line-items"
 
@@ -703,6 +706,18 @@ def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolat
             "medusa_read_admitted", "GetCartsId", binding.resource_id,
             snapshot.scope.world_generation_id, snapshot.version, snapshot.state_hash,
         )
+        get_projector = PostgresProtectedNativeProjector(
+            dsn, expected_login=_real_login(dsn), medusa_source=medusa_source,
+        )
+        projected_get = get_projector.project_medusa_read(get_receipt)
+        assert (projected_get.status_code, projected_get.operation_id,
+                projected_get.request_fingerprint, projected_get.source.kind) == (
+            200, "GetCartsId", get_proof.request_fingerprint, "snapshot",
+        )
+        assert json.loads(projected_get.body_bytes)["cart"]["id"] == binding.resource_id
+        assert _candidate(dsn, scope=snapshot.scope, source=projected_get.source,
+                          receipt_id=get_receipt, fingerprint=get_proof.request_fingerprint,
+                          status=200, body=projected_get.body_bytes) == 1
         # GET ReadAdmission 不可憑同 Receipt 盲目重做：第一次來源不可變，
         # 第二次必須固定 503，而不是多簽第二筆來源。
         assert client.post("/internal/v1/execute", json=get_wire).status_code == 503
@@ -767,7 +782,9 @@ def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolat
             "MIRAGE_G3B_VALIDATOR_LOGIN": projector_login,
             "MIRAGE_G3B_WORLD_SCHEMA": schema,
         }).state is not None
-    projector = PostgresProtectedNativeProjector(projector_dsn, expected_login=projector_login)
+    projector = PostgresProtectedNativeProjector(
+        projector_dsn, expected_login=projector_login, medusa_source=medusa_source,
+    )
     for receipt, proof, status, body, template in (
             (bad_receipt, bad_proof, 400,
              b'{"message":"The requested cart operation is not supported.","type":"invalid_data"}',
@@ -823,6 +840,16 @@ def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolat
                 order_read.json()["state_version"], order_read.json()["state_hash"]) == (
             "medusa_read_admitted", order_id, latest.version, latest.state_hash,
         )
+        native_order = projector.project_medusa_read(order_receipt)
+        native_order_body = json.loads(native_order.body_bytes)
+        assert (native_order.status_code, native_order.operation_id,
+                native_order.source.kind, native_order_body["order"]["id"],
+                native_order_body["order"]["payment_status"]) == (
+            200, "GetOrdersId", "snapshot", order_id, "not_paid",
+        )
+        assert _candidate(dsn, scope=latest.scope, source=native_order.source,
+                          receipt_id=order_receipt, fingerprint=order_proof.request_fingerprint,
+                          status=200, body=native_order.body_bytes) == 1
         assert client.post("/internal/v1/execute", json=order_wire).status_code == 503
 
 

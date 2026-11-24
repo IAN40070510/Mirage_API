@@ -361,8 +361,15 @@ def create_native_validator_service(config: Mapping[str, str]) -> FastAPI:
     login = _required_config(config, "MIRAGE_G3B_VALIDATOR_LOGIN")
     _login_preflight(dsn, login, role="validator",
                      schema=_required_config(config, "MIRAGE_G3B_WORLD_SCHEMA"))
+    # 只使用部署者固定的來源路徑，實際載入時仍依官方固定 SHA-256 驗證。
+    # 未掛來源的既存實驗服務不得自動宣稱可投影原生 Medusa 成功回應。
+    domains = config.get("MIRAGE_DOMAINS_DIR")
+    medusa_source = (Path(domains) / "ecommerce/inputs/sources/medusa/openapi.yaml"
+                     if isinstance(domains, str) and domains else None)
     return create_native_validator_app(
-        projector=PostgresProtectedNativeProjector(dsn, expected_login=login),
+        projector=PostgresProtectedNativeProjector(
+            dsn, expected_login=login, medusa_source=medusa_source,
+        ),
     )
 
 

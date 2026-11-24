@@ -60,12 +60,18 @@ Verifier 持專用 mTLS 憑證使用：驗證成功後只傳 Receipt ID／原始
 ReadAdmission；原始操作驗證通過後，Read 與受保護 World Commit 才可落地。
 
 同一 Receipt 的精確重試只使用既有 Commit Key；Medusa M-02／M-07
-`GET /store/carts/{id}`／`GET /store/orders/{id}` 新增**僅 ReadAdmission**
-子切面：要求 JWS 綁定的完整原始 HTTP、唯一正確 publishable key、
+`GET /store/carts/{id}`／`GET /store/orders/{id}` 的 Executor **僅建立 ReadAdmission**：
+要求 JWS 綁定的完整原始 HTTP、唯一正確 publishable key、
 空 Body、精確 Cart／Order ID 與可查證的派生 Capability、native_context，
 Executor 僅回 `medusa_read_admitted` 的 ID／世代／版本／Hash，mTLS Client
-亦拒絕 HTTP Status／Payload／Send 欄位。未接獨立 Medusa 200 Validator，
-不應將此 Metadata 當成原生成功回應。相同 Receipt 再次直接呼叫
+亦拒絕 HTTP Status／Payload／Send 欄位。獨立唯讀 Native Validator 現可從
+`POST /internal/v1/project-medusa-read` 只憑 Receipt、受保護 Read Source、
+當前 WorldSnapshot、Resource Lineage 與固定 SHA 的 Medusa 官方 OpenAPI
+（僅明確容許合成匿名 Order `customer_id=null`）重建 200 Cart／Order JSON。
+Verifier 再逐欄核對原始 Fingerprint、Session／Generation、ReadAdmission、
+狀態版本／Hash、原生 Entity ID、封套 Hash，**只回 candidate-only 內部結果**。
+未掛載固定契約、規格 SHA 錯誤或兩服務來源不一致時固定拒絕；無 Client
+原生 HTTP 200 或任何 Send／Grant 權。相同 Receipt 再次直接呼叫
 ReadAdmission 由不可變來源唯一約束固定拒絕，不應假裝可無條件重試；
 真正 JWS Replay 則在 Verifier 階段拒絕。Medusa M-03 另允許已固定
 `POST /store/carts/{id}/line-items` 的合法拒絕：錯誤 publishable key／

@@ -77,7 +77,9 @@ Lineage；catalog／inventory 僅由 Executor 部署設定取得。
 Medusa 的七個本地核准路由現從 SHA-256 固定的官方 OpenAPI 來源載入
 Operation 身分；M-02／M-07 現可由獨立 Executor 對原生 GET 的完整 HTTP
 Fingerprint／publishable key／資源 Capability／native_context 建立可信
-ReadAdmission。**這只有受保護讀取來源，沒有原生 200 Validator 或事件執行**。
+ReadAdmission。唯讀 Validator 可另從相同 Receipt、目前快照與 SHA 固定
+Medusa 契約投影 Cart／Order 原生 200 **候選**，再由 Verifier 精確核對來源及
+封套；並未將回應交給 Client，也沒有執行 Medusa 原生交易或授權發送。
 `protected_rpc.create_direct_verifier_app()` 現提供隔離的 ASGI 原始 HTTP
 Verifier 接入點，搭配 mTLS 專用 Gateway 憑證及單一 IngressTx 生成此證據；
 但尚未完成正式 Gateway 拓樸／Executor 呼叫，也不能透過這個入口獲得 Send。
@@ -85,7 +87,7 @@ Verifier 接入點，搭配 mTLS 專用 Gateway 憑證及單一 IngressTx 生成
 Execute 入口，只接受 Receipt ID／原始 Path／Body，由 Executor 受保護 DB
 自行查回 Session Binding／期限／Operation，對已核准合成 Inventory、
 Cart／Order 實際執行既有 Handler；未接受自選 action，亦不執行 Medusa
-原生成功交易。Medusa M-03 的固定拒絕與 M-02／M-07 的 GET 來源
+原生成功交易。Medusa M-03 的固定拒絕與 M-02／M-07 的 GET 候選
 不具備客戶端業務回應或 Send 資格。
 兩個 mTLS 服務目前仍需實際跨容器接線與實體 Role／Secret 驗收。
 `FixedExecutorMTLSClient` 現讓 Verifier 在原始請求驗證成功後對 Executor

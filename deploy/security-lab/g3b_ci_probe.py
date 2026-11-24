@@ -982,6 +982,11 @@ def _gateway() -> None:
             raise RuntimeError("g3b_ci_medusa_order_read_rpc_unverifiable")
         native_order_json = native_order_result.json()
         native_order_meta = native_order_json.get("executor_result", {})
+        native_order_projection = native_order_json.get("native_projection", {})
+        native_order_bytes = base64.b64decode(
+            native_order_projection.get("body_b64", ""), validate=True,
+        )
+        native_order_payload = json.loads(native_order_bytes)
         if (native_order_meta.get("kind") != "medusa_read_admitted"
                 or native_order_meta.get("operation") != "GetOrdersId"
                 or native_order_meta.get("resource_id") != derived_order_id
@@ -990,13 +995,23 @@ def _gateway() -> None:
                 or not isinstance(native_order_meta.get("read_admission_id"), str)
                 or native_order_meta.get("world_generation_id")
                     != created_source.get("derived_world_generation_id")
-                or "native_projection" in native_order_json
+                or native_order_projection.get("status_code") != 200
+                or native_order_projection.get("source", {}).get("kind") != "snapshot"
+                or native_order_projection.get("source", {}).get("read_admission_id")
+                    != native_order_meta.get("read_admission_id")
+                or native_order_projection.get("scope", {}).get("session_id") != derived_session
+                or native_order_projection.get("delivery") != "candidate_only_no_send_authorization"
+                or native_order_payload.get("order", {}).get("id") != derived_order_id
+                or native_order_payload.get("order", {}).get("payment_status") != "not_paid"
+                or native_order_payload.get("order", {}).get("customer_id", "missing") is not None
+                or native_order_projection.get("envelope_hash") != response_hashes(
+                    200, read_headers, native_order_bytes)[0]
                 or gateway.send(native_order_get).status_code != 403):
             raise RuntimeError("g3b_ci_medusa_order_read_source_mismatch")
         print("G3B_ROUTE_MEDUSA_ORDER_READ_SOURCE " + json.dumps({
             "operation_id": "GetOrdersId", "outer_http_status": native_order_result.status_code,
-            "source": "protected_world_read_sources", "native_business_response": False,
-            "native_validator_200": False,
+            "source": "protected_world_read_sources", "validated_native_status": 200,
+            "native_business_response": False, "native_validator_200": True,
         }, sort_keys=True))
         print("G3B_ROUTE_DERIVED_ORDER_READ_CANDIDATE " + json.dumps({
             "operation_id": "getSyntheticOrder", "source": "protected_world_read_sources",
@@ -1176,6 +1191,11 @@ def _gateway() -> None:
             raise RuntimeError("g3b_ci_medusa_cart_read_rpc_unverifiable")
         native_cart_json = native_cart_result.json()
         native_cart_meta = native_cart_json.get("executor_result", {})
+        native_cart_projection = native_cart_json.get("native_projection", {})
+        native_cart_bytes = base64.b64decode(
+            native_cart_projection.get("body_b64", ""), validate=True,
+        )
+        native_cart_payload = json.loads(native_cart_bytes)
         if (native_cart_meta.get("kind") != "medusa_read_admitted"
                 or native_cart_meta.get("operation") != "GetCartsId"
                 or native_cart_meta.get("resource_id") != data["cart_id"]
@@ -1184,13 +1204,22 @@ def _gateway() -> None:
                 or native_cart_meta.get("world_generation_id")
                     != cart_metadata.get("world_generation_id")
                 or not isinstance(native_cart_meta.get("read_admission_id"), str)
-                or "native_projection" in native_cart_json
+                or native_cart_projection.get("status_code") != 200
+                or native_cart_projection.get("source", {}).get("kind") != "snapshot"
+                or native_cart_projection.get("source", {}).get("read_admission_id")
+                    != native_cart_meta.get("read_admission_id")
+                or native_cart_projection.get("scope", {}).get("session_id") != data["cart_session"]
+                or native_cart_projection.get("delivery") != "candidate_only_no_send_authorization"
+                or native_cart_payload.get("cart", {}).get("id") != data["cart_id"]
+                or native_cart_payload.get("cart", {}).get("currency_code") != "usd"
+                or native_cart_projection.get("envelope_hash") != response_hashes(
+                    200, read_headers, native_cart_bytes)[0]
                 or gateway.send(native_cart_get).status_code != 403):
             raise RuntimeError("g3b_ci_medusa_cart_read_source_mismatch")
         print("G3B_ROUTE_MEDUSA_CART_READ_SOURCE " + json.dumps({
             "operation_id": "GetCartsId", "outer_http_status": native_cart_result.status_code,
-            "source": "protected_world_read_sources", "native_business_response": False,
-            "native_validator_200": False,
+            "source": "protected_world_read_sources", "validated_native_status": 200,
+            "native_business_response": False, "native_validator_200": True,
         }, sort_keys=True))
         bad_key_id = "g3b-ci-medusa-cart-get-bad-key"
         wrong_key_get = gateway.build_request(
@@ -1265,7 +1294,8 @@ def _gateway() -> None:
           "cart_historical_operation_200=1 cart_missing_operation_409=1 "
           "inventory_cancel_200=1 inventory_repeat_cancel_409=1 "
           "medusa_400=1 medusa_404=1 medusa_get_cart_source=1 "
-          "medusa_get_order_source=1 medusa_bad_key=denied "
+          "medusa_get_order_source=1 medusa_get_cart_candidate_200=1 "
+          "medusa_get_order_candidate_200=1 medusa_bad_key=denied "
           "replay=denied anonymous=denied "
           "execution_network=unreachable trusted_send=off")
 
