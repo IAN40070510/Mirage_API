@@ -16,6 +16,7 @@ from uuid import uuid4
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 import httpx
 import psycopg
+from psycopg.conninfo import conninfo_to_dict, make_conninfo
 import yaml
 
 from deception.api.fingerprint import fingerprint_httpx_request
@@ -568,6 +569,32 @@ def _audit(root: Path) -> None:
                        for role in ("mirage_g3b_ci_verifier", "mirage_g3b_ci_validator",
                                     "mirage_g3b_ci_runtime", "mirage_g3b_ci_inventory"))):
             raise RuntimeError("g3b_ci_world_initialization_audit_acl_mismatch")
+        if admin.execute(
+                "SELECT has_column_privilege(%s,%s,%s,'UPDATE'),"
+                "has_table_privilege(%s,%s,'UPDATE')",
+                ("mirage_g3b_ci_cart", "synthetic_resources", "resource_kind",
+                 "mirage_g3b_ci_cart", "synthetic_resources"),
+        ).fetchone() != (True, False):
+            raise RuntimeError("g3b_ci_resource_lock_column_acl_mismatch")
+        if any(admin.execute("SELECT has_column_privilege(%s,%s,%s,'UPDATE')",
+                             (role, "synthetic_resources", "resource_kind")).fetchone() != (False,)
+               for role in ("mirage_g3b_ci_verifier", "mirage_g3b_ci_validator",
+                            "mirage_g3b_ci_runtime", "mirage_g3b_ci_inventory")):
+            raise RuntimeError("g3b_ci_resource_lock_cross_role_acl_mismatch")
+    # 真 SQL UPDATE 仍必須由不可變 Trigger 拒絕；不能只相信 Privilege Dump。
+    cart_connection = conninfo_to_dict(
+        (root / "secrets" / "g3b_cart_executor_dsn").read_text(encoding="utf-8"))
+    cart_connection.update(host="127.0.0.1", port="55433")
+    with psycopg.connect(make_conninfo(**cart_connection)) as cart:
+        try:
+            cart.execute(
+                "UPDATE synthetic_resources SET resource_kind='order' WHERE resource_id=%s",
+                (json.loads((root / "probe" / "world.json").read_text())["cart_id"],),
+            )
+        except psycopg.errors.InsufficientPrivilege:
+            pass
+        else:
+            raise RuntimeError("g3b_ci_synthetic_resource_immutable_trigger_missing")
     runtime_dsn = (root / "probe" / "runtime-host.dsn").read_text(encoding="utf-8")
     with psycopg.connect(runtime_dsn) as runtime:
         if runtime.execute("SELECT current_user,session_user").fetchone() != (

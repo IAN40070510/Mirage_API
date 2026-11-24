@@ -142,6 +142,12 @@ def _provision_roles(admin_dsn: str) -> dict[str, str]:
                 sql.SQL(",").join(sql.Identifier(name) for name in names.split(",")),
                 sql.Identifier(ROLES[role]),
             ))
+        # FOR SHARE OF synthetic_resources demands UPDATE on >= one column in PG17.
+        # Never give table-wide UPDATE of the resource identity: migration 028
+        # makes the row immutable and this narrow privilege exists for locking only.
+        admin.execute(sql.SQL(
+            "GRANT UPDATE (resource_kind) ON synthetic_resources TO {}"
+        ).format(sql.Identifier(ROLES["cart"])))
         for role in ("inventory", "cart"):
             admin.execute(sql.SQL(
                 "GRANT EXECUTE ON FUNCTION protected_lock_reference(text,jsonb) TO {}"

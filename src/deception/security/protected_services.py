@@ -177,6 +177,13 @@ def _login_preflight(dsn: str, login: str, *, role: str, schema: str,
                                                (table, privilege)).fetchone()[0]
                 if permitted is not True:
                     raise ProtectedRpcConfigurationError("g3b_service_required_acl_missing")
+            # SELECT ... FOR SHARE OF resource needs one UPDATE column in PG17,
+            # but never table-wide UPDATE of session/resource identity.
+            if role == "executor" and platform == "synthetic-carts" and connection.execute(
+                    "SELECT has_column_privilege('synthetic_resources','resource_kind','UPDATE'),"
+                    "has_table_privilege('synthetic_resources','UPDATE')"
+            ).fetchone() != (True, False):
+                raise ProtectedRpcConfigurationError("g3b_service_resource_lock_acl_invalid")
             for table, privilege in forbidden:
                 permitted = connection.execute("SELECT has_table_privilege(%s,%s)",
                                                (table, privilege)).fetchone()[0]
@@ -199,7 +206,8 @@ def _login_preflight(dsn: str, login: str, *, role: str, schema: str,
                         "protected_medusa_rejection_sources", "ingress_receipts",
                         "protected_world_rejection_sources", "world_operations",
                         "world_commit_receipts", "protected_world_commit_sources",
-                        "world_snapshots",
+                        "world_snapshots", "world_initializations", "synthetic_resources",
+                        "native_response_contexts",
                         "protected_cart_creations", "guest_cart_creations",
                         "protected_http_operation_bindings", "protected_world_read_sources",
                         "read_admissions", "session_heads", "session_world_bindings",
