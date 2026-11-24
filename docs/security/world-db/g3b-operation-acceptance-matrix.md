@@ -151,6 +151,13 @@ Body 不得重綁 Proof。最後再 add→complete→order GET→cancel，核對
 世界版本。只有程式與測試準備好，**目前不得標記 CI PASS、正式 Client HTTP
 或 G3b 解封**。
 
+**Cart 成功候選與快照一致性補強（待本次真 PG CI）**：C-03～C-05
+獨立 Validator 現在要求已提交 Result 的 Cart ID、全部品項 ID／數量／價格、
+總額、狀態與已驗雜湊的當前 WorldSnapshot 逐欄相同；品項的原生陣列順序
+不影響等值，但重複品項、跨 Cart、不同金額或缺少品項固定拒絕。這防止
+一份結構合法且自行重算 Digest 的錯誤 Cart Result 冒充該次成功候選；
+不等於已驗證 Client HTTP 或擁有 Send 授權。
+
 | G3b 子門檻 | 獨立實測結果 | 正式簽收 |
 | --- | --- | --- |
 | 真 HTTPS Gateway→Verifier→Executor、互異 Client CA、拒絕重播／竄改 | 隔離 CI PASS | 僅實驗室傳輸子項 PASS |

@@ -1217,3 +1217,35 @@ def test_g3b_order_success_binding_distinguishes_cart_and_order_resource(action)
     assert not _verified_order_result_matches_snapshot(**{
         **valid, "result": {**order, "id": "order_" + uuid4().hex},
     })
+
+
+def test_g3b_cart_success_matches_exact_hashed_snapshot_independent_of_item_order():
+    """C-03～C-05 不能用合法 JSON/Result Digest 把別的數量、品項或 Cart 包成 200。"""
+    from deception.world.protected_native_http import _verified_cart_result_matches_snapshot
+
+    cart_id = "cart_" + uuid4().hex
+    first = {"id": "item_" + uuid4().hex, "variant_id": "v1", "sku": "sku-1",
+             "unit_price": 100, "quantity": 2}
+    second = {"id": "item_" + uuid4().hex, "variant_id": "v2", "sku": "sku-2",
+              "unit_price": 50, "quantity": 1}
+    cart = {"id": cart_id, "items": {first["id"]: first, second["id"]: second},
+            "currency_code": "usd", "total": 250, "status": "active"}
+    result = {**cart, "items": [second, first]}
+    valid = dict(resource=cart_id, result=result, snapshot_state={"cart": cart})
+    assert _verified_cart_result_matches_snapshot(**valid)
+    for altered in (
+            {**result, "id": "cart_" + uuid4().hex},
+            {**result, "total": 249},
+            {**result, "items": [second, {**first, "quantity": 4}]},
+            {**result, "items": [second, second]},
+            {**result, "items": [second]},
+            {**result, "items": [second, {**first, "id": "item_" + uuid4().hex}]},
+            {**result, "items": {first["id"]: first}},
+    ):
+        assert not _verified_cart_result_matches_snapshot(**{**valid, "result": altered})
+    assert not _verified_cart_result_matches_snapshot(**{
+        **valid, "snapshot_state": {"cart": {**cart, "items": {}}},
+    })
+    assert not _verified_cart_result_matches_snapshot(**{
+        **valid, "resource": "cart_" + uuid4().hex,
+    })

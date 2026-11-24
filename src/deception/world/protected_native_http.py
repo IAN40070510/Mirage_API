@@ -50,6 +50,32 @@ _SYNTHETIC_MUTATION_PATHS = {
 }
 
 
+def _verified_cart_result_matches_snapshot(
+    *, resource: str, result: dict, snapshot_state: dict,
+) -> bool:
+    """將 C-03～C-05 的結果逐欄比對已驗 Hash 的當前 Cart，拒絕跨品項重綁。
+
+    WorldSnapshot 的 items 以 ID 為鍵；Result 的 items 是原生陣列，順序
+    不能當權威，因此須先驗重複 ID，再比較完整 Cart 內容與 URL 資源身分。
+    """
+    if (not isinstance(resource, str) or not isinstance(result, dict)
+            or not isinstance(snapshot_state, dict)):
+        return False
+    cart = snapshot_state.get("cart")
+    items = result.get("items")
+    if (not isinstance(cart, dict) or cart.get("id") != resource
+            or result.get("id") != resource or not isinstance(items, list)
+            or not isinstance(cart.get("items"), dict)):
+        return False
+    normalized_items = {}
+    for item in items:
+        if (not isinstance(item, dict) or not isinstance(item.get("id"), str)
+                or item["id"] in normalized_items):
+            return False
+        normalized_items[item["id"]] = item
+    return {**result, "items": normalized_items} == cart
+
+
 def _verified_order_result_matches_snapshot(
     *, action: str, resource: str, result: dict, snapshot_state: dict,
 ) -> bool:
@@ -797,7 +823,6 @@ class PostgresProtectedNativeProjector(_ProtectedConnection):
         """
         from jsonschema import Draft202012Validator
         from deception.domains.ecommerce.cart_http import cart_specification
-        from deception.domains.ecommerce.carts import SyntheticCarts
         from deception.domains.ecommerce.inventory_http import inventory_specification
 
         if not isinstance(receipt_id, UUID) or receipt_id.version != 4:
@@ -908,14 +933,10 @@ class PostgresProtectedNativeProjector(_ProtectedConnection):
                 else:
                     kind = "order" if action in {"cart.complete", "cart.cancel_order"} else "cart"
                     if kind == "cart":
-                        if result.get("id") != resource:
+                        if not _verified_cart_result_matches_snapshot(
+                                resource=resource, result=result, snapshot_state=snapshot.state):
                             raise ProtectedGrantError("protected_synthetic_success_cart_identity_denied")
-                        if isinstance(result.get("items"), dict):
-                            entity = SyntheticCarts.public_cart(result)
-                        elif isinstance(result.get("items"), list):
-                            entity = result
-                        else:
-                            raise ProtectedGrantError("protected_synthetic_success_cart_items_denied")
+                        entity = result
                     else:
                         if not _verified_order_result_matches_snapshot(
                                 action=action, resource=resource, result=result,
