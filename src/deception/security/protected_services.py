@@ -106,9 +106,10 @@ def _login_preflight(dsn: str, login: str, *, role: str, schema: str,
                     ("response_audit", "INSERT"))
     if role == "validator":
         # C-01 必須可用獨立實體唯讀 Login 核對不可變 Creator→Derived Lineage，
-        # 不允許直接沿用 Cart Executor 的建立／修改權限。
+        # M-03 還需唯讀比對原子保存的 Native Context，不得借用 Cart 寫入權。
         required += (("protected_cart_creations", "SELECT"),
-                     ("guest_cart_creations", "SELECT"))
+                     ("guest_cart_creations", "SELECT"),
+                     ("native_response_contexts", "SELECT"))
     forbidden = (("world_operations", "INSERT"), ("protected_world_commit_sources", "SELECT"),
                  ("protected_candidate_promotions", "INSERT")) if role == "verifier" else (
                  ("ingress_receipts", "INSERT"),

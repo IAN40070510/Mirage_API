@@ -69,6 +69,15 @@ Validator 200 的 Body、Envelope、Scope 和 Commit 摘要精確符合本次執
 **候選不等於 Client HTTP 200，也沒有 G4 Sender 授權**；CAS／結果不明
 一律 fail closed。新增四服務流程及獨立驗證仍需真 CI 證據才可逐子項簽收。
 
+M-03 四服務增量曾在 [CI #45381239098](https://github.com/IAN40070510/Mirage_API/actions/runs/45381239098)
+遇到 `direct_verifier_medusa_add_unverifiable` 503。Validator 投影要按
+`commit_attempt_id` 唯讀檢查 `native_response_contexts`，但隔離 CI 的獨立
+SCRAM Validator 原先未取得該表 `SELECT`。修補只補 Validator `SELECT`，
+並將它列入啟動前必要 ACL 與真 CI 權限稽核；Cart Executor 保留原有 INSERT，
+Validator 仍禁止 INSERT／UPDATE／DELETE，Runtime 仍禁止 SELECT。這是
+**針對可重現環境差異的最小權限修補，需以新 SHA 真四服務 CI 重跑確認**，
+不得因 PostgreSQL 管理員角色的單元測試通過就宣告 M-03 路由 PASS。
+
 I-04 庫存 GET 新增另一個固定 mTLS 路徑
 `POST /internal/v1/project-inventory-snapshot`；Validator 唯讀重建原始
 `sku` 的 `200` JSON；若同一受保護快照**真正不存在此 SKU**，則新增固定

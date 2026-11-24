@@ -1575,6 +1575,10 @@ def _audit(root: Path) -> None:
                 raise RuntimeError("g3b_ci_cart_creation_source_acl_mismatch:" + table)
         if (admin.execute("SELECT has_table_privilege(%s,%s,'INSERT')",
                           ("mirage_g3b_ci_cart", "native_response_contexts")).fetchone() != (True,)
+                or admin.execute("SELECT has_table_privilege(%s,%s,'SELECT')",
+                                 ("mirage_g3b_ci_validator", "native_response_contexts")).fetchone() != (True,)
+                or admin.execute("SELECT has_table_privilege(%s,%s,'SELECT')",
+                                 ("mirage_g3b_ci_runtime", "native_response_contexts")).fetchone() != (False,)
                 or any(admin.execute("SELECT has_table_privilege(%s,%s,'INSERT')",
                                      (role, "native_response_contexts")).fetchone() != (False,)
                        for role in ("mirage_g3b_ci_verifier", "mirage_g3b_ci_validator",
