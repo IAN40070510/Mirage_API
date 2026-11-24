@@ -187,13 +187,32 @@ Handler 的合法 409。
 `success`。**只勾選單一舊版本 CAS fail-closed 子案例**；尚未覆蓋平行提交、
 COMMIT ACK 不明或 Client HTTP，不能簽收全部 CAS。
 
-**C-01 Creator／衍生 Cart Scope 缺口（仍 OPEN）**：原始
-`createGuestCart` Receipt 屬於 Creator Session，但新建立的 Cart 使用另一個
-衍生 Session／WorldGeneration。現行 Protected Candidate Promotion／Grant
-要求 `ingress_receipts.session_id` 與受保護 Candidate Scope 相同；不能直接
-把衍生 Cart 的快照掛在 Creator Receipt 下假裝已具 Send 授權。
-需要明訂受保護的跨 Scope Creator→Derived 結果來源與 Promotion／Grant
-權威契約，且以真 DB 及獨立 Validator 驗證後，才能核對 C-01 的完整 200／409。
+**C-01 Creator→Derived 受保護授權鏈子項（隔離 PASS；整路由仍 OPEN）**：
+原始 `createGuestCart` Receipt 屬於 Creator Session，而新 Cart 有不同的
+Session／WorldGeneration。不能把衍生 Cart 快照直接當作 Creator Scope
+的 SnapshotSource。固定程式 SHA
+[`f4ef309`](https://github.com/IAN40070510/Mirage_API/commit/f4ef309019a8c0dbf85c5d9a549980ce4f189c9d)
+新增獨立 `CartCreationSource`：唯讀 Validator 必須由原始 Creator Receipt、
+不可變 `protected_cart_creations`、真 `createGuestCart` Proof、原始
+`guest_cart_creations`、派生資源、已驗 Hash 的版本 1 WorldSnapshot、
+Commit Receipt、雙方 Session Head／Generation、期限及 Key Revocation
+重建固定 200 JSON；Projection／Promotion／Admission **全部保持 Creator
+Scope**，只有 Source 指向 Derived Session。Promotion 必須重算精確
+Envelope Hash；Grant 交易再驗來源是否仍有效，舊 Prototype Audit 不能
+藉此繞過獨立 Authorizer。
+
+[真 PostgreSQL 17.6 CI 45331338643](https://github.com/IAN40070510/Mirage_API/actions/runs/45331338643)
+`155 passed`、真 mTLS `5 passed`、G5 密碼學回歸 `9 passed`；
+[容器 CI 45331338690](https://github.com/IAN40070510/Mirage_API/actions/runs/45331338690)
+`success`。真 DB 正向涵蓋 Creator→Derived 重試、200 Projector、Candidate
+Promotion 及 Authorizer Admission；負面涵蓋錯 Scope、偽造派生來源、
+竄改原始建立結果及 Grant 前證據漂移。中間 SHA `ec41463` 曾在 Grant
+模型的同世代假設上 **CI FAIL**（`1 failed / 154 passed`），修正後以
+`f4ef309` 重跑全數通過，沒有用早期 PASS 掩蓋失敗。
+
+**不包含**：C-01 真實 Client 收到原生 200／409、所有非法建立情境、
+授權後到 Sender 前派生世界的競態、未知 COMMIT／跨進程 ACK、
+正式隔離角色與部署核對；上述和 G4/G5/G6 仍 OPEN。
 
 | G3b 子門檻 | 獨立實測結果 | 正式簽收 |
 | --- | --- | --- |
@@ -215,7 +234,7 @@ COMMIT ACK 不明或 Client HTTP，不能簽收全部 CAS。
 | I-02 | POST `/synthetic/inventory/reservations/{reservation_id}/cancel` | 隔離 PASS | 受保護 cancel；真 Reservation 200＋重複取消 `reservation_not_active` 409 候選，SHA `6f42a51` 真 PG PASS | OPEN：CAS conflict、其他 409、原生 HTTP |
 | I-03 | GET `/synthetic/operations/{attempt}` | 隔離 PASS | 固定 UUID4／空 Body Proof → ReadAdmission；獨立 Validator 核對 WorldOperation、Commit Receipt、Snapshot／Epoch／Key，重建歷史 200 或確定不存在的 409 候選；固定 SHA `88d286f` 真 PG/mTLS CI PASS | OPEN：客戶端原生 200／409、競態與故障路徑 |
 | I-04 | GET `/synthetic/inventory/{sku}` | 隔離 PASS | 固定 SKU／空 Body Proof → Executor ReadAdmission → 獨立 Validator 200 成功／真正缺 SKU 409 候選；SHA `c1769b9` 原始 UTF-8、SHA `4e2cecc` 正規 percent URL 候選真 PG/mTLS PASS | OPEN：Client 原生 200／409、全 URL 相容、G4 Send |
-| C-01 | POST `/synthetic/carts` | 隔離 PASS | 受保護 Creator→衍生 Cart；衍生 Scope 與原 Receipt Scope 不同，尚無可信跨 Scope 成功 Promotion | OPEN：200／409、原始成功封套、跨 Scope 授權契約 |
+| C-01 | POST `/synthetic/carts` | 隔離 PASS | Creator→Derived `cart_creation` 固定 200 候選、獨立 Validator／Promotion／Creator Admission 真 PG 隔離 PASS（SHA `f4ef309`），來源漂移在 Grant 拒絕 | OPEN：Client 原生 200／409、未知 COMMIT、Grant→Sender 競態、實體部署 |
 | C-02 | GET `/synthetic/carts/{cart_id}` | 隔離 PASS | 受保護 ReadAdmission＋來源 ID；獨立 Validator 按派生 Cart、目前 Snapshot 重建 200 候選，真 PG 測試 PASS | OPEN：409 來源、客戶端原生 HTTP |
 | C-03 | POST `/synthetic/carts/{cart_id}/line-items` | 隔離 PASS | 受保護 add 200 Commit／Validator 候選真 PG PASS；真未知 Variant／庫存不足 409 候選 SHA `45b0285` 真 PG PASS；舊版本 CAS fail-closed SHA `c62c79c` 真 PG PASS | OPEN：其餘 409／CAS 並行、原生 HTTP |
 | C-04 | POST `/synthetic/carts/{cart_id}/line-items/{item_id}` | 隔離 PASS | 受保護 update；真品項 200、缺品項 409、重送與 Proof 防替換，SHA `bcb0c68` 真 PG PASS | OPEN：其他 409／CAS、原生 HTTP、實體部署 |
