@@ -1437,18 +1437,20 @@ def _audit(root: Path) -> None:
                 "GetOrdersId": 1,
                 "cancelSyntheticOrder": 1,
                 "getCartOperation": 2,
+                # M-01：一張合法空購物車 Receipt 與一張遭拒的非空 items Receipt。
+                "PostCarts": 2,
                 "PostCartsIdLineItems": 2,
         }:
             raise RuntimeError("g3b_ci_operation_proof_count_mismatch")
-        # Owner fixture 已先建立一筆可信 Cart；HTTP 正向新增一筆，第二張
-        # Receipt 重送同一建立鍵不得使兩個來源表出現第三筆。
+        # Owner fixture、synthetic HTTP 與受限 Medusa M-01 各建立一筆；
+        # 跨 Receipt 重用 synthetic 建立鍵與 M-01 非空 items 均不得產生第四筆。
         if (admin.execute(
                 "SELECT count(*) FROM protected_cart_creations "
                 "WHERE creator_session_id=%s", ("g3b-ci-cart-creator",),
-        ).fetchone() != (2,) or admin.execute(
+        ).fetchone() != (3,) or admin.execute(
                 "SELECT count(*) FROM guest_cart_creations "
                 "WHERE creator_session_id=%s", ("g3b-ci-cart-creator",),
-        ).fetchone() != (2,)):
+        ).fetchone() != (3,)):
             raise RuntimeError("g3b_ci_cart_cross_receipt_created_second_world")
         if admin.execute(
                 "SELECT count(*) FROM protected_world_read_sources WHERE session_id=%s",
