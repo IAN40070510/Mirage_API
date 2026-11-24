@@ -1364,6 +1364,14 @@ def test_verified_cart_creator_http_mints_one_derived_world(isolated_test_dsn):
             "UPDATE guest_cart_creations SET operation_result=%s::jsonb WHERE cart_id=%s",
             (json.dumps({"id": "cart_" + uuid4().hex}), created.binding.resource_id),
         )
+    with pytest.raises(ProtectedGrantError, match="cart_creation_grant_source_unverifiable"):
+        PostgresProtectedAuthorizer(dsn, expected_login=_real_login(dsn)).grant(
+            operation_id=uuid4(), receipt_id=receipt, scope=creator_scope,
+            candidate_ref=candidate_ref, candidate_version=1,
+            authorization_revision="stale-cart-creation-must-fail",
+            authorization_deadline=now + 40, transmission_deadline=now + 50,
+            evidence=evidence,
+        )
     with pytest.raises(ProtectedGrantError, match="protected_cart_creation_result_mismatch"):
         projector.project_cart_creation(receipt)
     with pytest.raises(ProtectedGrantError, match="candidate_source_unverifiable"):

@@ -312,7 +312,12 @@ class ResponseAdmission(SyntheticModel):
         """核對期限、來源世代與已驗證投影契約，避免混用不同回應的准入證據。"""
         if self.transmission_deadline < self.authorization_deadline:
             raise ValueError("transmission_deadline must not precede authorization_deadline")
-        if self.source.kind != "security_error" and self.source.world_generation_id != self.world_generation_id:
+        if self.source.kind == "cart_creation":
+            # 只有受保護 C-01 source 可跨 Scope；此欄是 Creator Admission 世代，
+            # 派生 Cart 世代必須獨立存在且不與其混同。
+            if self.source.derived_world_generation_id == self.world_generation_id:
+                raise ValueError("cart creation source must use a distinct derived generation")
+        elif self.source.kind != "security_error" and self.source.world_generation_id != self.world_generation_id:
             raise ValueError("response source generation does not match admission")
         if self.projection_evidence.projection_contract_hash != self.projection_contract_hash:
             raise ValueError("projection evidence contract does not match admission")

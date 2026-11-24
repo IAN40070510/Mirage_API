@@ -417,6 +417,24 @@ class PostgresProtectedAuthorizer(_ProtectedConnection):
                 registry_revision = _authorized_registry_revision(cursor, checked)
                 if registry_revision is None:
                     raise ProtectedGrantError("grant_projection_not_authorized")
+                if isinstance(promoted[7], dict) and promoted[7].get("kind") == "cart_creation":
+                    # C-01 唯一跨 Scope Source：Promotion 與 Grant 之間派生世界可能
+                    # 前進／封存；不能僅憑之前的 immutable Candidate 批准過期 Cart。
+                    from .models import CartCreationSource
+                    from .protected_native_http import _verified_cart_creation
+
+                    try:
+                        source = CartCreationSource.model_validate(promoted[7])
+                        _, _, _, payload = _verified_cart_creation(
+                            cursor, receipt_id, expected_scope=scope,
+                            expected_fingerprint=receipt[6], expected_source=source,
+                        )
+                    except (ProtectedGrantError, ValueError) as exc:
+                        raise ProtectedGrantError("cart_creation_grant_source_unverifiable") from exc
+                    body = json.dumps(payload, ensure_ascii=False, sort_keys=True,
+                                      separators=(",", ":")).encode("utf-8")
+                    if response_hashes(200, (("content-type", "application/json"),), body)[0] != promoted[1]:
+                        raise ProtectedGrantError("cart_creation_grant_envelope_mismatch")
                 cursor.execute("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
                 decision_time = cursor.fetchone()[0]
                 if (decision_time >= receipt[7] or decision_time >= promoted[8]

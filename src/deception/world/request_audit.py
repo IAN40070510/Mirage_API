@@ -113,11 +113,15 @@ class PostgresRequestAudit:
         cls._require_observation(cursor, expected)
         if (admission.request_binding_digest != checked.observation.request_binding_digest
                 or admission.world_generation_id != checked.target_scope.world_generation_id
-                or admission.source.kind not in {"snapshot", "committed_operation", "security_error"}):
+                or admission.source.kind not in {
+                    "snapshot", "committed_operation", "cart_creation", "security_error"}):
             raise ValueError("request audit admission mismatch")
         committed = admission.source.kind == "committed_operation"
-        version = admission.source.committed_state_version if committed else None
-        state_hash = admission.source.committed_state_hash if committed else None
+        created = admission.source.kind == "cart_creation"
+        version = (admission.source.committed_state_version if committed else
+                   admission.source.state_version if created else None)
+        state_hash = (admission.source.committed_state_hash if committed else
+                      admission.source.state_hash if created else None)
         cursor.execute("INSERT INTO request_observation_results "
             "(observation_id,admission_id,outcome,target_environment_id,target_deployment_id,target_session_id,"
             "target_world_generation_id,source_kind,committed_state_version,committed_state_hash,projection_contract_hash,"
