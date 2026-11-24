@@ -10,7 +10,8 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from deception.world import (CommitSource, SnapshotSource, PostgresCandidatePromoter, PostgresCandidateStore,
+from deception.world import (CartCreationSource, CommitSource, SnapshotSource,
+                             PostgresCandidatePromoter, PostgresCandidateStore,
                              PostgresEventWorldStore, PostgresProtectedWorldExecutor,
                              PostgresProjectionRegistry, ProtectedGrantError, SecurityErrorSource)
 from deception.world.session import SessionBinding
@@ -1303,6 +1304,49 @@ def test_verified_cart_creator_http_mints_one_derived_world(isolated_test_dsn):
                                   (receipt,)).fetchone()[0] == 1
         assert connection.execute("SELECT count(*) FROM synthetic_resources WHERE resource_id=%s",
                                   (created.binding.resource_id,)).fetchone()[0] == 1
+    projector = PostgresProtectedNativeProjector(dsn, expected_login=_real_login(dsn))
+    projected = projector.project_cart_creation(receipt)
+    creator_scope = service.inspect_binding(creator, now=now).scope
+    derived_scope = service.inspect_binding(created.binding, now=now).scope
+    payload = json.loads(projected.body_bytes)
+    assert projected.scope == creator_scope
+    assert projected.scope != derived_scope
+    assert projected.status_code == 200 and projected.operation_id == "createGuestCart"
+    assert projected.source == CartCreationSource(
+        derived_session_id=created.binding.session_id,
+        derived_world_generation_id=derived_scope.world_generation_id,
+        resource_id=created.binding.resource_id,
+        commit_attempt_id=str(created.outcome.commit_attempt_id),
+        state_version=created.outcome.state_version,
+        state_hash=created.outcome.state_hash,
+    )
+    assert payload == {"cart": created.outcome.result,
+                       "state_version": created.outcome.state_version,
+                       "state_hash": created.outcome.state_hash,
+                       "commit_attempt_id": str(created.outcome.commit_attempt_id)}
+    assert _candidate(dsn, scope=projected.scope, source=projected.source,
+                      receipt_id=receipt, fingerprint=proof.request_fingerprint,
+                      body=projected.body_bytes) == 1
+    with pytest.raises(ProtectedGrantError, match="candidate_source_unverifiable"):
+        _candidate(dsn, scope=derived_scope, source=projected.source,
+                   receipt_id=receipt, fingerprint=proof.request_fingerprint,
+                   body=projected.body_bytes)
+    with pytest.raises(ProtectedGrantError, match="candidate_source_unverifiable"):
+        _candidate(dsn, scope=creator_scope, source=projected.source.model_copy(
+            update={"derived_session_id": uuid4().hex}),
+            receipt_id=receipt, fingerprint=proof.request_fingerprint,
+            body=projected.body_bytes)
+    with psycopg.connect(dsn) as connection:
+        connection.execute(
+            "UPDATE guest_cart_creations SET operation_result=%s::jsonb WHERE cart_id=%s",
+            (json.dumps({"id": "cart_" + uuid4().hex}), created.binding.resource_id),
+        )
+    with pytest.raises(ProtectedGrantError, match="protected_cart_creation_result_mismatch"):
+        projector.project_cart_creation(receipt)
+    with pytest.raises(ProtectedGrantError, match="candidate_source_unverifiable"):
+        _candidate(dsn, scope=creator_scope, source=projected.source,
+                   receipt_id=receipt, fingerprint=proof.request_fingerprint,
+                   body=projected.body_bytes)
 
 
 def test_verified_cart_get_requires_creator_lineage_and_original_receipt(isolated_test_dsn):

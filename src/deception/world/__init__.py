@@ -4,6 +4,7 @@ from .admission import AdmissionControl, AdmissionOperationResult, AdmissionStat
 from .candidate import CandidateLoadResult, CandidateRecord, CandidateStore, CandidateStoreStatus
 from .commit import CommitResult
 from .models import (
+    CartCreationSource,
     CommitSource,
     DeviationApproval,
     ProjectionCompatibilityProfile,
@@ -49,6 +50,7 @@ __all__ = [
     "AdmissionControl",
     "AdmissionOperationResult",
     "AdmissionState",
+    "CartCreationSource",
     "CommitSource",
     "CommitResult",
     "EventWorldStore",

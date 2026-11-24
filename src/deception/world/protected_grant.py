@@ -245,6 +245,21 @@ class PostgresCandidatePromoter(_ProtectedConnection):
                  source.committed_state_hash),
             )
             return cursor.fetchone() is not None
+        if source.kind == "cart_creation":
+            # 只允許特殊 Creator→Derived 建立鏈；Promotion/Grant 仍使用 Creator Scope。
+            from .protected_native_http import _verified_cart_creation
+
+            try:
+                _, _, _, payload = _verified_cart_creation(
+                    cursor, receipt_id, expected_scope=scope,
+                    expected_fingerprint=fingerprint, expected_source=source,
+                )
+            except (ProtectedGrantError, ValueError):
+                return False
+            body = json.dumps(payload, ensure_ascii=False, sort_keys=True,
+                              separators=(",", ":")).encode("utf-8")
+            headers = (("content-type", "application/json"),)
+            return response_hashes(200, headers, body)[0] == envelope_hash
         if source.kind == "security_error":
             # 真正 Handler 的 409 或獨立 Executor 已驗證原始 HTTP 的 Medusa 400/404。
             cursor.execute(

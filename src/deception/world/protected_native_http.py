@@ -11,7 +11,8 @@ from uuid import UUID
 from deception.security.key_revocation import PostgresTrustedKeyRevocations
 from deception.world.commit import operation_result_digest
 
-from .models import CommitSource, ResponseSource, SecurityErrorSource, SnapshotSource, WorldScope, WorldSnapshot
+from .models import (CartCreationSource, CommitSource, ResponseSource, SecurityErrorSource,
+                     SnapshotSource, WorldScope, WorldSnapshot)
 from .protected_grant import _ProtectedConnection, ProtectedGrantError
 from .transmission import response_hashes
 
@@ -131,8 +132,186 @@ class ProtectedNativeProjection:
     source: ResponseSource
 
 
+def _verified_cart_creation(cursor, receipt_id: UUID, *, expected_scope: WorldScope | None = None,
+                            expected_fingerprint: str | None = None,
+                            expected_source: CartCreationSource | None = None,
+                            ) -> tuple[WorldScope, str, CartCreationSource, dict]:
+    """從 Creator Receipt 與不可變 Lineage 獨立驗證派生世界的一次建立結果。
+
+    Promotion 維持 Creator Scope；只有這個固定來源能引用 Derived Scope，
+    不允許以派生 Session 的 Receipt 偽裝 Creator 或將一般 Commit 跨 Scope。
+    舊版未受保護的建立列、漂移的世界或被調整的 JSON 都不能形成 200。
+    """
+    from deception.domains.ecommerce.carts import SyntheticCarts
+
+    cursor.execute("SET LOCAL statement_timeout='5s'")
+    cursor.execute(
+        """SELECT p.environment_id,p.deployment_id,p.creator_session_id,p.creator_epoch,
+                  p.request_fingerprint,p.idempotency_key,p.commit_attempt_id,p.operation_digest,
+                  p.derived_session_id,p.derived_world_generation_id,p.resource_id,
+                  r.environment_id,r.deployment_id,r.session_id,r.session_epoch,
+                  r.request_fingerprint,r.access_mode,r.resource_id,r.token_expires_at,r.issuer,r.key_id
+           FROM protected_cart_creations p JOIN ingress_receipts r USING (receipt_id)
+           WHERE p.receipt_id=%s""", (receipt_id,),
+    )
+    row = cursor.fetchone()
+    if row is None:
+        raise ProtectedGrantError("protected_cart_creation_source_missing")
+    (environment, deployment, creator_session, creator_epoch, fingerprint, key,
+     attempt, creation_digest, derived_session, generation, resource,
+     receipt_environment, receipt_deployment, receipt_session, receipt_epoch,
+     receipt_fingerprint, mode, receipt_resource, token_deadline, issuer, key_id) = row
+    if ((environment, deployment, creator_session, creator_epoch, fingerprint) != (
+            receipt_environment, receipt_deployment, receipt_session, receipt_epoch,
+            receipt_fingerprint)
+            or mode != "cart" or receipt_resource is not None
+            or not isinstance(resource, str)
+            or re.fullmatch(r"cart_[0-9a-f]{32}", resource) is None
+            or expected_fingerprint is not None and fingerprint != expected_fingerprint):
+        raise ProtectedGrantError("protected_cart_creation_receipt_mismatch")
+    cursor.execute(
+        """SELECT platform,operation_id,method,path_template,request_fingerprint,
+                  request_path,request_content_type,request_body_sha256
+           FROM protected_http_operation_bindings WHERE receipt_id=%s""", (receipt_id,),
+    )
+    proof = cursor.fetchone()
+    if (proof is None or proof[:4] != (
+            "synthetic-carts", "createGuestCart", "POST", "/synthetic/carts")
+            or proof[4:6] != (fingerprint, "/synthetic/carts")
+            or not isinstance(proof[6], str)
+            or proof[6].split(";", 1)[0].strip().lower() != "application/json"
+            or not isinstance(proof[7], str)
+            or re.fullmatch(r"[0-9a-f]{64}", proof[7]) is None):
+        raise ProtectedGrantError("protected_cart_creation_proof_mismatch")
+    cursor.execute(
+        """SELECT world_generation_id FROM session_world_bindings
+           WHERE environment_id=%s AND deployment_id=%s AND session_id=%s
+             AND session_epoch=%s""",
+        (environment, deployment, creator_session, creator_epoch),
+    )
+    current_creator = cursor.fetchone()
+    if current_creator is None:
+        raise ProtectedGrantError("protected_cart_creation_creator_generation_missing")
+    creator_scope = WorldScope(environment_id=environment, deployment_id=deployment,
+                               session_id=creator_session, world_generation_id=current_creator[0])
+    if expected_scope is not None and creator_scope != expected_scope:
+        raise ProtectedGrantError("protected_cart_creation_creator_scope_mismatch")
+    cursor.execute(
+        """SELECT cart_id,operation_result,state_version,state_hash,commit_attempt_id,operation_digest
+           FROM guest_cart_creations
+           WHERE environment_id=%s AND deployment_id=%s AND creator_session_id=%s
+             AND creator_epoch=%s AND idempotency_key=%s""",
+        (environment, deployment, creator_session, creator_epoch, key),
+    )
+    creation = cursor.fetchone()
+    if (creation is None or creation[0] != resource or creation[4] != attempt
+            or creation[5] != creation_digest or creation[2] != 1):
+        raise ProtectedGrantError("protected_cart_creation_derived_commit_mismatch")
+    cursor.execute(
+        """SELECT session_id,session_epoch,world_generation_id,expires_at
+           FROM synthetic_resources WHERE resource_id=%s AND resource_kind='cart'
+             AND environment_id=%s AND deployment_id=%s""",
+        (resource, environment, deployment),
+    )
+    resource_row = cursor.fetchone()
+    if resource_row is None or resource_row[:3] != (derived_session, 1, generation):
+        raise ProtectedGrantError("protected_cart_creation_resource_mismatch")
+    for session, epoch, current_generation in (
+            (creator_session, creator_epoch, creator_scope.world_generation_id),
+            (derived_session, 1, generation)):
+        cursor.execute(
+            """SELECT h.session_epoch,b.world_generation_id,g.sealed,g.emergency_revision
+               FROM session_heads h
+               JOIN session_world_bindings b ON (b.environment_id,b.deployment_id,b.session_id,b.session_epoch)
+                   =(h.environment_id,h.deployment_id,h.session_id,h.session_epoch)
+               JOIN generation_controls g ON g.world_generation_id=b.world_generation_id
+               WHERE h.environment_id=%s AND h.deployment_id=%s AND h.session_id=%s""",
+            (environment, deployment, session),
+        )
+        if cursor.fetchone() != (epoch, current_generation, False, None):
+            raise ProtectedGrantError("protected_cart_creation_generation_stale")
+    cursor.execute(
+        """SELECT version,state_hash,state,expires_at FROM world_snapshots
+           WHERE environment_id=%s AND deployment_id=%s AND session_id=%s
+             AND world_generation_id=%s""",
+        (environment, deployment, derived_session, generation),
+    )
+    saved = cursor.fetchone()
+    if saved is None:
+        raise ProtectedGrantError("protected_cart_creation_snapshot_missing")
+    derived_scope = WorldScope(environment_id=environment, deployment_id=deployment,
+                               session_id=derived_session, world_generation_id=generation)
+    try:
+        snapshot = WorldSnapshot(scope=derived_scope, version=saved[0], state_hash=saved[1],
+                                 state=saved[2], expires_at=saved[3])
+    except ValueError as exc:
+        raise ProtectedGrantError("protected_cart_creation_snapshot_invalid") from exc
+    if (snapshot.version, snapshot.state_hash) != (creation[2], creation[3]):
+        raise ProtectedGrantError("protected_cart_creation_snapshot_stale")
+    cart = snapshot.state.get("cart")
+    if (not isinstance(cart, dict) or cart.get("id") != resource
+            or cart.get("items") != {} or cart.get("total") != 0
+            or cart.get("status") != "active" or cart.get("currency_code") != "usd"
+            or set(cart) != {"id", "items", "total", "status", "currency_code"}
+            or creation[1] != SyntheticCarts.public_cart(cart)):
+        raise ProtectedGrantError("protected_cart_creation_result_mismatch")
+    cursor.execute(
+        """SELECT state_version,state_hash FROM world_commit_receipts
+           WHERE environment_id=%s AND deployment_id=%s AND session_id=%s
+             AND world_generation_id=%s AND commit_attempt_id=%s""",
+        (environment, deployment, derived_session, generation, attempt),
+    )
+    if cursor.fetchone() != (snapshot.version, snapshot.state_hash):
+        raise ProtectedGrantError("protected_cart_creation_commit_receipt_mismatch")
+    cursor.execute("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
+    now = cursor.fetchone()[0]
+    if (token_deadline <= now or resource_row[3] <= now
+            or snapshot.expires_at is not None and snapshot.expires_at <= now):
+        raise ProtectedGrantError("protected_cart_creation_expired")
+    guard = PostgresTrustedKeyRevocations(
+        cursor.connection.info.dsn, environment_id=environment, deployment_id=deployment,
+    )
+    guard._lock(cursor, issuer, key_id)
+    if guard._select(cursor, issuer, key_id) is not None:
+        raise ProtectedGrantError("protected_cart_creation_key_revoked")
+    source = CartCreationSource(derived_session_id=derived_session,
+                                derived_world_generation_id=generation, resource_id=resource,
+                                commit_attempt_id=str(attempt), state_version=snapshot.version,
+                                state_hash=snapshot.state_hash)
+    if expected_source is not None and source != expected_source:
+        raise ProtectedGrantError("protected_cart_creation_source_mismatch")
+    return creator_scope, fingerprint, source, {
+        "cart": creation[1], "state_version": snapshot.version,
+        "state_hash": snapshot.state_hash, "commit_attempt_id": str(attempt),
+    }
+
+
 class PostgresProtectedNativeProjector(_ProtectedConnection):
     """以與 Verifier／Executor 不同的讀取 Login 查核拒絕及固定 HTTP Envelope。"""
+
+    def project_cart_creation(self, receipt_id: UUID) -> ProtectedNativeProjection:
+        """以獨立唯讀證據建立 C-01 200：授權 Scope 保持原始 Creator。"""
+        from jsonschema import Draft202012Validator
+        from deception.domains.ecommerce.cart_http import cart_specification
+
+        if not isinstance(receipt_id, UUID) or receipt_id.version != 4:
+            raise ProtectedGrantError("protected_cart_creation_receipt_invalid")
+        with self._connection() as connection:
+            with connection.cursor() as cursor:
+                scope, fingerprint, source, payload = _verified_cart_creation(cursor, receipt_id)
+        schema = cart_specification()["paths"]["/carts"]["post"]["responses"]["200"][
+            "content"]["application/json"]["schema"]
+        if not Draft202012Validator(schema).is_valid(payload):
+            raise ProtectedGrantError("protected_cart_creation_contract_invalid")
+        headers = (("content-type", "application/json"),)
+        body = json.dumps(payload, ensure_ascii=False, sort_keys=True,
+                          separators=(",", ":")).encode("utf-8")
+        return ProtectedNativeProjection(
+            receipt_id=receipt_id, scope=scope, operation_id="createGuestCart",
+            request_fingerprint=fingerprint, status_code=200, headers=headers,
+            body_bytes=body, envelope_hash=response_hashes(200, headers, body)[0],
+            source=source,
+        )
 
     def project_cart_read(self, receipt_id: UUID) -> ProtectedNativeProjection:
         """由獨立唯讀證據重建 C-02／C-07／C-09 的 Cart／Order／Operation 200 候選。

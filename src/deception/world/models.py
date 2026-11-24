@@ -188,6 +188,20 @@ class CommitSource(SyntheticModel):
     committed_state_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class CartCreationSource(SyntheticModel):
+    """Creator Receipt 經受保護 lineage 指向獨立派生 Cart 世界的建立來源。"""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True, allow_inf_nan=False)
+
+    kind: Literal["cart_creation"] = "cart_creation"
+    derived_session_id: str = Field(min_length=1, max_length=128)
+    derived_world_generation_id: str = Field(min_length=1, max_length=128)
+    resource_id: str = Field(pattern=r"^cart_[0-9a-f]{32}$")
+    commit_attempt_id: str = Field(pattern=r"^[0-9a-f-]{36}$")
+    state_version: int = Field(ge=1)
+    state_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class SecurityErrorSource(SyntheticModel):
     """指出回應只使用固定安全錯誤模板，不代表 Synthetic World 資料。"""
 
@@ -199,7 +213,7 @@ class SecurityErrorSource(SyntheticModel):
 
 
 ResponseSource = Annotated[
-    SnapshotSource | CommitSource | SecurityErrorSource,
+    SnapshotSource | CommitSource | CartCreationSource | SecurityErrorSource,
     Field(discriminator="kind"),
 ]
 

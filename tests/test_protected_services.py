@@ -29,6 +29,82 @@ from deception.world.protected_native_http import (
 from deception.world.transmission import response_hashes
 
 
+def test_g3b_cart_creation_validator_rejects_cross_scope_and_forged_projection(monkeypatch):
+    """C-01 只從 Creator Receipt 取派生建置，重算合法 Hash 也不能換掉 Scope。"""
+    from deception.security import protected_rpc
+
+    receipt, attempt = uuid4(), uuid4()
+    resource = "cart_" + uuid4().hex
+    projection = {}
+
+    class MockCartCreationValidator:
+        """傳輸只接受 Receipt；客戶端必須自行檢查每個 Source 欄位。"""
+
+        def __init__(self, **kwargs):
+            """所有請求不繼承環境代理伺服器。"""
+            assert kwargs["trust_env"] is False
+
+        async def __aenter__(self):
+            """提供模擬的單次 mTLS 連線。"""
+            return self
+
+        async def __aexit__(self, *_):
+            """不隱藏 Validator 失敗。"""
+            return False
+
+        async def post(self, url, *, json):
+            """Caller 不得選擇 Response Body 或源 Scope。"""
+            assert url == "https://validator.invalid:8445/internal/v1/project-cart-creation"
+            assert json == {"receipt_id": str(receipt)}
+            return httpx.Response(200, json=projection)
+
+    monkeypatch.setattr(protected_rpc.httpx, "AsyncClient", MockCartCreationValidator)
+    client = object.__new__(FixedNativeValidatorMTLSClient)
+    client._origin, client._tls = "https://validator.invalid:8445", object()
+    payload = {"cart": {"id": resource, "items": [], "currency_code": "usd",
+                        "total": 0, "status": "active"}, "state_version": 1,
+               "state_hash": "b" * 64, "commit_attempt_id": str(attempt)}
+    body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    headers = (("content-type", "application/json"),)
+    baseline = {
+        "receipt_id": str(receipt), "operation_id": "createGuestCart",
+        "scope": {"environment_id": "env", "deployment_id": "deploy",
+                  "session_id": "creator", "world_generation_id": "creator-world"},
+        "request_fingerprint": "a" * 64, "status_code": 200,
+        "headers": [["content-type", "application/json"]],
+        "body_b64": base64.b64encode(body).decode(),
+        "envelope_hash": response_hashes(200, headers, body)[0],
+        "source": {"kind": "cart_creation", "derived_session_id": "derived",
+                   "derived_world_generation_id": "derived-world", "resource_id": resource,
+                   "commit_attempt_id": str(attempt), "state_version": 1,
+                   "state_hash": "b" * 64}, "trusted_send": "disabled",
+    }
+    args = dict(receipt_id=receipt, operation_id="createGuestCart", resource_id=resource,
+                commit_attempt_id=str(attempt), request_fingerprint="a" * 64,
+                expected_environment_id="env", expected_deployment_id="deploy",
+                expected_session_id="creator")
+    projection.update(deepcopy(baseline))
+    accepted = asyncio.run(client.project_cart_creation(**args))
+    assert accepted["body_sha256"] == response_hashes(200, headers, body)[1]
+    assert accepted["delivery"] == "candidate_only_no_send_authorization"
+    for change in (
+            {"status_code": 409}, {"receipt_id": str(uuid4())},
+            {"trusted_send": "enabled"}, {"envelope_hash": "f" * 64},
+            {"headers": [["x-forged", "true"]]},
+            {"scope": {**baseline["scope"], "session_id": "derived"}},
+            {"source": {**baseline["source"], "derived_session_id": "creator"}},
+            {"source": {**baseline["source"], "resource_id": "cart_" + uuid4().hex}},
+            {"source": {**baseline["source"], "state_hash": "c" * 64}},
+            {"body_b64": base64.b64encode(body + b" ").decode()},
+            {"extra": "injected"},
+    ):
+        projection.clear()
+        projection.update(deepcopy(baseline))
+        projection.update(change)
+        with pytest.raises(ProtectedRpcConfigurationError, match="cart_creation_binding_mismatch"):
+            asyncio.run(client.project_cart_creation(**args))
+
+
 def test_g3b_cart_executor_requires_medusa_insert_but_inventory_denies_it(monkeypatch):
     """模擬實體 ACL：Cart 可寫固定拒絕來源，Inventory 不得借用這項特權。"""
     import psycopg
