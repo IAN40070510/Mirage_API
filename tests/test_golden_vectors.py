@@ -116,7 +116,7 @@ def test_request_vectors_match_actual_gateway_dispatcher(monkeypatch):
     if not (root / "src/msdss/adapters/request_binding.py").is_file():
         pytest.skip("requires MSDSS request binding adapter checkout")
     monkeypatch.syspath_prepend(str(root / "src"))
-    from integrations.msdss.trusted_session_dispatch import wire_fingerprint
+    from msdss.gateway_integration.trusted_session_dispatch import wire_fingerprint
 
     fixture = json.loads((vector_path().parent / "request_fingerprint.json").read_text(encoding="utf-8"))
     for vector in fixture["cases"]:

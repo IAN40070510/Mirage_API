@@ -109,7 +109,7 @@ def test_gateway_dispatch_to_independent_mirage(tmp_path, monkeypatch, full_pipe
     from sentinel.gateway.app import app
     from msdss.adapters.attack_assessment import AssessmentScope
     from msdss.decision.policy import DecisionPolicy
-    from integrations.msdss.trusted_session_dispatch import SessionBinding, TrustedSessionDispatcher
+    from msdss.gateway_integration.trusted_session_dispatch import SessionBinding, TrustedSessionDispatcher
     from sentinel.gateway.mtls_transport import build_mirage_mtls_client
 
     # 臨時 CA 分別簽發 HTTPS 伺服器與 Gateway 身分；不能以單向 TLS 冒充 mTLS。
@@ -239,7 +239,7 @@ def test_gateway_dispatch_to_independent_mirage(tmp_path, monkeypatch, full_pipe
                 decision_policy=DecisionPolicy(enforcement_enabled=True, deception_approved=True)).items():
                 monkeypatch.setattr(app.state, name, value, raising=False)
             if full_pipeline == "native":
-                from integrations.msdss.gateway_bootstrap import GatewayIntegrationSettings, configure_gateway_state
+                from msdss.gateway_integration.gateway_bootstrap import GatewayIntegrationSettings, configure_gateway_state
                 from deception.security.trusted_deployment import TrustedDeploymentSettings
                 monkeypatch.delattr(app.state, "deception_dispatcher")
                 configuration = GatewayIntegrationSettings(deployment=TrustedDeploymentSettings(
