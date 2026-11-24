@@ -36,7 +36,9 @@
 4. 在不會有其他使用者流量的新 DB 上，測試 DB 中斷時系統 fail-closed；
    在一次性 DB 停止前後，記錄 Replay／Receipt 數量；用
    `g3b_ci_fault_probe.py --phase degraded` 確認簽章查詢只回 `503`，
-   恢復後以 `--phase recovered` 確認正常 `200` 且同請求重播 `403`。
+   恢復後先透過原生 World 初始化介面建立新合成 Session，再以
+   `--phase recovered --recovery-session <唯一測試Session>` 確認正常 `200`
+   且同請求重播 `403`。
    新查詢會產生合法 Receipt；故障期間不得增加 Receipt 或重試 Commit。
 5. 另外核對 Restore Quarantine、Rollback、跨版本狀態及 G5
    外部 Anchor 的真實控制平面。**若沒有獨立系統或 Owner 證據，只能記
@@ -66,3 +68,9 @@
 - 根因為 `create_direct_verifier_app.verify_original` 未將 IngressTx 的
   `psycopg.Error` 轉為固定拒絕狀態。修補後應以新映像重跑，同時驗證
   `503`、回復 `200`、重放 `403` 與 Receipt 不重複，未通過不可簽收。
+- 修補版 `9a010a3e9d184588b8797be048d96258adfebae1` 的中斷測試
+  `job_01M87R6DQZ00DTM963N9ZBQMS2` 已證實 `503`／無洩漏；
+  復原第一次檢查 `job_01M87R7PWJ00BV0HDQS4KV1ZJ7` 顯示 `503`，
+  實際 PostgreSQL 時鐘超過原合成 World 的 `expires_at`（TTL 420 秒），
+  因此是過期測資的拒絕。後續以原生初始化介面建立新合成 Session，
+  不直接改資料表 TTL，再檢查正常查詢與重播。

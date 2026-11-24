@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import re
 import ssl
 from uuid import uuid4
 
@@ -14,7 +15,7 @@ from deception.api.fingerprint import fingerprint_httpx_request
 from g3b_ci_probe import _sign
 
 
-def _probe(*, phase: str) -> None:
+def _probe(*, phase: str, recovery_session: str | None) -> None:
     """同一隔離身分於故障時須拒絕，恢復後允許單次查詢且重播必須拒絕。"""
     root = Path("/lab/probe")
     key = Ed25519PrivateKey.from_private_bytes((root / "signing.key").read_bytes())
@@ -28,9 +29,12 @@ def _probe(*, phase: str) -> None:
             "GET", origin + "/synthetic/inventory/sku-1",
             headers={"x-request-id": request_id},
         )
+        # 長時間 Oracle 操作可能讓 420s 初始 World 自然過期；復原只使用
+        # 由原生 World 介面另外建好的隔離合成 Session，不人工改 expires_at。
+        session = recovery_session if phase == "recovered" else "session"
         request.headers["x-trusted-session"] = _sign(
             key, fingerprint=fingerprint_httpx_request(request, request_id),
-            session="session", mode="inventory",
+            session=session, mode="inventory",
         )
         response = gateway.send(request)
         if phase == "degraded":
@@ -61,8 +65,12 @@ def main() -> None:
     """僅允許指定的故障階段，避免誤向真實部署或其他業務端點發送。"""
     parser = argparse.ArgumentParser()
     parser.add_argument("--phase", choices=("degraded", "recovered"), required=True)
+    parser.add_argument("--recovery-session")
     args = parser.parse_args()
-    _probe(phase=args.phase)
+    if args.phase == "recovered" and (not isinstance(args.recovery_session, str)
+                                      or not re.fullmatch(r"[a-z0-9-]{3,80}", args.recovery_session)):
+        parser.error("isolated recovery session required")
+    _probe(phase=args.phase, recovery_session=args.recovery_session)
 
 
 if __name__ == "__main__":
