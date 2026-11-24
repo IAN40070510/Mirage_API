@@ -1,5 +1,7 @@
 # 可選 Gateway 部署組裝
 
+> **歷史歸檔，非目前 Mirage 安裝指引。** 本文件記錄舊版跨專案實作和當時的驗收證據，相關組裝器、相容性依賴與測試已移出 Mirage。下方路徑和命令不能用於目前分支；目前的運作入口見 [Mirage 獨立安裝與驗收](standalone.md)。外部消費者的部署與移轉驗證應在其自身倉庫執行。
+
 ## 用途與邊界
 
 `integrations/msdss/gateway_bootstrap.py` 將已驗證的 Medusa 登入、匿名唯讀分組與合成資源能力組裝成 TrustedSessionDispatcher。它只在原 Gateway 建好 HTTP client 後執行，不載入或替換偵測模型，不改真實上游，不執行 migration，也不自動修改 MSDSS。
