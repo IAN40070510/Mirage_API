@@ -107,6 +107,12 @@ Session Epoch／Key 撤銷時固定失敗；**只有真缺 SKU** 可以建立 40
 Verifier 逐欄比對 Executor 來源、Session Scope、精確 Body／Envelope Hash，
 拒絕未知 Cart／Order 與版本漂移的冒充 409。Validator 物理 Login 僅新增
 `synthetic_resources SELECT`，不提供 Cart DML；本候選不是客戶端正式 HTTP。
+**C-09 歷史操作跨 Cart 綁定防護（2026-11-24）**：Verifier 收到獨立 Validator
+的 200 候選時，除校驗 Receipt／ReadAdmission／Scope／Schema／Envelope Hash 外，
+還會以原始 GET 路徑的 `cart_id` 再次限制歷史 `cart.id`，或要求歷史
+`order.cart_id` 等於該 Cart。即使有人重算整個合法 JSON 與 Envelope Hash，
+錯 Cart 的歷史結果也不能通過交接；正向與兩類跨 Cart 負面測試均覆蓋。
+本控制只保護候選交接，沒有賦予 Client Send 權，也不消除競態與 G5 缺口。
 新增 Synthetic 固定 mutation 真業務拒絕來源：Executor 將已保存
 `rejected` 的結果與 409 固定 Envelope Hash 原子寫入受保護拒絕表，
 獨立 Validator 從 Receipt 重建 JSON `{"code":"..."}`。Verifier 僅在

@@ -207,6 +207,7 @@ class FixedNativeValidatorMTLSClient:
     ) -> dict[str, object]:
         """由獨立 Validator 校驗 Cart／Order／Operation 200 候選的精確 JSON 與來源。
 
+        歷史 Cart／Order 亦須綁回 GET 原始 Cart ID，不能僅靠格式及雜湊；
         只傳 Receipt，固定 Operation 與真實 Executor ReadAdmission 必須匹配；
         此路徑不提供客戶端 HTTP Send，也不能接受呼叫端提供的 Status／Body。
         """
@@ -269,7 +270,12 @@ class FixedNativeValidatorMTLSClient:
                 valid_payload = (
                     isinstance(entity, dict) and ("cart" in payload) != ("order" in payload)
                     and isinstance(entity.get("id"), str)
-                    and re.fullmatch(r"(?:cart|order)_[0-9a-f]{32}", entity["id"]) is not None
+                    and re.fullmatch(
+                        (r"cart_" if "cart" in payload else r"order_") + r"[0-9a-f]{32}",
+                        entity["id"],
+                    ) is not None
+                    and (entity.get("id") == resource_id if "cart" in payload
+                         else entity.get("cart_id") == resource_id)
                     and payload.get("commit_attempt_id") == expected_attempt_id
                     and type(payload.get("state_version")) is int
                     and 1 <= payload["state_version"] <= expected_state_version

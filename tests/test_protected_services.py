@@ -471,6 +471,84 @@ def test_g3b_cart_order_read_200_validator_rejects_forged_native_payloads(monkey
             asyncio.run(client.project_cart_read(**{**kwargs, "resource_id": "wrong"}))
 
 
+@pytest.mark.parametrize("kind", ["cart", "order"])
+def test_g3b_cart_operation_validator_binds_historical_entity_to_requested_cart(monkeypatch, kind):
+    """C-09 歷史結果即使 Schema／Hash 合法，亦不得換成另一個 Cart 的實體。"""
+    from deception.security import protected_rpc
+
+    receipt, attempt = uuid4(), uuid4()
+    cart_id = "cart_" + uuid4().hex
+    entity = ({"id": cart_id, "items": [], "currency_code": "usd", "total": 0,
+               "status": "active"} if kind == "cart" else
+              {"id": "order_" + uuid4().hex, "cart_id": cart_id,
+               "items": [], "currency_code": "usd", "total": 0, "status": "placed"})
+    projected = {}
+
+    class MockValidator:
+        """只替換獨立 mTLS 結果，保留真實投影綁定驗證。"""
+
+        def __init__(self, **kwargs):
+            """檢查來源獨立於環境 Proxy。"""
+            assert kwargs["trust_env"] is False
+
+        async def __aenter__(self):
+            """開啟單次模擬 mTLS 連線。"""
+            return self
+
+        async def __aexit__(self, *_):
+            """結束連線且傳播驗證錯誤。"""
+            return False
+
+        async def post(self, url, *, json):
+            """只允許以 Receipt 查核，不讓 Client 選擇歷史 Response。"""
+            assert url == "https://validator.invalid:8445/internal/v1/project-cart-read"
+            assert json == {"receipt_id": str(receipt)}
+            return httpx.Response(200, json=projected)
+
+    monkeypatch.setattr(protected_rpc.httpx, "AsyncClient", MockValidator)
+    client = object.__new__(FixedNativeValidatorMTLSClient)
+    client._origin, client._tls = "https://validator.invalid:8445", object()
+    args = dict(receipt_id=receipt, operation_id="getCartOperation", resource_id=cart_id,
+                request_fingerprint="a" * 64, expected_environment_id="env",
+                expected_deployment_id="deploy", expected_session_id="session",
+                expected_read_admission_id=uuid4().hex, expected_world_generation_id="world",
+                expected_state_version=3, expected_state_hash="c" * 64,
+                expected_attempt_id=str(attempt))
+
+    def set_projection(result_entity):
+        """依固定原生契約重算 Hash，避免單純雜湊錯誤掩蓋資源重綁。"""
+        payload = {kind: result_entity, "state_version": 2, "state_hash": "b" * 64,
+                   "commit_attempt_id": str(attempt)}
+        body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        projected.clear()
+        projected.update({
+            "receipt_id": str(receipt), "operation_id": "getCartOperation",
+            "scope": {"environment_id": "env", "deployment_id": "deploy",
+                      "session_id": "session", "world_generation_id": "world"},
+            "request_fingerprint": "a" * 64, "status_code": 200,
+            "headers": [["content-type", "application/json"]],
+            "body_b64": base64.b64encode(body).decode("ascii"),
+            "envelope_hash": response_hashes(200, (("content-type", "application/json"),), body)[0],
+            "source": {"kind": "snapshot", "read_admission_id": args["expected_read_admission_id"],
+                       "world_generation_id": "world", "state_version": 3,
+                       "state_hash": "c" * 64}, "trusted_send": "disabled",
+        })
+
+    set_projection(entity)
+    assert asyncio.run(client.project_cart_read(**args))["status_code"] == 200
+    altered = dict(entity)
+    altered["id" if kind == "cart" else "cart_id"] = "cart_" + uuid4().hex
+    set_projection(altered)
+    with pytest.raises(ProtectedRpcConfigurationError, match="cart_validator_binding_mismatch"):
+        asyncio.run(client.project_cart_read(**args))
+    # 型別也不能互換：order.id 不是 cart.id，反之亦然。
+    altered_type = dict(entity)
+    altered_type["id"] = ("order_" if kind == "cart" else "cart_") + uuid4().hex
+    set_projection(altered_type)
+    with pytest.raises(ProtectedRpcConfigurationError, match="cart_validator_binding_mismatch"):
+        asyncio.run(client.project_cart_read(**args))
+
+
 def test_g3b_synthetic_rejection_has_fixed_native_409_contract():
     """合成庫存與 Cart 的 409 僅輸出精確 JSON，不允許 Runtime 自造模板碼。"""
     for platform, code in (("synthetic-inventory", "insufficient_synthetic_inventory"),
