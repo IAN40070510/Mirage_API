@@ -34,7 +34,10 @@
    Gateway 無 Executor／DB DNS 視野；`--mode audit` 核對角色、
    真實 ACL、Mount、Read-only Rootfs、無 host port 及 Network。
 4. 在不會有其他使用者流量的新 DB 上，測試 DB 中斷時系統 fail-closed；
-   恢復後以新憑證／一次性 Receipt 檢查無錯誤重試或雙重 Commit。
+   在一次性 DB 停止前後，記錄 Replay／Receipt 數量；用
+   `g3b_ci_fault_probe.py --phase degraded` 確認簽章查詢只回 `503`，
+   恢復後以 `--phase recovered` 確認正常 `200` 且同請求重播 `403`。
+   新查詢會產生合法 Receipt；故障期間不得增加 Receipt 或重試 Commit。
 5. 另外核對 Restore Quarantine、Rollback、跨版本狀態及 G5
    外部 Anchor 的真實控制平面。**若沒有獨立系統或 Owner 證據，只能記
    `OPEN`，不得以單資料庫內的模擬取代。**
