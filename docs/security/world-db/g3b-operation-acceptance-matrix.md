@@ -451,6 +451,7 @@ Rejection Source 合計 4。**僅這組 I-01→I-02 正向／重複取消候選�
 | I-02 真實 I-01 Reservation 後續取消與重複取消 | [四服務 #88](https://github.com/IAN40070510/Mirage_API/actions/runs/45359511846) I-01 真 Reservation→I-02 CAS 版本 2→3 200 Commit；第二張有效 Receipt 真 Handler `reservation_not_active` 409 候選，來源／Replay PASS | **指定 I-02 200／409 候選隔離 PASS**；其他錯誤與原生 Client HTTP OPEN |
 | Medusa M-02／M-07 原生 GET 受保護讀取來源 | 固定 SHA `eb2c6ce`；[G3b 四服務 #91](https://github.com/IAN40070510/Mirage_API/actions/runs/45362710702) PASS，真 PG17.6 [45362724404](https://github.com/IAN40070510/Mirage_API/actions/runs/45362724404) `159 passed`，真 mTLS `5 passed`，錯 Key／跨資源／重送 fail-closed | **Read Source 隔離子項 PASS**；正式 Client HTTP／完整 4xx 仍 OPEN |
 | Medusa M-02／M-07 唯讀 Validator 固定契約 200 候選 | 固定 SHA [`3230ffa`](https://github.com/IAN40070510/Mirage_API/commit/3230ffad7b8f1b3409ee6d18fc76eeeb6e6ff05c)；[真四服務 #94](https://github.com/IAN40070510/Mirage_API/actions/runs/45370736606) `success`：M-02／M-07 原生 200 候選各一筆，真 JWS／mTLS、受保護 Read Source、SHA 固定官方契約、Scope／Hash 對帳；[PG17.6 #45370745118](https://github.com/IAN40070510/Mirage_API/actions/runs/45370745118) `162 passed`、真 mTLS `5 passed`、G5 模擬 `9 passed`；容器稽核四角色／三網路／Trusted Send OFF | **兩條原生 200 候選隔離子項 PASS**；Client HTTP 200／完整 4xx、G4～G6 OPEN |
+| Medusa M-01 固定空 Cart 原生建立 200 候選及非空 items 拒絕 | 固定 SHA [`cbf6009`](https://github.com/IAN40070510/Mirage_API/commit/cbf600974c282df92daba324c4a459c9419e9cef)；[四服務 #97](https://github.com/IAN40070510/Mirage_API/actions/runs/45374946964) `success`：原始 M-01 JWS／mTLS、固定 Publishable Key、Creator→Derived `protected_cart_creations`、獨立 Medusa 200 Projector、Replay 403，非空 items 503 拒絕；真 DB 確認兩個 Creation Source 均僅有 fixture／synthetic／M-01 各一筆、20/20 未簽章拒絕、容器／網路／ACL 完整稽核 PASS；[PG17.6 #45374958565](https://github.com/IAN40070510/Mirage_API/actions/runs/45374958565) `165 passed`、真 mTLS `5 passed`、G5 模擬 `9 passed` | **固定空 Cart 200 候選及指定失敗輸入隔離子項 PASS**；客戶端原生 200／4xx、非空 items 及完整建立欄位／故障路徑仍 OPEN |
 | 正式獨立服務部署、Secret Mount／網路來源、無共享憑證可見性 | 一次性 Docker CI 真容器角色隔離 PASS | 隔離環境 PASS；staging／production 正式部署 OPEN |
 | 20 條正式原生 2xx／4xx Payload 與獨立來源／Validator | 20 條均未具全套證據 | OPEN |
 | G3b 整體解封並移交 G4 Sender | 前述兩項未完成 | **NO-GO** |
@@ -470,7 +471,7 @@ Rejection Source 合計 4。**僅這組 I-01→I-02 正向／重複取消候選�
 | C-07 | GET `/synthetic/orders/{order_id}` | 隔離 PASS | 獨立 Validator 按受保護派生 Order、ReadAdmission 重建 200，SHA `eb118a7` 真 PG PASS；**C-06 真生成的 Order，獨立 Resource Capability／ReadAdmission 200（`5205e2a`、四服務 #85）PASS** | OPEN：409 來源、原生 HTTP |
 | C-08 | POST `/synthetic/orders/{order_id}/cancel` | 隔離 PASS | 受保護 cancel_order 200 候選真 PG PASS；真重複取消 Order 409 候選 SHA `45b0285` 真 PG PASS；**同 Derived Order 真取消版本 6→7 200（`5205e2a`、四服務 #85）PASS** | OPEN：其他 409／CAS、原生 HTTP |
 | C-09 | GET `/synthetic/carts/{cart_id}/operations/{attempt}` | 隔離 PASS | 唯讀 Validator 核對歷史 WorldOperation、Protected Commit Source／Commit Receipt、ReadAdmission 與快照，重建 200 或確定不存在的 409 候選；固定 SHA `20be55a` 另修補歷史 Cart／Order 的跨 Cart ID 重綁，真 PG/mTLS CI PASS；**新 Derived Cart 真四服務歷史版本 2 200＋缺 UUIDv4 409（`fcf7f81`、#86）隔離 PASS** | OPEN：客戶端原生 200／409、競態與故障路徑 |
-| M-01 | POST `/store/carts` | 隔離 PASS | 僅部署固定 USD／Email、空 items 的原始 HTTP→Executor Creator→Derived Cart、獨立 Validator Medusa 200 候選與 Promotion／Grant 再驗實作；**新 SHA 真 PG／四服務 CI 待驗**，其他原生 Body 拒絕 | OPEN：Client 200／400／404／409，非空 items、其他建立欄位與所有故障 |
+| M-01 | POST `/store/carts` | 隔離 PASS | 僅部署固定 USD／Email、空 items 的原始 HTTP→Executor Creator→Derived Cart、獨立 Validator Medusa 200 候選與 Promotion／Grant 再驗；固定 SHA `cbf6009` 真 PG 165 tests／四服務 #97 PASS，非空 items fail-closed，單一有效建立之外不增加來源 | OPEN：Client 200／400／404／409，非空 items、其他建立欄位與所有故障 |
 | M-02 | GET `/store/carts/{id}` | 隔離 PASS | 原生 GET→Receipt／Key／Capability→ReadAdmission，`eb2c6ce` 真 PG／四服務隔離 PASS；唯讀 Validator 固定契約 Cart 200 候選 `3230ffa`、真四服務 #94／PG17.6 隔離 PASS | OPEN：Client 200／400／404／409 |
 | M-03 | POST `/store/carts/{id}/line-items` | 隔離 PASS | 特定 400／404 受保護拒絕來源／獨立 Validator mTLS 封套比對 | OPEN：正式 Client HTTP 400／404、200／409、其餘拒絕情形 |
 | M-04 | POST `/store/carts/{id}/line-items/{line_id}` | 隔離 PASS | 尚未執行 Native update | OPEN：200／400／404／409 |
@@ -508,6 +509,27 @@ Session Epoch／Generation／Key／到期時間，從真實結果重建固定 `2
 Verifier 再以 Executor ReadAdmission 元資料、已驗簽 Session、精確 Body／Hash、
 UUID 與範本比對。未知／rejected／不確定操作不偽造 `409`；外層仍為內部對帳
 `200`，沒有 Authorized Send 權，G3b 整體仍 OPEN。
+
+**Medusa M-01 固定空 Cart 建立候選（2026-11-24，隔離子項 PASS；原生 Client 回應 OPEN）**：
+固定程式 SHA [`cbf6009`](https://github.com/IAN40070510/Mirage_API/commit/cbf600974c282df92daba324c4a459c9419e9cef)，
+[G3b 四服務 #97](https://github.com/IAN40070510/Mirage_API/actions/runs/45374946964)
+`success`，日誌 `G3B_ROUTE_MEDUSA_CREATE_CANDIDATE` 記錄真原始
+`POST /store/carts`、JWS／mTLS、固定 Medusa Publishable Key、原始 HTTP Fingerprint、
+Creator→Derived 真 Cart Lineage、獨立唯讀 Validator 對照官方固定契約重建
+`StoreCartResponse` **200 候選**，Projection `authorization_scope=creator`、
+`native_validator_200=true`、`native_business_response=false`。相同 JWS 重放
+403；帶非空 `items` 的不同有效 JWS 固定拒絕 503，不創造 Cart。
+`G3B_CONTAINER_AUDIT_PASS` 確認四容器／三網路、專用 Secret、實際 PostgreSQL ACL，
+並要求同 Creator 的兩個不可變 Cart 建立來源表均**恰有三筆**（fixture、合成
+C-01、原生 M-01），`PostCarts` Proof 恰有兩筆（合法與被拒），Trusted Send OFF。
+[真 PostgreSQL 17.6 #45374958565](https://github.com/IAN40070510/Mirage_API/actions/runs/45374958565)
+`165 passed`、實體 mTLS `5 passed`、G5 密碼學模擬 `9 passed`；
+[容器示範 #45374958555](https://github.com/IAN40070510/Mirage_API/actions/runs/45374958555)
+`success`。首次功能 SHA `4d5cec1` 的[四服務 #96](https://github.com/IAN40070510/Mirage_API/actions/runs/45374532981)
+在 Gateway 測得 M-01 正負案例後，因 Host audit 仍假設舊的 Proof／Cart 筆數而
+`FAIL`；`cbf6009` 修正為新的精確期望值並完整重跑 #97 `success`，未跳過
+ACL 或關閉驗證。**只簽固定空 Cart 200 候選與指定拒絕隔離子項**；其他
+M-01 Body、原生 Client HTTP 200／4xx、未知 Commit、故障、G4～G6 都仍 OPEN。
 
 **Medusa M-02／M-07 原生 GET 的受保護讀取來源（2026-11-24，隔離 PASS；原生 200 OPEN）**：
 固定修正 SHA [`eb2c6ce`](https://github.com/IAN40070510/Mirage_API/commit/eb2c6ce71daeeb8e8352825b71acc6c2661c6ffb)
