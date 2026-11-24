@@ -830,6 +830,51 @@ def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolat
                 "SELECT version FROM world_snapshots WHERE world_generation_id=%s",
                 (snapshot.scope.world_generation_id,),
             ).fetchone()[0] == 3
+        # M-05 以真 M-03→M-04 派生品項執行原生 DELETE，只有 Commit 後才有
+        # 獨立投影的刪除封套；Body 竄改、重放與缺 Item 一律不可假裝成功。
+        native_delete, delete_receipt, delete_proof, delete_wire = prepare_request(
+            b"", route=update_path, method="DELETE",
+        )
+        assert delete_proof.operation_id == "DeleteCartsIdLineItemsLine_id"
+        assert client.post("/internal/v1/execute", json={
+            **delete_wire, "raw_body_b64": base64.b64encode(b"{}").decode(),
+        }).status_code == 503
+        deleted = client.post("/internal/v1/execute", json=delete_wire)
+        assert deleted.status_code == 200
+        delete_metadata = deleted.json()
+        assert (delete_metadata["kind"], delete_metadata["operation"],
+                delete_metadata["status"], delete_metadata["state_version"]) == (
+            "medusa_mutation", "DeleteCartsIdLineItemsLine_id", "committed", 4,
+        )
+        projected_delete = add_projector.project_medusa_add_success(delete_receipt)
+        deleted_payload = json.loads(projected_delete.body_bytes)
+        assert set(deleted_payload) == {"id", "object", "deleted", "parent"}
+        assert (deleted_payload["id"], deleted_payload["object"],
+                deleted_payload["deleted"], deleted_payload["parent"]["id"],
+                deleted_payload["parent"]["items"], deleted_payload["parent"]["total"]) == (
+            native_item_id, "line-item", True, binding.resource_id, [], 0.0,
+        )
+        assert projected_delete.source.operation_result_digest == delete_metadata["result_digest"]
+        assert _candidate(dsn, scope=snapshot.scope, source=projected_delete.source,
+                          receipt_id=delete_receipt,
+                          fingerprint=delete_proof.request_fingerprint,
+                          status=200, body=projected_delete.body_bytes) == 1
+        assert client.post("/internal/v1/execute", json=delete_wire).status_code == 503
+        _, absent_delete_receipt, _, absent_delete_wire = prepare_request(
+            b"", route=update_path, method="DELETE",
+        )
+        assert client.post("/internal/v1/execute", json=absent_delete_wire).status_code == 503
+        with pytest.raises(ProtectedGrantError, match="source_missing"):
+            add_projector.project_medusa_add_success(absent_delete_receipt)
+        with psycopg.connect(dsn) as connection:
+            assert connection.execute(
+                "SELECT operation,status FROM world_operations WHERE commit_attempt_id=%s",
+                (delete_metadata["commit_attempt_id"],),
+            ).fetchone() == ("cart.remove", "committed")
+            assert connection.execute(
+                "SELECT version,state->'cart'->'items' FROM world_snapshots "
+                "WHERE world_generation_id=%s", (snapshot.scope.world_generation_id,),
+            ).fetchone() == (4, {})
         _, denied_receipt, _, denied_wire = prepare_request(
             b"", route="/store/carts/" + binding.resource_id,
             method="GET", key="incorrect_public_key",
@@ -932,12 +977,19 @@ def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolat
         assert connection.execute("SELECT status_code,reason_code,read_admission_id IS NOT NULL "
                                   "FROM protected_medusa_rejection_sources ORDER BY status_code").fetchall() == [
             (400, "native_bad_item_body", True), (404, "native_variant_absent", True)]
-        assert connection.execute("SELECT count(*) FROM protected_world_read_sources ").fetchone()[0] == 5
-        assert connection.execute("SELECT count(*) FROM world_events").fetchone()[0] == 2
-    # M-07 沿用本次 M-03 加入、M-04 更新後的世界版本 3；
+        assert connection.execute("SELECT count(*) FROM protected_world_read_sources ").fetchone()[0] == 7
+        assert connection.execute("SELECT count(*) FROM world_events").fetchone()[0] == 3
+    # 只為 M-07 Order 讀取測試回填合成品項；M-05 的真正刪除版本已獨立核對。
+    restored_item = store.mutate_cart(
+        binding, action="add", command={"variant_id": "known", "quantity": 1},
+        expected_version=4, idempotency_key="native-test-order-item",
+        commit_attempt_id=uuid4(), now=now,
+    )
+    assert restored_item.status == "committed"
+    # M-07 沿用 M-03／M-04／M-05 及測試回填後的世界版本 5；
     # 不可拿假的 order_ ID 或 Creator Cart Capability 代替。
     completed = store.mutate_cart(binding, action="complete", command={},
-        expected_version=3, idempotency_key="native-test-complete",
+        expected_version=5, idempotency_key="native-test-complete",
         commit_attempt_id=uuid4(), now=now)
     assert completed.status == "committed"
     order_id = completed.result["id"]

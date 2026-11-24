@@ -1183,6 +1183,11 @@ class PostgresProtectedNativeProjector(_ProtectedConnection):
                         "cart.update",
                         r"/store/carts/(cart_[0-9a-f]{32})/line-items/item_[0-9a-f]{32}",
                     ),
+                    "DeleteCartsIdLineItemsLine_id": (
+                        "medusa-native-cart", "DELETE", "/store/carts/{id}/line-items/{line_id}",
+                        "cart.remove",
+                        r"/store/carts/(cart_[0-9a-f]{32})/line-items/(item_[0-9a-f]{32})",
+                    ),
                 }
                 medusa_handler = medusa_handlers.get(operation_id) if medusa else None
                 selected = (_SYNTHETIC_MUTATION_HANDLERS.get(operation_id) if not medusa else
@@ -1302,7 +1307,16 @@ class PostgresProtectedNativeProjector(_ProtectedConnection):
                                     for field in ("region_id", "sales_channel_id", "email", "metadata"))):
                             raise ProtectedGrantError("protected_medusa_add_context_unverifiable")
                         try:
-                            payload = {"cart": cart_view(entity, context_row[0])}
+                            native_cart = cart_view(entity, context_row[0])
+                            if operation_id == "DeleteCartsIdLineItemsLine_id":
+                                deleted_item_id = match[2]
+                                if any(item.get("id") == deleted_item_id
+                                       for item in native_cart["items"]):
+                                    raise ValueError("deleted item remains in committed cart")
+                                payload = {"id": deleted_item_id, "object": "line-item",
+                                           "deleted": True, "parent": native_cart}
+                            else:
+                                payload = {"cart": native_cart}
                         except (ValueError, TypeError, KeyError, OverflowError) as exc:
                             raise ProtectedGrantError("protected_medusa_add_projection_invalid") from exc
                         from referencing import Registry, Resource
@@ -1313,7 +1327,11 @@ class PostgresProtectedNativeProjector(_ProtectedConnection):
                             "urn:mirage:medusa-contract", Resource.from_contents(
                                 self._medusa_specification, default_specification=DRAFT4),
                         )
-                        schema = {"$ref": "urn:mirage:medusa-contract#/components/schemas/StoreCartResponse"}
+                        schema = ({"$ref": "urn:mirage:medusa-contract#/paths/"
+                                   "~1store~1carts~1{id}~1line-items~1{line_id}/delete/"
+                                   "responses/200/content/application~1json/schema"}
+                                  if operation_id == "DeleteCartsIdLineItemsLine_id" else
+                                  {"$ref": "urn:mirage:medusa-contract#/components/schemas/StoreCartResponse"})
                         if not OAS30Validator(schema, registry=registry).is_valid(payload):
                             raise ProtectedGrantError("protected_medusa_add_contract_invalid")
                     else:
