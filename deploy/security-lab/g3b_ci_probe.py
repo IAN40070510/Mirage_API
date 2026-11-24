@@ -532,6 +532,38 @@ def _gateway() -> None:
         )
         if gateway.send(forbidden_create).status_code != 503:
             raise RuntimeError("g3b_ci_medusa_unapproved_initial_items_not_denied")
+        # M-01 同一可信 Creator 即使持有有效 JWS，也不能藉原生新增欄位、
+        # 重複 JSON Key、URL Query 或 Header 自訂世界／價格／提交身份。
+        for suffix, body, extra_headers, query, api_key in (
+                ("email-drift", b'{"email":"changed@example.invalid","items":[]}',
+                 {}, "", "pk_g3b_ci_only"),
+                ("currency-drift", b'{"email":"ci@example.invalid","currency_code":"eur"}',
+                 {}, "", "pk_g3b_ci_only"),
+                ("duplicate-key", b'{"email":"ci@example.invalid","email":"changed@example.invalid"}',
+                 {}, "", "pk_g3b_ci_only"),
+                ("extra-world", b'{"email":"ci@example.invalid","inventory":{"known":100}}',
+                 {}, "", "pk_g3b_ci_only"),
+                ("client-idempotency", medusa_create_body,
+                 {"idempotency-key": "chosen-by-client"}, "", "pk_g3b_ci_only"),
+                ("query", medusa_create_body, {}, "?unexpected=1", "pk_g3b_ci_only"),
+                ("wrong-key", medusa_create_body, {}, "", "pk_wrong"),
+        ):
+            forbidden_id = "g3b-ci-medusa-create-" + suffix
+            forbidden = gateway.build_request(
+                "POST", origin + "/store/carts" + query, content=body,
+                headers={"x-request-id": forbidden_id, "content-type": "application/json",
+                         "x-publishable-api-key": api_key, **extra_headers},
+            )
+            forbidden.headers["x-trusted-session"] = _sign(
+                key, fingerprint=fingerprint_httpx_request(forbidden, forbidden_id),
+                session="g3b-ci-cart-creator", mode="cart",
+            )
+            if gateway.send(forbidden).status_code != 503:
+                raise RuntimeError("g3b_ci_medusa_create_input_not_denied:" + suffix)
+        print("G3B_ROUTE_MEDUSA_CREATE_INPUT_DENIED " + json.dumps({
+            "operation_id": "PostCarts", "cases": 7, "native_business_response": False,
+            "new_cart_source": False,
+        }, sort_keys=True))
         # 新 JWS／JTI／Request ID 是另一張 Receipt，不可借用已提交的 Cart Source。
         duplicate_request_id = "g3b-ci-cart-cross-receipt-denied"
         cross_receipt = gateway.build_request(
@@ -1359,7 +1391,7 @@ def _gateway() -> None:
           "cart_historical_operation_200=1 cart_missing_operation_409=1 "
           "inventory_cancel_200=1 inventory_repeat_cancel_409=1 "
           "medusa_400=1 medusa_404=1 medusa_create_candidate_200=1 "
-          "medusa_create_items=denied medusa_get_cart_source=1 "
+          "medusa_create_items=denied medusa_create_inputs=7_denied medusa_get_cart_source=1 "
           "medusa_get_order_source=1 medusa_get_cart_candidate_200=1 "
           "medusa_get_order_candidate_200=1 medusa_bad_key=denied "
           "replay=denied anonymous=denied "
@@ -1437,8 +1469,8 @@ def _audit(root: Path) -> None:
                 "GetOrdersId": 1,
                 "cancelSyntheticOrder": 1,
                 "getCartOperation": 2,
-                # M-01：一張合法空購物車 Receipt 與一張遭拒的非空 items Receipt。
-                "PostCarts": 2,
+                # M-01：合法一張、非空 items 一張及七個合法 JWS 的惡意輸入。
+                "PostCarts": 9,
                 "PostCartsIdLineItems": 2,
         }:
             raise RuntimeError("g3b_ci_operation_proof_count_mismatch")
