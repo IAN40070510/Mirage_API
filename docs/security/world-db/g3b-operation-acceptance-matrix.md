@@ -83,6 +83,19 @@ Runtime DML、實際 mTLS、可信 Inventory 一次 Commit、Medusa M-03 的
 `success`。**C-09 候選交接跨 Cart 防護子項 PASS**；Client 原生 HTTP、並行
 競態、未知 COMMIT 與 G4/G5/G6 仍 OPEN，不解封 Sender。
 
+**I-04 原始 UTF-8 SKU 路徑跨服務一致性（固定 SHA `c1769b97f6e38e42d98b7c1ea6573cfe01bede74`）**：
+Verifier 解碼、獨立 Read Source Projector、mTLS Validator Client 現在共用
+`decode_verified_inventory_sku_path()`，保留未編碼 Unicode SKU 與合法標點的
+一致性，拒絕 `%`／路徑分隔符／控制字元／`.`／`..`／無效 UTF-8 與長度歧義。
+本地聚焦 `60 passed`，完整 `1173 passed / 251 skipped`；
+[真 PG17.6 合約 CI 45309248796](https://github.com/IAN40070510/Mirage_API/actions/runs/45309248796)
+`130 passed`、真 mTLS `5 passed`；
+[Python CI 45309248824](https://github.com/IAN40070510/Mirage_API/actions/runs/45309248824)
+`1403 passed / 21 skipped`、
+[容器 CI 45309248903](https://github.com/IAN40070510/Mirage_API/actions/runs/45309248903)
+`success`。**I-04 原始 UTF-8 候選相容子項 PASS**；標準 Client
+percent-encoded URL 與原生 Client HTTP 200／409、G4/G5/G6 仍 OPEN。
+
 | G3b 子門檻 | 獨立實測結果 | 正式簽收 |
 | --- | --- | --- |
 | 真 HTTPS Gateway→Verifier→Executor、互異 Client CA、拒絕重播／竄改 | 隔離 CI PASS | 僅實驗室傳輸子項 PASS |
@@ -102,7 +115,7 @@ Runtime DML、實際 mTLS、可信 Inventory 一次 Commit、Medusa M-03 的
 | I-01 | POST `/synthetic/inventory/reservations` | 隔離 PASS | 受保護 reserve；單一 Receipt Commit；真 Handler `unknown_synthetic_sku` 409 候選四服務 PASS | OPEN：200、CAS conflict／其他 409、原生 HTTP |
 | I-02 | POST `/synthetic/inventory/reservations/{reservation_id}/cancel` | 隔離 PASS | 受保護 cancel；409 候選能力已有固定 Handler，個別情境未真容器逐條實測 | OPEN：200、CAS conflict／其他 409、原生 HTTP |
 | I-03 | GET `/synthetic/operations/{attempt}` | 隔離 PASS | 固定 UUID4／空 Body Proof → ReadAdmission；獨立 Validator 核對 WorldOperation、Commit Receipt、Snapshot／Epoch／Key，重建歷史 200 或確定不存在的 409 候選；固定 SHA `88d286f` 真 PG/mTLS CI PASS | OPEN：客戶端原生 200／409、競態與故障路徑 |
-| I-04 | GET `/synthetic/inventory/{sku}` | 隔離 PASS | 固定 SKU／空 Body Proof → Executor ReadAdmission → 獨立 Validator 200 成功／真正缺 SKU 409 候選；固定 SHA `808d07f` 真 PG/mTLS CI PASS | OPEN：URI 編碼、客戶端原生 200／409、G4 Send |
+| I-04 | GET `/synthetic/inventory/{sku}` | 隔離 PASS | 固定 SKU／空 Body Proof → Executor ReadAdmission → 獨立 Validator 200 成功／真正缺 SKU 409 候選；SHA `c1769b9` 補齊原始 UTF-8 SKU 三段一致性，真 PG/mTLS CI PASS | OPEN：百分比編碼 URI、客戶端原生 200／409、G4 Send |
 | C-01 | POST `/synthetic/carts` | 隔離 PASS | 受保護 Creator→衍生 Cart | OPEN：200／409、原始成功封套 |
 | C-02 | GET `/synthetic/carts/{cart_id}` | 隔離 PASS | 受保護 ReadAdmission＋來源 ID；新增 Validator 按同 Receipt 的派生 Cart、目前 Snapshot 重建 200 JSON 候選，待本 SHA 真 PG／四服務 CI | OPEN：409 來源、客戶端原生 HTTP |
 | C-03 | POST `/synthetic/carts/{cart_id}/line-items` | 隔離 PASS | 受保護 add；409 候選固定 Handler 存在，個別情境尚待真容器測試 | OPEN：200、其餘 409、原生 HTTP |
