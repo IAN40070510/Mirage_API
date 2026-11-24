@@ -81,6 +81,31 @@ jobs:
           docker compose -f deploy/security-lab/g3b-compose.yaml \
             -f "$G3B_LAB_ROOT/ci-override.yaml" --profile g3b-isolated up --detach
 
+      - name: Wait for all four protected TLS listeners before sending signed requests
+        run: |
+          # Listener 僅在安全角色啟動前置檢查與固定 Medusa 契約載入後綁定。
+          # 不接觸 Client JWS 或嘗試重送已可能 Commit 的 Receipt。
+          for endpoint in verifier:8443 inventory-executor:8444 cart-executor:8444 native-validator:8445; do
+            service="${endpoint%:*}"
+            port="${endpoint#*:}"
+            listener_ready=false
+            for attempt in $(seq 1 100); do
+              if docker compose -f deploy/security-lab/g3b-compose.yaml \
+                  -f "$G3B_LAB_ROOT/ci-override.yaml" --profile g3b-isolated \
+                  exec -T "$service" python -c \
+                  'import socket, sys; socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=1).close()' \
+                  "$port" >/dev/null 2>&1; then
+                listener_ready=true
+                break
+              fi
+              sleep 0.2
+            done
+            if [ "$listener_ready" != true ]; then
+              echo "G3B_PROTECTED_TLS_LISTENER_NOT_READY:$service" >&2
+              exit 1
+            fi
+          done
+
       - name: Verify real Gateway HTTP, mTLS and fixed Executor routing
         run: |
           docker run --rm --user 0:0 --network mirage-g3b-gateway-net \

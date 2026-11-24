@@ -1353,6 +1353,8 @@ def test_g3b_real_container_ci_has_explicit_isolation_and_no_sender():
     assert "--network mirage-g3b-gateway-net" in code
     assert "--mode audit" in code
     assert "--profile g3b-isolated up --detach" in code
+    assert "Wait for all four protected TLS listeners" in code
+    assert "native-validator:8445" in code and "listener_ready" in code
     assert "staging" not in code and "production" not in code
     compose = yaml.safe_load((root / "deploy/security-lab/g3b-compose.yaml").read_text(
         encoding="utf-8"))
