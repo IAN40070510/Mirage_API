@@ -556,6 +556,54 @@ def _gateway() -> None:
             "validated_native_status": 200, "derived_scope": True,
             "state_version": 2, "native_business_response": False,
         }, sort_keys=True))
+        # C-03：同一真 Derived Cart 已有版本 2，但 Client 選不存在的 Variant。
+        # 唯有實際受保護 Handler 拒絕與獨立 Rejection Source 才可重建固定 409。
+        bad_variant_id = "g3b-ci-cart-derived-missing-variant"
+        bad_variant_body = json.dumps({
+            "variant_id": "not-in-catalog", "quantity": 1, "expected_version": 2,
+            "idempotency_key": "g3b-cart-unknown-variant-once",
+            "commit_attempt_id": str(uuid4()),
+        }, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        bad_variant = gateway.build_request(
+            "POST", origin + "/synthetic/carts/" + derived_id + "/line-items",
+            content=bad_variant_body,
+            headers={"x-request-id": bad_variant_id, "content-type": "application/json"},
+        )
+        bad_variant.headers["x-trusted-session"] = _sign(
+            key, fingerprint=fingerprint_httpx_request(bad_variant, bad_variant_id),
+            session=derived_session, mode="cart", resource_id=derived_id,
+        )
+        denied_variant = gateway.send(bad_variant)
+        if denied_variant.status_code != 200:
+            raise RuntimeError("g3b_ci_derived_cart_unknown_variant_rpc_unverifiable")
+        denied_result = denied_variant.json()
+        denied_metadata = denied_result.get("executor_result", {})
+        denied_projection = denied_result.get("native_projection", {})
+        rejection_headers, rejection_payload = fixed_synthetic_rejection_bytes(
+            "synthetic-carts", "unknown_synthetic_variant")
+        if (denied_metadata.get("kind") != "world_mutation"
+                or denied_metadata.get("operation") != "addGuestCartItem"
+                or denied_metadata.get("status") != "rejected"
+                or denied_projection.get("status_code") != 409
+                or denied_projection.get("source", {}).get("template_id")
+                    != "unknown_synthetic_variant"
+                or denied_projection.get("headers")
+                    != [list(header) for header in rejection_headers]
+                or denied_projection.get("scope", {}).get("session_id") != derived_session
+                or denied_projection.get("scope", {}).get("world_generation_id")
+                    != created_source.get("derived_world_generation_id")
+                or denied_projection.get("delivery") != "candidate_only_no_send_authorization"
+                or denied_projection.get("envelope_hash") != response_hashes(
+                    409, rejection_headers, rejection_payload)[0]
+                or base64.b64decode(denied_projection.get("body_b64", ""), validate=True)
+                    != rejection_payload
+                or gateway.send(bad_variant).status_code != 403):
+            raise RuntimeError("g3b_ci_derived_cart_unknown_variant_409_source_mismatch")
+        print("G3B_ROUTE_CART_DERIVED_UNKNOWN_VARIANT_REJECTION " + json.dumps({
+            "operation_id": "addGuestCartItem", "source": "protected_world_rejection_sources",
+            "validated_native_status": 409, "template_id": "unknown_synthetic_variant",
+            "native_business_response": False,
+        }, sort_keys=True))
         # C-02：同樣透過真 Gateway→Cart Executor→獨立唯讀 Validator，
         # 只能查驗與既有派生 Cart Session 相符的原生成功 JSON 候選。
         cart_request_id = "g3b-ci-cart-get-200"
@@ -647,6 +695,7 @@ def _gateway() -> None:
           "cart_invalid_body=2_denied "
           "cart_read_200=1 cart_created_then_read_200=1 "
           "cart_creator_cross_scope_read=denied cart_derived_add_200=1 "
+          "cart_derived_unknown_variant_409=1 "
           "medusa_400=1 medusa_404=1 "
           "replay=denied anonymous=denied "
           "execution_network=unreachable trusted_send=off")
@@ -701,7 +750,7 @@ def _audit(root: Path) -> None:
             raise RuntimeError("g3b_ci_inventory_commit_evidence_missing")
         if admin.execute("SELECT count(*) FROM protected_medusa_rejection_sources").fetchone()[0] != 2:
             raise RuntimeError("g3b_ci_medusa_rejection_evidence_missing")
-        if admin.execute("SELECT count(*) FROM protected_world_rejection_sources").fetchone()[0] != 1:
+        if admin.execute("SELECT count(*) FROM protected_world_rejection_sources").fetchone()[0] != 2:
             raise RuntimeError("g3b_ci_synthetic_rejection_evidence_missing")
         proof_counts = dict(admin.execute(
             """SELECT operation_id,count(*) FROM protected_http_operation_bindings
@@ -713,7 +762,7 @@ def _audit(root: Path) -> None:
                 "getSyntheticOperation": 2,
                 "createGuestCart": 4,
                 "getGuestCart": 3,
-                "addGuestCartItem": 1,
+                "addGuestCartItem": 2,
                 "PostCartsIdLineItems": 2,
         }:
             raise RuntimeError("g3b_ci_operation_proof_count_mismatch")
