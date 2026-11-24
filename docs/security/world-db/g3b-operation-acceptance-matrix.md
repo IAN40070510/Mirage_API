@@ -449,6 +449,7 @@ Rejection Source 合計 4。**僅這組 I-01→I-02 正向／重複取消候選�
 | C-06～C-08 新 Derived Cart 轉 Order／讀取／取消 | [四服務 #83](https://github.com/IAN40070510/Mirage_API/actions/runs/45357745752) 空 Cart 409；[#84](https://github.com/IAN40070510/Mirage_API/actions/runs/45358099395) 補品項後完成訂單 200；[#85](https://github.com/IAN40070510/Mirage_API/actions/runs/45358447382) 真 Order GET 200 與 cancel 200、版本 4→5→6→7、來源／Replay PASS | **特定 Cart→Order 連續候選四服務隔離 PASS**；其他情況／原生 HTTP／G4～G6 OPEN |
 | C-09 已取消 Order 後仍可查合法 Cart 歷史操作／缺操作 | [四服務 #86](https://github.com/IAN40070510/Mirage_API/actions/runs/45358750394) 版本 7 的 ReadAdmission 重建版本 2 歷史 Cart／Commit 200 候選，同一 Cart 缺 UUIDv4 Attempt 409 候選，精確 Hash／Replay PASS | **指定 200／409 候選隔離 PASS**；其他故障、原生 HTTP OPEN |
 | I-02 真實 I-01 Reservation 後續取消與重複取消 | [四服務 #88](https://github.com/IAN40070510/Mirage_API/actions/runs/45359511846) I-01 真 Reservation→I-02 CAS 版本 2→3 200 Commit；第二張有效 Receipt 真 Handler `reservation_not_active` 409 候選，來源／Replay PASS | **指定 I-02 200／409 候選隔離 PASS**；其他錯誤與原生 Client HTTP OPEN |
+| Medusa M-02／M-07 原生 GET 受保護讀取來源 | 新增原始 HTTP Key／Fingerprint／派生資源固定 Decoder、Executor ReadAdmission、RPC Metadata 白名單、真 PG 正／負面回歸；**待新 SHA 的 CI 實際執行** | `RUNNING`：尚無 Medusa 200 Validator 或正式原生 Client HTTP；不可提升整條路由 |
 | 正式獨立服務部署、Secret Mount／網路來源、無共享憑證可見性 | 一次性 Docker CI 真容器角色隔離 PASS | 隔離環境 PASS；staging／production 正式部署 OPEN |
 | 20 條正式原生 2xx／4xx Payload 與獨立來源／Validator | 20 條均未具全套證據 | OPEN |
 | G3b 整體解封並移交 G4 Sender | 前述兩項未完成 | **NO-GO** |
@@ -469,12 +470,12 @@ Rejection Source 合計 4。**僅這組 I-01→I-02 正向／重複取消候選�
 | C-08 | POST `/synthetic/orders/{order_id}/cancel` | 隔離 PASS | 受保護 cancel_order 200 候選真 PG PASS；真重複取消 Order 409 候選 SHA `45b0285` 真 PG PASS；**同 Derived Order 真取消版本 6→7 200（`5205e2a`、四服務 #85）PASS** | OPEN：其他 409／CAS、原生 HTTP |
 | C-09 | GET `/synthetic/carts/{cart_id}/operations/{attempt}` | 隔離 PASS | 唯讀 Validator 核對歷史 WorldOperation、Protected Commit Source／Commit Receipt、ReadAdmission 與快照，重建 200 或確定不存在的 409 候選；固定 SHA `20be55a` 另修補歷史 Cart／Order 的跨 Cart ID 重綁，真 PG/mTLS CI PASS；**新 Derived Cart 真四服務歷史版本 2 200＋缺 UUIDv4 409（`fcf7f81`、#86）隔離 PASS** | OPEN：客戶端原生 200／409、競態與故障路徑 |
 | M-01 | POST `/store/carts` | 隔離 PASS | 尚未執行 Native 建立 | OPEN：200／400／404／409 |
-| M-02 | GET `/store/carts/{id}` | 隔離 PASS | 尚未執行 Native 讀取 | OPEN：200／400／404／409 |
+| M-02 | GET `/store/carts/{id}` | 隔離 PASS | 新增原生 GET→Receipt／Key／Capability→ReadAdmission 內部來源，待真 PG CI；尚無 Native Response 投影 | OPEN：200／400／404／409 |
 | M-03 | POST `/store/carts/{id}/line-items` | 隔離 PASS | 特定 400／404 受保護拒絕來源／獨立 Validator mTLS 封套比對 | OPEN：正式 Client HTTP 400／404、200／409、其餘拒絕情形 |
 | M-04 | POST `/store/carts/{id}/line-items/{line_id}` | 隔離 PASS | 尚未執行 Native update | OPEN：200／400／404／409 |
 | M-05 | DELETE `/store/carts/{id}/line-items/{line_id}` | 隔離 PASS | 尚未執行 Native delete | OPEN：200／400／404／409 |
 | M-06 | POST `/store/carts/{id}/complete` | 隔離 PASS | 尚未執行 Native complete | OPEN：200／400／404／409 |
-| M-07 | GET `/store/orders/{id}` | 隔離 PASS | 尚未執行 Native order read | OPEN：200／400／404／409 |
+| M-07 | GET `/store/orders/{id}` | 隔離 PASS | 新增原生 GET→Receipt／Key／Capability→ReadAdmission 內部來源，待真 PG CI；尚無 Native Response 投影 | OPEN：200／400／404／409 |
 
 ## 安全簽收門檻
 

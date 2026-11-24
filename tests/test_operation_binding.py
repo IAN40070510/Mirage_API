@@ -10,7 +10,7 @@ import pytest
 from deception.api.ingress import NormalizedRequest
 from deception.security.operation_binding import (
     OperationBindingError, decode_verified_cart_creation, decode_verified_cart_mutation,
-    decode_verified_cart_read, decode_verified_inventory_read,
+    decode_verified_cart_read, decode_verified_medusa_read, decode_verified_inventory_read,
     decode_verified_inventory_mutation,
     derive_verified_operation, _pinned_medusa_operations,
 )
@@ -392,3 +392,33 @@ def test_medusa_verified_route_comes_from_pinned_native_contract(path, method, o
     assert (proof.platform, proof.operation_id, proof.path_template.startswith("/store/")) == (
         "medusa-native-cart", operation, True,
     )
+
+
+@pytest.mark.parametrize("prefix,operation,identifier", [
+    ("/store/carts/", "GetCartsId", "cart_" + "a" * 32),
+    ("/store/orders/", "GetOrdersId", "order_" + "b" * 32),
+])
+def test_medusa_read_decoder_binds_native_resource_and_exact_empty_body(prefix, operation, identifier):
+    """M-02／M-07 原生 GET 只能讀取與固定 Proof 相同的派生 Cart／Order。"""
+    path = prefix + identifier
+    incoming = replace(original_request(path=path, method="GET"), body=b"")
+    proof = derive_verified_operation(incoming)
+    read = decode_verified_medusa_read(
+        proof, resource_id=identifier, raw_path=incoming.raw_path, raw_body=b"",
+    )
+    assert (read.operation, read.resource_id, read.attempt_id) == (operation, identifier, None)
+    for resource, raw_path, raw_body in (
+        ("cart_" + "c" * 32, incoming.raw_path, b""),
+        (identifier, incoming.raw_path + b"/", b""),
+        (identifier, incoming.raw_path, b"{}"),
+        (identifier, incoming.raw_path.replace(b"/store/", b"/synthetic/"), b""),
+    ):
+        with pytest.raises(OperationBindingError):
+            decode_verified_medusa_read(
+                proof, resource_id=resource, raw_path=raw_path, raw_body=raw_body,
+            )
+    with pytest.raises(OperationBindingError):
+        decode_verified_medusa_read(
+            replace(proof, platform="synthetic-carts"), resource_id=identifier,
+            raw_path=incoming.raw_path, raw_body=b"",
+        )

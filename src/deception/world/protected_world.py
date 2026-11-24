@@ -17,7 +17,7 @@ from deception.security.key_revocation import PostgresTrustedKeyRevocations
 from deception.security.operation_binding import (
     VerifiedCartRead, VerifiedInventoryRead, VerifiedOperationBinding,
     decode_verified_cart_creation, decode_verified_cart_mutation,
-    decode_verified_cart_read, decode_verified_inventory_read,
+    decode_verified_cart_read, decode_verified_medusa_read, decode_verified_inventory_read,
     decode_verified_inventory_mutation,
 )
 
@@ -70,8 +70,9 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
 
         不接受 Caller 自填 Handler、Binding、Scope、期限或世界初始資料。
         在任何 ReadAdmission／World 副作用前驗證固定路由及內容，僅支援已
-        保護的 Inventory／合成 Cart 路徑；Medusa 僅特許受保護且獨立驗證的
-        400／404 原生拒絕來源，不執行原生成功交易。內部回傳不是發送授權。
+        保護的 Inventory／合成 Cart 路徑；Medusa 特許受保護的 M-02／M-07
+        GET ReadAdmission 和 M-03 400／404 拒絕來源，不執行原生成功交易。
+        內部回傳不是 Validator 的候選核准或發送授權。
         """
         from deception.domains.ecommerce.carts import SyntheticCarts
         from deception.domains.ecommerce.inventory import SyntheticInventory
@@ -106,6 +107,12 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
                     "status": created.outcome.status}
         deadline = min(row[6], row[7] + 20)
         if proof.platform == "medusa-native-cart":
+            if proof.method == "GET":
+                return self._read_verified_medusa_http(
+                    receipt_id=receipt_id, proof=proof, binding=binding,
+                    raw_path=raw_path, raw_body=raw_body,
+                    original_http=original_http, expires_at=deadline,
+                )
             return self._execute_verified_medusa_rejection(
                 receipt_id=receipt_id, proof=proof, binding=binding,
                 raw_path=raw_path, raw_body=raw_body, original_http=original_http,
@@ -168,6 +175,65 @@ class PostgresProtectedWorldExecutor(_ProtectedConnection):
                 "status": result.status, "state_version": result.committed_state_version,
                 "state_hash": result.committed_state_hash,
                 "result_digest": result.result_digest}
+
+    def _read_verified_medusa_http(
+        self, *, receipt_id: UUID, proof: VerifiedOperationBinding,
+        binding: SessionBinding, raw_path: bytes, raw_body: bytes,
+        original_http: NormalizedRequest | None, expires_at: int,
+    ) -> dict[str, object]:
+        """由原始 M-02／M-07 GET 建立可信讀取；不建立未核准原生 200 回應。
+
+        必須持有與 JWS 指紋一致的完整 Header／URL，以及受保護的
+        Publishable Key、Cart／Order Capability 和既存 Medusa Native World。
+        """
+        from deception.domains.ecommerce.carts import SyntheticCarts
+        from deception.security.operation_binding import OperationBindingError
+
+        if (not isinstance(self._world_store, SyntheticCarts)
+                or not self._medusa_publishable_key
+                or not isinstance(original_http, NormalizedRequest)
+                or not isinstance(raw_path, bytes) or not isinstance(raw_body, bytes)):
+            raise OperationBindingError("verified_medusa_read_http_missing")
+        query = decode_verified_medusa_read(
+            proof, resource_id=binding.resource_id, raw_path=raw_path, raw_body=raw_body,
+        )
+        candidate = replace(original_http, method=proof.method, path=proof.request_path,
+                            raw_path=raw_path, body=raw_body)
+        if not hmac.compare_digest(fingerprint_request(candidate), proof.request_fingerprint):
+            raise OperationBindingError("verified_medusa_read_fingerprint_denied")
+        keys = [value for name, value in candidate.headers
+                if name.lower() == "x-publishable-api-key"]
+        if (len(keys) != 1
+                or not hmac.compare_digest(keys[0], self._medusa_publishable_key)
+                or candidate.query_string or candidate.query):
+            raise OperationBindingError("verified_medusa_read_key_or_query_denied")
+        if binding.access_mode != "cart" or binding.resource_id != query.resource_id:
+            raise OperationBindingError("verified_medusa_read_capability_denied")
+        read = self.admit_read(
+            receipt_id=receipt_id, binding=binding,
+            request_fingerprint=proof.request_fingerprint, expires_at=expires_at,
+        )
+        state = read.snapshot.state
+        context = state.get("native_context")
+        if (not isinstance(context, dict)
+                or context.get("region_id") != "reg_mirage_usd"
+                or context.get("sales_channel_id") != "sc_mirage"
+                or not isinstance(context.get("email"), str)
+                or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", context["email"])
+                or not isinstance(context.get("metadata"), dict)
+                or not isinstance(state.get("catalog"), dict)):
+            raise ProtectedGrantError("verified_medusa_read_native_context_missing")
+        orders = state.get("orders")
+        entity = (state.get("cart") if proof.operation_id == "GetCartsId"
+                  else orders.get(query.resource_id) if isinstance(orders, dict) else None)
+        if not isinstance(entity, dict) or entity.get("id") != query.resource_id:
+            raise ProtectedGrantError("verified_medusa_read_entity_missing")
+        return {"kind": "medusa_read_admitted", "operation": query.operation,
+                "resource_id": query.resource_id,
+                "read_admission_id": read.source.read_admission_id,
+                "world_generation_id": read.snapshot.scope.world_generation_id,
+                "state_version": read.snapshot.version,
+                "state_hash": read.snapshot.state_hash}
 
     def _execute_verified_medusa_rejection(
         self, *, receipt_id: UUID, proof: VerifiedOperationBinding,

@@ -194,6 +194,37 @@ def decode_verified_cart_read(
     raise OperationBindingError("verified_cart_read_operation_or_resource_denied")
 
 
+def decode_verified_medusa_read(
+    proof: VerifiedOperationBinding, *, resource_id: str,
+    raw_path: bytes, raw_body: bytes,
+) -> VerifiedCartRead:
+    """將固定 Medusa M-02／M-07 GET 綁到既有派生 Cart／Order 資源。
+
+    只負責已受保護 Operation Proof 的原始 byte 與資源路由比對；
+    Executor 仍須驗證完整 HTTP Fingerprint、Publishable Key、Receipt
+    以及 native_context，Validator 尚未核准原生 HTTP 200 投影。
+    """
+    if (not isinstance(proof, VerifiedOperationBinding)
+            or proof.platform != "medusa-native-cart" or proof.method != "GET"
+            or not isinstance(raw_path, bytes) or not isinstance(raw_body, bytes)
+            or not isinstance(proof.request_path, str)
+            or raw_path != proof.request_path.encode("utf-8")
+            or raw_body != b""
+            or proof.request_body_sha256 != hashlib.sha256(b"").hexdigest()
+            or not isinstance(resource_id, str)):
+        raise OperationBindingError("verified_medusa_read_snapshot_mismatch")
+    routes = (
+        ("GetCartsId", "/store/carts/{id}", rb"/store/carts/(cart_[0-9a-f]{32})"),
+        ("GetOrdersId", "/store/orders/{id}", rb"/store/orders/(order_[0-9a-f]{32})"),
+    )
+    for operation, template, expression in routes:
+        if (proof.operation_id, proof.path_template) == (operation, template):
+            match = re.fullmatch(expression, raw_path)
+            if match is not None and match[1].decode("ascii") == resource_id:
+                return VerifiedCartRead(operation, resource_id, None)
+    raise OperationBindingError("verified_medusa_read_operation_or_resource_denied")
+
+
 def decode_verified_cart_creation(
     proof: VerifiedOperationBinding, *, receipt_id: UUID,
     raw_path: bytes, raw_body: bytes,

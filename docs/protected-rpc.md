@@ -59,7 +59,13 @@ Verifier 持專用 mTLS 憑證使用：驗證成功後只傳 Receipt ID／原始
 或 Cart／Order 的既定 Handler。錯 Body、路由／資源錯配時，禁止先建立
 ReadAdmission；原始操作驗證通過後，Read 與受保護 World Commit 才可落地。
 
-同一 Receipt 的精確重試只使用既有 Commit Key；Medusa 僅允許已固定
+同一 Receipt 的精確重試只使用既有 Commit Key；Medusa M-02／M-07
+`GET /store/carts/{id}`／`GET /store/orders/{id}` 新增**僅 ReadAdmission**
+子切面：要求 JWS 綁定的完整原始 HTTP、唯一正確 publishable key、
+空 Body、精確 Cart／Order ID 與可查證的派生 Capability、native_context，
+Executor 僅回 `medusa_read_admitted` 的 ID／世代／版本／Hash，mTLS Client
+亦拒絕 HTTP Status／Payload／Send 欄位。未接獨立 Medusa 200 Validator，
+不應將此 Metadata 當成原生成功回應。Medusa M-03 另允許已固定
 `POST /store/carts/{id}/line-items` 的合法拒絕：錯誤 publishable key／
 NativeItemBody（400），或已受保護 Cart catalog 中確實沒有 variant（404）。
 每種拒絕都必須從同 Receipt 的受保護 ReadAdmission 取得來源，寫入

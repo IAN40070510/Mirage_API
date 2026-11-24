@@ -965,6 +965,39 @@ def _gateway() -> None:
                     200, read_headers, order_read_bytes)[0]
                 or gateway.send(order_get).status_code != 403):
             raise RuntimeError("g3b_ci_derived_order_read_source_mismatch")
+        # M-07：同一真 Order 的 Medusa 原始 GET 在獨立 Executor 建立
+        # ReadAdmission，但沒有 Medusa 200 Validator，所以不得有 Native Projection。
+        native_order_id = "g3b-ci-medusa-order-get-source"
+        native_order_get = gateway.build_request(
+            "GET", origin + "/store/orders/" + derived_order_id,
+            headers={"x-request-id": native_order_id,
+                     "x-publishable-api-key": "pk_g3b_ci_only"},
+        )
+        native_order_get.headers["x-trusted-session"] = _sign(
+            key, fingerprint=fingerprint_httpx_request(native_order_get, native_order_id),
+            session=derived_session, mode="cart", resource_id=derived_order_id,
+        )
+        native_order_result = gateway.send(native_order_get)
+        if native_order_result.status_code != 200:
+            raise RuntimeError("g3b_ci_medusa_order_read_rpc_unverifiable")
+        native_order_json = native_order_result.json()
+        native_order_meta = native_order_json.get("executor_result", {})
+        if (native_order_meta.get("kind") != "medusa_read_admitted"
+                or native_order_meta.get("operation") != "GetOrdersId"
+                or native_order_meta.get("resource_id") != derived_order_id
+                or native_order_meta.get("state_version") != 6
+                or native_order_meta.get("state_hash") != completed_metadata.get("state_hash")
+                or not isinstance(native_order_meta.get("read_admission_id"), str)
+                or native_order_meta.get("world_generation_id")
+                    != created_source.get("derived_world_generation_id")
+                or "native_projection" in native_order_json
+                or gateway.send(native_order_get).status_code != 403):
+            raise RuntimeError("g3b_ci_medusa_order_read_source_mismatch")
+        print("G3B_ROUTE_MEDUSA_ORDER_READ_SOURCE " + json.dumps({
+            "operation_id": "GetOrdersId", "outer_http_status": native_order_result.status_code,
+            "source": "protected_world_read_sources", "native_business_response": False,
+            "native_validator_200": False,
+        }, sort_keys=True))
         print("G3B_ROUTE_DERIVED_ORDER_READ_CANDIDATE " + json.dumps({
             "operation_id": "getSyntheticOrder", "source": "protected_world_read_sources",
             "validated_native_status": 200, "state_version": 6,
@@ -1126,6 +1159,51 @@ def _gateway() -> None:
             "validated_native_status": 200, "source": "protected_world_read_sources",
             "native_business_response": False,
         }, sort_keys=True))
+        # M-02：在實際四服務上用 Medusa Key 與完整 JWS 取派生 Cart 的讀取來源。
+        # 不把內部 RPC 200 或 Read Source 冒稱原生客戶端 200。
+        native_cart_id = "g3b-ci-medusa-cart-get-source"
+        native_cart_get = gateway.build_request(
+            "GET", origin + "/store/carts/" + data["cart_id"],
+            headers={"x-request-id": native_cart_id,
+                     "x-publishable-api-key": "pk_g3b_ci_only"},
+        )
+        native_cart_get.headers["x-trusted-session"] = _sign(
+            key, fingerprint=fingerprint_httpx_request(native_cart_get, native_cart_id),
+            session=data["cart_session"], mode="cart", resource_id=data["cart_id"],
+        )
+        native_cart_result = gateway.send(native_cart_get)
+        if native_cart_result.status_code != 200:
+            raise RuntimeError("g3b_ci_medusa_cart_read_rpc_unverifiable")
+        native_cart_json = native_cart_result.json()
+        native_cart_meta = native_cart_json.get("executor_result", {})
+        if (native_cart_meta.get("kind") != "medusa_read_admitted"
+                or native_cart_meta.get("operation") != "GetCartsId"
+                or native_cart_meta.get("resource_id") != data["cart_id"]
+                or native_cart_meta.get("state_hash") != cart_metadata.get("state_hash")
+                or native_cart_meta.get("state_version") != cart_metadata.get("state_version")
+                or native_cart_meta.get("world_generation_id")
+                    != cart_metadata.get("world_generation_id")
+                or not isinstance(native_cart_meta.get("read_admission_id"), str)
+                or "native_projection" in native_cart_json
+                or gateway.send(native_cart_get).status_code != 403):
+            raise RuntimeError("g3b_ci_medusa_cart_read_source_mismatch")
+        print("G3B_ROUTE_MEDUSA_CART_READ_SOURCE " + json.dumps({
+            "operation_id": "GetCartsId", "outer_http_status": native_cart_result.status_code,
+            "source": "protected_world_read_sources", "native_business_response": False,
+            "native_validator_200": False,
+        }, sort_keys=True))
+        bad_key_id = "g3b-ci-medusa-cart-get-bad-key"
+        wrong_key_get = gateway.build_request(
+            "GET", origin + "/store/carts/" + data["cart_id"],
+            headers={"x-request-id": bad_key_id,
+                     "x-publishable-api-key": "invalid_for_native"},
+        )
+        wrong_key_get.headers["x-trusted-session"] = _sign(
+            key, fingerprint=fingerprint_httpx_request(wrong_key_get, bad_key_id),
+            session=data["cart_session"], mode="cart", resource_id=data["cart_id"],
+        )
+        if gateway.send(wrong_key_get).status_code != 503:
+            raise RuntimeError("g3b_ci_medusa_wrong_key_not_failed_closed")
         for suffix, payload, status, template in (
                 ("bad-item", b'{"variant_id":"known","quantity":0}', 400,
                  "native-cart-invalid"),
@@ -1186,7 +1264,8 @@ def _gateway() -> None:
           "derived_order_get_200=1 derived_order_cancel_200=1 "
           "cart_historical_operation_200=1 cart_missing_operation_409=1 "
           "inventory_cancel_200=1 inventory_repeat_cancel_409=1 "
-          "medusa_400=1 medusa_404=1 "
+          "medusa_400=1 medusa_404=1 medusa_get_cart_source=1 "
+          "medusa_get_order_source=1 medusa_bad_key=denied "
           "replay=denied anonymous=denied "
           "execution_network=unreachable trusted_send=off")
 
@@ -1258,6 +1337,8 @@ def _audit(root: Path) -> None:
                 "removeGuestCartItem": 1,
                 "completeGuestCart": 2,
                 "getSyntheticOrder": 1,
+                "GetCartsId": 2,
+                "GetOrdersId": 1,
                 "cancelSyntheticOrder": 1,
                 "getCartOperation": 2,
                 "PostCartsIdLineItems": 2,

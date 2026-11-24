@@ -1173,6 +1173,63 @@ def test_g3b_cart_read_executor_metadata_cannot_change_operation_or_source(monke
         asyncio.run(client.execute_receipt(**{**kwargs, "raw_body": b"{}"}))
 
 
+@pytest.mark.parametrize("operation,prefix,resource_prefix", [
+    ("GetCartsId", b"/store/carts/", "cart_"),
+    ("GetOrdersId", b"/store/orders/", "order_"),
+])
+def test_g3b_medusa_get_executor_metadata_has_no_native_success_bypass(
+    monkeypatch, operation, prefix, resource_prefix,
+):
+    """M-02／M-07 只可回傳可信讀取 Metadata，不得偷帶原生 HTTP 或 Send 欄位。"""
+    from deception.security import protected_rpc
+
+    resource = resource_prefix + uuid4().hex
+    reply = {"kind": "medusa_read_admitted", "operation": operation,
+             "resource_id": resource, "read_admission_id": uuid4().hex,
+             "world_generation_id": uuid4().hex,
+             "state_version": 1, "state_hash": "a" * 64}
+
+    class NativeGetExecutor:
+        """在本地固定 Executor 回覆，檢驗 mTLS Client 的白名單。"""
+
+        def __init__(self, **kwargs):
+            """核對 HTTPX 不以環境 Proxy 降低 mTLS 隔離。"""
+            assert kwargs["trust_env"] is False
+
+        async def __aenter__(self):
+            """進入測試用隔離回覆。"""
+            return self
+
+        async def __aexit__(self, *_):
+            """離開測試用隔離回覆。"""
+            return False
+
+        async def post(self, url, *, json):
+            """拒絕由 RPC 提交原生 Payload、Scope 或 HTTP Status。"""
+            assert url == "https://executor.invalid:8444/internal/v1/execute"
+            assert set(json) == {"receipt_id", "raw_path_b64", "raw_body_b64"}
+            return httpx.Response(200, json=reply)
+
+    monkeypatch.setattr(protected_rpc.httpx, "AsyncClient", NativeGetExecutor)
+    client = object.__new__(FixedExecutorMTLSClient)
+    client._origin, client._tls = "https://executor.invalid:8444", object()
+    kwargs = dict(receipt_id=uuid4(), operation_id=operation,
+                  raw_path=prefix + resource.encode("ascii"), raw_body=b"")
+    assert asyncio.run(client.execute_receipt(**kwargs)) == reply
+    for change in ({"status_code": 200}, {"body_b64": "e30="},
+                   {"send_authorized": True}, {"resource_id": resource_prefix + uuid4().hex},
+                   {"state_version": True}, {"read_admission_id": "fake"},
+                   {"world_generation_id": "fake"}, {"operation": "GetCartsId" if operation == "GetOrdersId" else "GetOrdersId"}):
+        previous = deepcopy(reply)
+        reply.update(change)
+        with pytest.raises(ProtectedRpcConfigurationError, match="fixed_executor_result_binding_mismatch"):
+            asyncio.run(client.execute_receipt(**kwargs))
+        reply.clear()
+        reply.update(previous)
+    with pytest.raises(ProtectedRpcConfigurationError, match="fixed_executor_result_binding_mismatch"):
+        asyncio.run(client.execute_receipt(**{**kwargs, "raw_body": b"{}"}))
+
+
 def test_g3b_real_container_ci_has_explicit_isolation_and_no_sender():
     """真正容器驗收需隔離 DB／三網／四服務，不能把範本靜態測試冒充部署證據。"""
     root = Path(__file__).resolve().parents[1]

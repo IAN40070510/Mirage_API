@@ -592,11 +592,13 @@ def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolat
     snapshot = store.inspect_binding(binding, now=now)
     path = "/store/carts/" + binding.resource_id + "/line-items"
 
-    def prepare_request(body: bytes):
+    def prepare_request(body: bytes, *, route: str = path, method: str = "POST",
+                        bound: SessionBinding | None = None, key: str = "pk_only_executor"):
         """存入只可由獨立 Verifier 寫出的測試 Receipt/Operation 原始證據。"""
-        incoming = replace(original_request(path=path), body=body, headers=(
+        chosen_binding = bound or binding
+        incoming = replace(original_request(path=route, method=method), body=body, headers=(
             ("host", "mirage.test"), ("content-type", "application/json"),
-            ("x-publishable-api-key", "pk_only_executor"),
+            ("x-publishable-api-key", key),
         ))
         proof = derive_verified_operation(incoming)
         receipt, jti = uuid4(), uuid4().hex
@@ -611,9 +613,9 @@ def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolat
                        token_not_before,token_expires_at,access_mode,resource_id)
                    VALUES (%s,'gateway','mirage',%s,'kid',%s,%s,%s,1,%s,%s,%s,
                            'trusted-session-v1.1',%s,%s,%s,'cart',%s)""",
-                (receipt, jti, binding.environment_id, binding.deployment_id,
-                 binding.session_id, proof.request_fingerprint, digest("b"), digest("c"),
-                 now - 5, now - 5, now + 90, binding.resource_id),
+                (receipt, jti, chosen_binding.environment_id, chosen_binding.deployment_id,
+                 chosen_binding.session_id, proof.request_fingerprint, digest("b"), digest("c"),
+                 now - 5, now - 5, now + 90, chosen_binding.resource_id),
             )
             connection.execute(
                 """INSERT INTO protected_http_operation_bindings (
@@ -679,6 +681,39 @@ def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolat
         assert accepted_404.status_code == 200
         assert accepted_404.json()["status_code"] == 404
         assert client.post("/internal/v1/execute", json=missing_wire).json() == accepted_404.json()
+        native_get, get_receipt, get_proof, get_wire = prepare_request(
+            b"", route="/store/carts/" + binding.resource_id, method="GET",
+        )
+        assert get_proof.operation_id == "GetCartsId"
+        for forged in (
+            {**get_wire, "raw_body_b64": base64.b64encode(b"{}").decode()},
+            {**get_wire, "original_http": {**get_wire["original_http"],
+                "headers": [("host", "mirage.test"), ("content-type", "application/json"),
+                            ("x-publishable-api-key", "attacker")] }},
+            {**get_wire, "original_http": {**get_wire["original_http"],
+                "raw_url": "https://attacker.test/store/carts/" + binding.resource_id}},
+        ):
+            assert client.post("/internal/v1/execute", json=forged).status_code == 503
+        verified_read = client.post("/internal/v1/execute", json=get_wire)
+        assert verified_read.status_code == 200
+        read_metadata = verified_read.json()
+        assert (read_metadata["kind"], read_metadata["operation"],
+                read_metadata["resource_id"], read_metadata["world_generation_id"],
+                read_metadata["state_version"], read_metadata["state_hash"]) == (
+            "medusa_read_admitted", "GetCartsId", binding.resource_id,
+            snapshot.scope.world_generation_id, snapshot.version, snapshot.state_hash,
+        )
+        assert client.post("/internal/v1/execute", json=get_wire).json() == read_metadata
+        _, denied_receipt, _, denied_wire = prepare_request(
+            b"", route="/store/carts/" + binding.resource_id,
+            method="GET", key="incorrect_public_key",
+        )
+        assert client.post("/internal/v1/execute", json=denied_wire).status_code == 503
+        with psycopg.connect(dsn) as connection:
+            assert connection.execute(
+                "SELECT count(*) FROM protected_world_read_sources WHERE receipt_id=%s",
+                (denied_receipt,),
+            ).fetchone()[0] == 0
     projector_dsn, projector_login = dsn, _real_login(dsn)
     if os.environ.get("MIRAGE_WORLD_ROLE_TEST_ISOLATED") == "true":
         # 僅限可拋棄的 CI PostgreSQL；正式 DB 禁止測試自行創建 Role。
@@ -756,8 +791,37 @@ def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolat
         assert connection.execute("SELECT status_code,reason_code,read_admission_id IS NOT NULL "
                                   "FROM protected_medusa_rejection_sources ORDER BY status_code").fetchall() == [
             (400, "native_bad_item_body", True), (404, "native_variant_absent", True)]
-        assert connection.execute("SELECT count(*) FROM protected_world_read_sources ").fetchone()[0] == 2
+        assert connection.execute("SELECT count(*) FROM protected_world_read_sources ").fetchone()[0] == 3
         assert connection.execute("SELECT count(*) FROM world_events").fetchone()[0] == 0
+    # M-07 必須讀到真 Cart→Order 事件後的同一 World Generation；不可拿假的
+    # order_ ID 或 Creator Cart Capability 代替。先讓 M-03 舊 Read Source 完成投影。
+    added = store.mutate_cart(binding, action="add", command={
+        "variant_id": "known", "quantity": 1,
+    }, expected_version=1, idempotency_key="native-test-add",
+        commit_attempt_id=uuid4(), now=now)
+    assert added.status == "committed"
+    completed = store.mutate_cart(binding, action="complete", command={},
+        expected_version=2, idempotency_key="native-test-complete",
+        commit_attempt_id=uuid4(), now=now)
+    assert completed.status == "committed"
+    order_id = completed.result["id"]
+    order_binding = store.resource_binding(
+        order_id, environment_id=binding.environment_id,
+        deployment_id=binding.deployment_id, now=now,
+    )
+    _, order_receipt, order_proof, order_wire = prepare_request(
+        b"", route="/store/orders/" + order_id, method="GET", bound=order_binding,
+    )
+    assert order_proof.operation_id == "GetOrdersId"
+    with TestClient(rpc, base_url="https://executor.test") as client:
+        order_read = client.post("/internal/v1/execute", json=order_wire)
+        assert order_read.status_code == 200
+        latest = store.inspect_binding(order_binding, now=now)
+        assert (order_read.json()["kind"], order_read.json()["resource_id"],
+                order_read.json()["state_version"], order_read.json()["state_hash"]) == (
+            "medusa_read_admitted", order_id, latest.version, latest.state_hash,
+        )
+        assert client.post("/internal/v1/execute", json=order_wire).json() == order_read.json()
 
 
 def test_cart_http_verified_receipt_drives_real_fixed_world_handler(isolated_test_dsn):

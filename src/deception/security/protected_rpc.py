@@ -113,6 +113,9 @@ class FixedExecutorMTLSClient:
             "cart_read_admitted": {"kind", "operation", "resource_id", "attempt_id",
                                    "read_admission_id", "world_generation_id",
                                    "state_version", "state_hash"},
+            "medusa_read_admitted": {"kind", "operation", "resource_id",
+                                     "read_admission_id", "world_generation_id",
+                                     "state_version", "state_hash"},
             "medusa_rejection": {"kind", "operation", "status_code", "template_id",
                                  "contract_revision", "envelope_hash"},
         }
@@ -176,6 +179,22 @@ class FixedExecutorMTLSClient:
             if (not valid_resource or route is None
                     or not result["resource_id"].startswith(route[1].decode("ascii"))
                     or raw_body != b"" or raw_path != expected_path
+                    or not all(isinstance(result.get(field), str)
+                               and re.fullmatch(r"[0-9a-f]{32}", result[field]) is not None
+                               for field in ("read_admission_id", "world_generation_id"))
+                    or type(result.get("state_version")) is not int
+                    or result["state_version"] < 1
+                    or not isinstance(result.get("state_hash"), str)
+                    or re.fullmatch(r"[0-9a-f]{64}", result["state_hash"]) is None):
+                raise ProtectedRpcConfigurationError("fixed_executor_result_binding_mismatch")
+        if result["kind"] == "medusa_read_admitted":
+            routes = {"GetCartsId": (b"/store/carts/", "cart_"),
+                      "GetOrdersId": (b"/store/orders/", "order_")}
+            route = routes.get(operation_id)
+            resource = result.get("resource_id")
+            if (route is None or not isinstance(resource, str)
+                    or re.fullmatch(re.escape(route[1]) + r"[0-9a-f]{32}", resource) is None
+                    or raw_path != route[0] + resource.encode("ascii") or raw_body != b""
                     or not all(isinstance(result.get(field), str)
                                and re.fullmatch(r"[0-9a-f]{32}", result[field]) is not None
                                for field in ("read_admission_id", "world_generation_id"))
