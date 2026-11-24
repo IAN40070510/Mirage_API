@@ -138,7 +138,10 @@ def test_inventory_http_proof_selects_handler_and_rejects_rpc_substitution(isola
              proof.request_fingerprint, proof.request_body_sha256,
              proof.request_path, proof.request_content_type),
         )
-    executor = PostgresProtectedWorldExecutor(dsn, expected_login=_real_login(dsn), world_store=store)
+    executor = PostgresProtectedWorldExecutor(
+        dsn, expected_login=_real_login(dsn), world_store=store,
+        rejection_templates={"reservation_not_active": "synthetic-inventory-1"},
+    )
     executor.admit_read(receipt_id=receipt_id, binding=binding,
                         request_fingerprint=proof.request_fingerprint, expires_at=now + 30)
     args = dict(receipt_id=receipt_id, binding=binding, authorized_scope=snapshot.scope,
