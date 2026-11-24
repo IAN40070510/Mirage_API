@@ -12,7 +12,8 @@ import pytest
 
 from deception.world import (CartCreationSource, CommitSource, SnapshotSource,
                              PostgresCandidatePromoter, PostgresCandidateStore,
-                             PostgresEventWorldStore, PostgresProtectedWorldExecutor,
+                             PostgresEventWorldStore, PostgresProtectedAuthorizer,
+                             PostgresProtectedWorldExecutor,
                              PostgresProjectionRegistry, ProtectedGrantError, SecurityErrorSource)
 from deception.world.session import SessionBinding
 from deception.world.protected_native_http import PostgresProtectedNativeProjector
@@ -1327,6 +1328,28 @@ def test_verified_cart_creator_http_mints_one_derived_world(isolated_test_dsn):
     assert _candidate(dsn, scope=projected.scope, source=projected.source,
                       receipt_id=receipt, fingerprint=proof.request_fingerprint,
                       body=projected.body_bytes) == 1
+    # 在真正 Authorizer 交易中核准 Creator Candidate，來源才引用 Derived Cart。
+    candidate_ref, evidence = uuid4().hex, projection_evidence()
+    envelope = response_envelope(200, projected.headers, projected.body_bytes)
+    envelope_hash, body_hash, header_hash = response_hashes(
+        200, projected.headers, projected.body_bytes)
+    PostgresCandidateStore(dsn).put(creator_scope, candidate_ref, envelope,
+                                    expires_at=now + 80)
+    assert PostgresCandidatePromoter(dsn, expected_login=_real_login(dsn)).promote(
+        receipt_id=receipt, scope=creator_scope, candidate_ref=candidate_ref,
+        request_fingerprint=proof.request_fingerprint, envelope_hash=envelope_hash,
+        immutable_body_hash=body_hash, semantic_headers_hash=header_hash,
+        evidence=evidence, source=projected.source,
+    ) == 1
+    admitted = PostgresProtectedAuthorizer(dsn, expected_login=_real_login(dsn)).grant(
+        operation_id=uuid4(), receipt_id=receipt, scope=creator_scope,
+        candidate_ref=candidate_ref, candidate_version=1,
+        authorization_revision="cart-creation-candidate-only-v1",
+        authorization_deadline=now + 40, transmission_deadline=now + 50,
+        evidence=evidence,
+    )
+    assert admitted.world_generation_id == creator_scope.world_generation_id
+    assert admitted.source == projected.source
     with pytest.raises(ProtectedGrantError, match="candidate_source_unverifiable"):
         _candidate(dsn, scope=derived_scope, source=projected.source,
                    receipt_id=receipt, fingerprint=proof.request_fingerprint,
