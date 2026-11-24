@@ -1,8 +1,0 @@
-# 隔離相容性測試專用；不等於整個 Mirage runtime 或正式 Gateway 的安裝清單。
-# 保留 MSDSS 原版框架，驗證組裝器子集不必升級原應用程式。
-fastapi==0.115.6
-pydantic==2.10.4
-httpx==0.28.1
-cryptography==45.0.7
-psycopg[binary]==3.3.9
-pytest==8.3.4
