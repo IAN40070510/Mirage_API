@@ -88,8 +88,9 @@ I-03 已增加經真 PG CI 驗證的獨立候選投影路徑：
 WorldOperation＋Commit Receipt＋ReadAdmission，重建固定 `200` 操作結果。
 目前仍缺正式客戶端 HTTP、未知操作的可信 409 與完整 G4/G5，
 不能因這項候選而把 I-03 當成正式完成。
-標準 percent-encoded SKU 的額外相容測試正在隔離分支驗收，ReadAdmission
-子切面先前已在固定 SHA `49fc6ed8` 的
+標準 percent-encoded SKU 的額外來源候選測試已在隔離分支 SHA `4e2cecc`
+[真 PG17.6／mTLS CI](https://github.com/IAN40070510/Mirage_API/actions/runs/45311186073)
+通過；ReadAdmission 子切面先前亦在固定 SHA `49fc6ed8` 的
 [真 PostgreSQL CI](https://github.com/IAN40070510/Mirage_API/actions/runs/45185402530)
 通過，但完整 GET 回應仍 OPEN。
 
@@ -106,8 +107,8 @@ Session Epoch／Key 撤銷時固定失敗；**只有真缺 SKU** 可以建立 40
 保留原始編碼字串於不可變 Proof，以防 Executor 將另一種等價 Path
 重新綁定 Receipt；仍拒絕 `%2F`、百分比 ASCII 別名、混編、雙重編碼、
 分隔符、控制字元、`.`／`..`、無效 UTF-8 與過長名稱。
-此路徑尚待真 PG/mTLS CI 回歸，也沒有開啟正式 HTTP Send。
-**C-02／C-07 Cart／Order GET 200 候選（本輪待真 CI）**：Cart Executor
+本來源候選在真 PG/mTLS CI 通過，未證實 Client 原生 HTTP，也沒有開啟 Send。
+**C-02／C-07 Cart／Order GET 200 候選（真 PG 隔離 PASS）**：Cart Executor
 回傳固定 `cart_read_admitted`、`read_admission_id`、World Generation／版本／Hash；
 獨立 Validator 的 `POST /internal/v1/project-cart-read` 只收 UUID4 Receipt，
 重新核對原始 GET Proof、派生 `synthetic_resources` 及唯讀 ReadAdmission、
@@ -122,13 +123,15 @@ Verifier 逐欄比對 Executor 來源、Session Scope、精確 Body／Envelope H
 `order.cart_id` 等於該 Cart。即使有人重算整個合法 JSON 與 Envelope Hash，
 錯 Cart 的歷史結果也不能通過交接；正向與兩類跨 Cart 負面測試均覆蓋。
 本控制只保護候選交接，沒有賦予 Client Send 權，也不消除競態與 G5 缺口。
-**C-06／C-07／C-08 連續訂單成功候選（待真 PG CI）**：新增同一受保護
+**C-06／C-07／C-08 連續訂單成功候選（真 PG 隔離 PASS）**：新增同一受保護
 Cart World 的 complete→Order GET→cancel 連續整合測試，獨立 Validator
 從真正的 Commit／Read Source 重建 200 JSON。測試發現 C-08 的原始資源
 是 `order_id`，不能沿用 C-06 的 `cart_id` 比對；訂單成功投影現分別要求
 complete 綁原 Cart ID、cancel 綁原 Order ID，且真正結果仍位於相同
 World Snapshot 的 `orders`、`cart.id`／`order.cart_id` 同源。跨 Cart、
-跨 Order 或偽造孤兒結果一律拒絕；正式 Client HTTP 及 Send 仍禁用。
+跨 Order 或偽造孤兒結果一律拒絕；固定 SHA `eb118a7` 的
+[真 PG17.6／mTLS CI](https://github.com/IAN40070510/Mirage_API/actions/runs/45312413649)
+通過 `151 passed`、mTLS `5 passed`；正式 Client HTTP 及 Send 仍禁用。
 新增 Synthetic 固定 mutation 真業務拒絕來源：Executor 將已保存
 `rejected` 的結果與 409 固定 Envelope Hash 原子寫入受保護拒絕表，
 獨立 Validator 從 Receipt 重建 JSON `{"code":"..."}`。Verifier 僅在

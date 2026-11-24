@@ -97,8 +97,9 @@ Cart／Order／Operation 路徑與可信 Creator Lineage，不能由 Runtime
 原始 GET 的空 Body／SKU 或 UUID4，再由同 Receipt 產生受保護 ReadAdmission。
 內部 mTLS Executor 可回報來源的版本與 Hash，**不會**回報庫存或操作結果，
 不具有可直接傳送的原生 HTTP 200／409。此增量的真 PostgreSQL 驗收與
-URL 百分比編碼 SKU 的固定合約候選測試在隔離分支增量實作中；仍待真 PG
-及 mTLS CI，原生 Client HTTP 與 G4 Sender 依舊 OPEN。
+URL 百分比編碼 SKU 的固定來源候選已在隔離分支 SHA `4e2cecc`
+[真 PG17.6／mTLS CI](https://github.com/IAN40070510/Mirage_API/actions/runs/45311186073)
+通過；原生 Client HTTP 與 G4 Sender 依舊 OPEN。
 **上述 primitive 尚未成為 mTLS 的 HTTP 業務 RPC**；當前
 `create_sealed_app()` 的 execute endpoint 依舊回 503。
 格式不合法但需要 409／400／404 的請求尚無可 Promote 的獨立拒絕證據，
