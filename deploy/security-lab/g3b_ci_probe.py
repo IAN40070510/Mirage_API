@@ -329,8 +329,12 @@ def _gateway() -> None:
         # C-01：合法 Creator JWS 真走四容器建立 Cart，獨立 Validator 只能由
         # 新派生世界建立 200 候選，不得把 Derived Scope 當成 Creator Admission。
         create_request_id = "g3b-ci-cart-create-200"
+        # 顯式 UUID4 鍵才能再以另一張有效 Receipt 驗證 cross-receipt reuse。
+        cart_create_body = json.dumps({
+            "idempotency_key": str(uuid4()), "commit_attempt_id": str(uuid4()),
+        }, separators=(",", ":"), sort_keys=True).encode("utf-8")
         cart_create = gateway.build_request(
-            "POST", origin + "/synthetic/carts", content=b"{}",
+            "POST", origin + "/synthetic/carts", content=cart_create_body,
             headers={"x-request-id": create_request_id, "content-type": "application/json"},
         )
         cart_create.headers["x-trusted-session"] = _sign(
@@ -382,6 +386,24 @@ def _gateway() -> None:
             "operation_id": "createGuestCart", "outer_http_status": created_result.status_code,
             "validated_native_status": 200, "source": "protected_cart_creations",
             "authorization_scope": "creator", "native_business_response": False,
+        }, sort_keys=True))
+        # 新 JWS／JTI／Request ID 是另一張 Receipt，不可借用已提交的 Cart Source。
+        duplicate_request_id = "g3b-ci-cart-cross-receipt-denied"
+        cross_receipt = gateway.build_request(
+            "POST", origin + "/synthetic/carts", content=cart_create_body,
+            headers={"x-request-id": duplicate_request_id,
+                     "content-type": "application/json"},
+        )
+        cross_receipt.headers["x-trusted-session"] = _sign(
+            key, fingerprint=fingerprint_httpx_request(
+                cross_receipt, duplicate_request_id),
+            session="g3b-ci-cart-creator", mode="cart",
+        )
+        if gateway.send(cross_receipt).status_code != 503:
+            raise RuntimeError("g3b_ci_cart_cross_receipt_key_not_rejected")
+        print("G3B_ROUTE_CART_CREATION_CROSS_RECEIPT_DENIED " + json.dumps({
+            "operation_id": "createGuestCart", "outcome": "fail_closed",
+            "second_protected_creation": False, "native_business_response": False,
         }, sort_keys=True))
         # C-02：同樣透過真 Gateway→Cart Executor→獨立唯讀 Validator，
         # 只能查驗與既有派生 Cart Session 相符的原生成功 JSON 候選。
@@ -470,7 +492,8 @@ def _gateway() -> None:
         raise RuntimeError("g3b_ci_gateway_network_leak:" + hostname)
     print("G3B_GATEWAY_PASS unsigned_routes=20/20 inventory_commit=1 inventory_read_200=1 "
           "inventory_operation_200=1 inventory_absence_409=1 unknown_operation=503 "
-          "synthetic_409=1 cart_create_200=1 cart_read_200=1 medusa_400=1 medusa_404=1 "
+          "synthetic_409=1 cart_create_200=1 cart_cross_receipt_key=denied "
+          "cart_read_200=1 medusa_400=1 medusa_404=1 "
           "replay=denied anonymous=denied "
           "execution_network=unreachable trusted_send=off")
 
@@ -534,11 +557,19 @@ def _audit(root: Path) -> None:
                 "reserveSyntheticInventory": 2,
                 "getSyntheticInventory": 2,
                 "getSyntheticOperation": 2,
-                "createGuestCart": 1,
+                "createGuestCart": 2,
                 "getGuestCart": 1,
                 "PostCartsIdLineItems": 2,
         }:
             raise RuntimeError("g3b_ci_operation_proof_count_mismatch")
+        if (admin.execute(
+                "SELECT count(*) FROM protected_cart_creations "
+                "WHERE creator_session_id=%s", ("g3b-ci-cart-creator",),
+        ).fetchone() != (1,) or admin.execute(
+                "SELECT count(*) FROM guest_cart_creations "
+                "WHERE creator_session_id=%s", ("g3b-ci-cart-creator",),
+        ).fetchone() != (1,)):
+            raise RuntimeError("g3b_ci_cart_cross_receipt_created_second_world")
         for role, forbidden in (
                 ("mirage_g3b_ci_verifier", "protected_world_commit_sources"),
                 ("mirage_g3b_ci_validator", "protected_medusa_rejection_sources"),
