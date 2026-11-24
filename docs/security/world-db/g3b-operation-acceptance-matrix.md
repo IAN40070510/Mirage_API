@@ -69,6 +69,20 @@ Runtime DML、實際 mTLS、可信 Inventory 一次 Commit、Medusa M-03 的
 更新為「隔離 PASS」。這沒有測得原生 Client 409，亦未證明 20 路由全部成功／
 拒絕相容、正式角色 Secret 隔離、G4 Sender 或 G5 Restore Fence。
 
+**C-09 歷史結果跨 Cart 身分補強（固定 SHA `20be55ae309ab7f10a8056143c22cb6d0d991b37`）**：
+獨立 Validator mTLS 候選在原本 Receipt／ReadAdmission／Scope／Schema／Hash 之外，
+再將歷史 `cart.id` 或 `order.cart_id` 及實體 ID 型別與原始 GET `cart_id`
+比對；重算合法 JSON、Envelope Hash 的錯 Cart 回應不能通過。修補前兩類
+跨 Cart 攻擊回歸均失敗（成功重現），修補後同兩類及 ID 型別互換負面均拒絕，
+正常 Cart／Order 候選仍通過。本地完整回歸 `1173 passed / 250 skipped`，
+[真 PG17.6 合約 CI 45307470508](https://github.com/IAN40070510/Mirage_API/actions/runs/45307470508)
+`129 passed`、真 mTLS `5 passed`；
+[Python CI 45307470356](https://github.com/IAN40070510/Mirage_API/actions/runs/45307470356)
+`1402 passed / 21 skipped`、
+[容器 CI 45307470455](https://github.com/IAN40070510/Mirage_API/actions/runs/45307470455)
+`success`。**C-09 候選交接跨 Cart 防護子項 PASS**；Client 原生 HTTP、並行
+競態、未知 COMMIT 與 G4/G5/G6 仍 OPEN，不解封 Sender。
+
 | G3b 子門檻 | 獨立實測結果 | 正式簽收 |
 | --- | --- | --- |
 | 真 HTTPS Gateway→Verifier→Executor、互異 Client CA、拒絕重播／竄改 | 隔離 CI PASS | 僅實驗室傳輸子項 PASS |
@@ -97,7 +111,7 @@ Runtime DML、實際 mTLS、可信 Inventory 一次 Commit、Medusa M-03 的
 | C-06 | POST `/synthetic/carts/{cart_id}/complete` | 隔離 PASS | 受保護 complete；409 候選固定 Handler 存在，個別情境尚待真容器測試 | OPEN：200、其餘 409、原生 HTTP |
 | C-07 | GET `/synthetic/orders/{order_id}` | 隔離 PASS | 新增獨立 Validator 按受保護派生 Order、ReadAdmission 重建 200 JSON 候選，待本 SHA 真 PG CI | OPEN：409 來源、客戶端原生 HTTP |
 | C-08 | POST `/synthetic/orders/{order_id}/cancel` | 隔離 PASS | 受保護 cancel_order；409 候選固定 Handler 存在，個別情境尚待真容器測試 | OPEN：200、其餘 409、原生 HTTP |
-| C-09 | GET `/synthetic/carts/{cart_id}/operations/{attempt}` | 隔離 PASS | 唯讀 Validator 核對歷史 WorldOperation、Protected Commit Source／Commit Receipt、ReadAdmission 與快照，重建 200 或確定不存在的 409 候選；固定 SHA `88d286f` 真 PG/mTLS CI PASS | OPEN：客戶端原生 200／409、競態與故障路徑 |
+| C-09 | GET `/synthetic/carts/{cart_id}/operations/{attempt}` | 隔離 PASS | 唯讀 Validator 核對歷史 WorldOperation、Protected Commit Source／Commit Receipt、ReadAdmission 與快照，重建 200 或確定不存在的 409 候選；固定 SHA `20be55a` 另修補歷史 Cart／Order 的跨 Cart ID 重綁，真 PG/mTLS CI PASS | OPEN：客戶端原生 200／409、競態與故障路徑 |
 | M-01 | POST `/store/carts` | 隔離 PASS | 尚未執行 Native 建立 | OPEN：200／400／404／409 |
 | M-02 | GET `/store/carts/{id}` | 隔離 PASS | 尚未執行 Native 讀取 | OPEN：200／400／404／409 |
 | M-03 | POST `/store/carts/{id}/line-items` | 隔離 PASS | 特定 400／404 受保護拒絕來源／獨立 Validator mTLS 封套比對 | OPEN：正式 Client HTTP 400／404、200／409、其餘拒絕情形 |
