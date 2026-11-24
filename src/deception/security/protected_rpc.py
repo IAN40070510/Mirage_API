@@ -211,10 +211,19 @@ class FixedExecutorMTLSClient:
                 attempt = UUID(result["commit_attempt_id"])
             except (TypeError, ValueError) as exc:
                 raise ProtectedRpcConfigurationError("fixed_executor_result_binding_mismatch") from exc
-            if (operation_id != "PostCartsIdLineItems"
-                    or re.fullmatch(rb"/store/carts/cart_[0-9a-f]{32}/line-items", raw_path) is None
+            medusa_mutations = {
+                "PostCartsIdLineItems": (
+                    rb"/store/carts/cart_[0-9a-f]{32}/line-items", 2,
+                ),
+                "PostCartsIdLineItemsLine_id": (
+                    rb"/store/carts/cart_[0-9a-f]{32}/line-items/item_[0-9a-f]{32}", 3,
+                ),
+            }
+            allowed = medusa_mutations.get(operation_id)
+            if (allowed is None or re.fullmatch(allowed[0], raw_path) is None
                     or attempt.version != 4 or str(attempt) != result["commit_attempt_id"]
-                    or type(result["state_version"]) is not int or result["state_version"] < 2
+                    or type(result["state_version"]) is not int
+                    or result["state_version"] < allowed[1]
                     or not all(isinstance(result[field], str)
                                and re.fullmatch(r"[0-9a-f]{64}", result[field]) is not None
                                for field in ("state_hash", "result_digest"))):

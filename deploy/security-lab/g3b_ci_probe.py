@@ -599,8 +599,10 @@ def _gateway() -> None:
         )
         medusa_updated = gateway.send(medusa_update)
         if medusa_updated.status_code != 200:
+            detail = medusa_updated.json().get("detail") if (
+                medusa_updated.headers.get("content-type", "").startswith("application/json")) else None
             raise RuntimeError("g3b_ci_medusa_update_rpc_unverifiable:"
-                               + str(medusa_updated.status_code))
+                               + str(medusa_updated.status_code) + ":" + str(detail)[:90])
         medusa_update_result = medusa_updated.json()
         medusa_update_meta = medusa_update_result.get("executor_result", {})
         medusa_update_projection = medusa_update_result.get("native_projection", {})

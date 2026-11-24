@@ -1138,6 +1138,51 @@ def test_g3b_executor_rpc_refuses_ambiguous_result_json(monkeypatch):
             asyncio.run(client.execute_receipt(**args))
 
 
+@pytest.mark.parametrize("operation,path,minimum", [
+    ("PostCartsIdLineItems", "/store/carts/cart_" + "a" * 32 + "/line-items", 2),
+    ("PostCartsIdLineItemsLine_id", "/store/carts/cart_" + "a" * 32
+     + "/line-items/item_" + "b" * 32, 3),
+])
+def test_g3b_executor_medusa_mutation_result_is_route_bound(
+    monkeypatch, operation, path, minimum,
+):
+    """Verifier mTLS parser accepts only exact M-03/M-04 route and version evidence."""
+    from deception.security import protected_rpc
+
+    response = {"kind": "medusa_mutation", "operation": operation,
+                "commit_attempt_id": str(uuid4()), "status": "committed",
+                "state_version": minimum, "state_hash": "a" * 64,
+                "result_digest": "b" * 64}
+
+    class StubAsyncClient:
+        """Stub transport only; execute the real strict Executor parser."""
+
+        def __init__(self, **kwargs):
+            assert kwargs["trust_env"] is False
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return False
+
+        async def post(self, url, *, json):
+            assert url == "https://executor.invalid:8444/internal/v1/execute"
+            return httpx.Response(200, json=response)
+
+    monkeypatch.setattr(protected_rpc.httpx, "AsyncClient", StubAsyncClient)
+    client = object.__new__(FixedExecutorMTLSClient)
+    client._origin, client._tls = "https://executor.invalid:8444", object()
+    kwargs = dict(receipt_id=uuid4(), operation_id=operation,
+                  raw_path=path.encode(), raw_body=b'{"quantity":3}')
+    assert asyncio.run(client.execute_receipt(**kwargs)) == response
+    with pytest.raises(ProtectedRpcConfigurationError, match="fixed_executor_result_binding_mismatch"):
+        asyncio.run(client.execute_receipt(**{**kwargs, "raw_path": path.encode() + b"/forged"}))
+    response["state_version"] = minimum - 1
+    with pytest.raises(ProtectedRpcConfigurationError, match="fixed_executor_result_binding_mismatch"):
+        asyncio.run(client.execute_receipt(**kwargs))
+
+
 @pytest.mark.parametrize("operation,sku", [
     ("getSyntheticInventory", "sku-1"),
     ("getSyntheticInventory", "品項+特別:版"),
