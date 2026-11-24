@@ -2,20 +2,20 @@
 
 本表對照 README Protocol v1.1。通過單一案例只證明該案例，不等於正式部署或完整符合性。執行結果與日期以[進度紀錄](implementation-progress.md)為準。
 
-使用者已確認本輪以完成 Mirage 模組與隔離驗收為範圍，MSDSS 正式設定暫不處理。因此下列正式部署 Gate 保留為未來整合工作，不阻塞本版 Mirage 完成，也不將它們標示為已驗收。
+使用者已確認本輪以完成 Mirage 模組與隔離驗收為範圍，外部判定服務正式設定暫不處理。因此下列正式部署 Gate 保留為未來整合工作，不阻塞本版 Mirage 完成，也不將它們標示為已驗收。
 
 2026-11-18 當前完整機器回歸為 **1221 passed、7 skipped，0 failed／errors**。四批終態 JUnit 的全部 1228 個 testcase 身份與原收集一致，無遺漏、重複、額外或非預期 skip；262 份來源／測試輸入及核准封存的非文件內容保持一致，詳見本機 `generated/acceptance-completion-20261118-summary.json`。七個 opt-in 不冒稱在該套 pytest 通過：四容器及還原已在本輪 ARM64 另驗，Medusa 身份／Gateway 兩項保留 2026-11-17 最近實測，對應身份與 dispatcher 模組本輪未變。正式部署 Gate 仍保持未核准／未啟用，不由此宣稱任意部署符合性。
 
-**後續補充（2026-11-20）：** 上述七項 opt-in 已在另建且測後清除的 Oracle ARM64 隔離環境**分批重驗為 7 passed、0 failed、0 skipped**；具名案例、mTLS 臨時 CA 修正與備份還原證據見[七項隔離整合驗收](implementation-progress.md#2026-11-20-七項隔離整合驗收)。此結果不改寫 2026-11-18 的完整基線或 GitHub CI，也不表示正式 MSDSS 導流與 Protocol v1.1 全面符合性已通過。
+**後續補充（2026-11-20）：** 上述七項 opt-in 已在另建且測後清除的 Oracle ARM64 隔離環境**分批重驗為 7 passed、0 failed、0 skipped**；具名案例、mTLS 臨時 CA 修正與備份還原證據見[七項隔離整合驗收](implementation-progress.md#2026-11-20-七項隔離整合驗收)。此結果不改寫 2026-11-18 的完整基線或 GitHub CI，也不表示正式外部判定服務導流與 Protocol v1.1 全面符合性已通過。
 
 | 要求 | 可重現證據 | 邊界／未完成項目 |
 | --- | --- | --- |
 | 可信請求、嚴格 JWS 與 Replay | test_trusted_session、test_trusted_ingress、test_trusted_clock、test_postgres_conformance | 已驗證授權使用同次接收端時間，核准 skew 內可供判定且不延長 signed exp；修正版 ARM64 有實際 HTTP／Audit 證據。需要固定金鑰政策與 TLS；正式 Gateway 注入未切換。 |
 | 執行中金鑰撤銷與輪替 | migration 014、test_key_revocation | 新版入口持共享控制鎖至 Replay 完成，墓碑阻止新驗證；雙 TLS 程序沿用世界。新公鑰仍需預先配置，未涵蓋舊 binary、外部簽發端切換或已驗證在途取消。 |
-| Gateway 真實 dispatcher → 獨立 HTTPS Mirage | test_msdss_wire | 使用實際 Gateway app 與測試判定器；不證明正式 detector 準確率。 |
+| Gateway 真實 dispatcher → 獨立 HTTPS Mirage | 外部端歷史相容案例 | 使用實際 Gateway app 與測試判定器；不證明正式 detector 準確率。 |
 | 真正多程序共享狀態 | test_process_conformance、test_control_processes | 不同 PID 競爭 JTI／Claim／Session，另以不同 backend PID 與真實鎖等待確認 Grant／Cutover／契約與 Profile 撤銷／發送邊界排序；獨立 reader 保留 Watermark／Lease／epoch。控制面 finish_send 是模擬回報，不代替真正 TLS 傳輸或跨主機分區。 |
 | Medusa 身份與登出 | test_medusa_identity、test_medusa_live | 隔離 Medusa 2.22.4；Bearer 的客戶端登出不等於服務端 JWT 撤銷，另有 Mirage 本地撤銷。 |
-| 匿名唯讀分組 | test_anonymous_identity、test_msdss_wire | IP／UA／窗口不是個人身份；NAT 合併、UA 偽造與換組限制見部署文件。 |
+| 匿名唯讀分組 | test_anonymous_identity、外部端歷史相容案例 | IP／UA／窗口不是個人身份；NAT 合併、UA 偽造與換組限制見部署文件。 |
 | 不可變 scope／snapshot、完整性與 CAS | test_world_runtime、test_session_worlds | 記憶體原型不取代共享 PostgreSQL。 |
 | 世界相容性與契約更新 | test_world_compatibility、test_golden_vectors、test_container_runtime | 政策隨 state 保存並受 hash 保護，可信服務精確核對；舊快照缺少政策拒絕，不回補或重建。明列允許的 Profile 與 Registry 契約核准分別驗證；尚無自動相容遷移。 |
 | Session 映射、epoch 封存與 watermark | test_session_worlds | TTL 到期拒絕；不自動續期或合併世界，尚無部署層 Lease 管理器。 |
@@ -28,7 +28,7 @@
 | 真正資料庫 Crash recovery | 2026-11-16 及 2026-11-17 專用 volume 與 SIGKILL／start 的紀錄 | 新版共用交易核心另驗同一版本／state hash／result digest／原 attempt，重播不重複預留，事件／操作／收據／初始化各一筆；三項耐久設定 on，WAL redo 有日誌。不是跨區災難恢復、主機斷電、備份還原或所有 fsync 故障證明。 |
 | 隔離邏輯備份還原 | test_database_restore、專用 DB 的 pg_dump／pg_restore | 比對全部表摘要、世界完整性及撤銷墓碑；同 cluster、停止寫入、合成資料限定，不取代 PITR、跨區恢復或正式安全基線。 |
 | 訪客購物車、合成訂單與庫存 | test_guest_carts、test_inventory_events、test_cart_http | `/synthetic` 契約；不自動符合原生 Store 全欄位。真實付款、庫存與配送不在此能力內。 |
-| Medusa 原生購物車映射 | test_medusa_cart_projection、test_medusa_cart_http、test_msdss_wire 的 native-store、test_container_runtime | 七個明列的 `/store` 操作直接重用合成引擎；固定來源與有效契約分別核對。匿名訂單 customer_id 的 nullable 投影是明列差異，不宣稱原始官方 schema 全數通過。非空 query、完整付款與配送不在範圍內。 |
+| Medusa 原生購物車映射 | test_medusa_cart_projection、test_medusa_cart_http、外部端歷史相容案例 的 native-store、test_container_runtime | 七個明列的 `/store` 操作直接重用合成引擎；固定來源與有效契約分別核對。匿名訂單 customer_id 的 nullable 投影是明列差異，不宣稱原始官方 schema 全數通過。非空 query、完整付款與配送不在範圍內。 |
 | 原子初始化、業務與傳輸稽核 | migration 010、test_postgres_network、test_cart_http | 不回補既有歷史事件；尚無保留政策與集中稽核平台。 |
 | 請求與驗證結果的持久 Audit 關聯 | request_audit.py、migration 016、test_request_audit、test_request_audit_http | 已新增 request_observed、request_id／可信上下文摘要及基底版本，最終通過結果與 Grant 同交易，再連到傳輸稽核。合法業務安全錯誤不捏造 committed 證據，未知停止不假稱回滾。ASGI、真實交易排序、完整回歸及 ARM64 HTTP／還原均有證據，原映像揭露的時鐘落差已修正並另驗，歷史失敗保留。前置拒絕維持最小分類，沒有歷史回補或公開匯出，見[請求 Audit](request-audit.md)。 |
 | 可信讀取前的拒絕稽核 | migration 013、test_ingress_audit | 跨程序保存驗章及資源錯配的固定分類，不保存憑證或原始請求；稽核故障仍拒絕並固定告警。handler 前框架拒絕與起送後故障另屬其他邊界，尚無統一管理匯出。 |
@@ -63,7 +63,7 @@
 
 | Test ID | 具體案例／目前證據 | 完成範圍與缺口 |
 | --- | --- | --- |
-| SEC-01 | test_msdss_wire、test_guest_resource_scope_and_creation_idempotency | Gateway 忽略偽造 x-session-id，資源綁定不接受另一 cart 的 session。 |
+| SEC-01 | 外部端歷史相容案例、test_guest_resource_scope_and_creation_idempotency | Gateway 忽略偽造 x-session-id，資源綁定不接受另一 cart 的 session。 |
 | SEC-02 | test_replayed_jws_is_rejected_by_provider、test_process_conformance 的 replay | 已有入口重放與真正跨程序共享消費案例。 |
 | SEC-03 | test_native_medusa_guest_cart_to_order_and_internal_cancellation | 每次簽新 JTI，相同建立／完成業務鍵重用結果與投影。 |
 | SEC-04 | test_reservation_and_cancellation_are_idempotent、原生 HTTP 同鍵異內容 | 相同鍵換內容拒絕；不重新扣庫存。 |
@@ -81,7 +81,7 @@
 | PROJ-04 | test_session_rejects_policy_changes_without_reinitialization、test_profile_revocation | 不相容政策不重建；整體 Profile 墓碑阻止既有／未來契約及重啟復活。一般模式保留舊准入，緊急模式核對未起送邊界；尚未驗收舊 binary 混合部署。 |
 | PROJ-10 | test_registry_revoke_orders_concurrent_grant | Profile 證據仍有效但契約已撤銷，Grant 拒絕；並行順序另驗。 |
 | HTTP-01 | test_admitted_renderer_sends_exact_bytes_once、test_response_transport_vector_matches_python_and_node | 比較最終封套 bytes、hash 與單次發送；不宣稱客戶端已收到。 |
-| HTTP-02 | test_msdss_wire、test_asgi_fault_never_reopens_admission | 判為欺敵後失敗不回退真實後端；在途錯誤不重新開啟准入。 |
+| HTTP-02 | 外部端歷史相容案例、test_asgi_fault_never_reopens_admission | 判為欺敵後失敗不回退真實後端；在途錯誤不重新開啟准入。 |
 | L3-01 | SyntheticData 的 `synthetic_only=True`／`real_data_imported=False` 固定政策測試 | 目前拒絕宣稱匯入真實資料；尚無 L3 mapping／實體連續性功能，不能宣稱正向整合完成。 |
 
 自有文件採 Apache-2.0。套件與僅參考規格的授權見[授權表](licensing.md)，本表未引入新套件或模型。

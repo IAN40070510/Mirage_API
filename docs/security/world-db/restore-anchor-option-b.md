@@ -30,4 +30,4 @@ The Restore Anchor MUST be outside the World DB backup and restore domain. Its c
 
 Use only the dedicated `mir-sec-world001-lab` resources for implementation and tests. Do not attach the existing staging networks, restart the seven existing containers, reuse production secrets, merge the Draft PR, or enable trusted send.
 
-Decision: **Option B approved**. Implementation: **IN PROGRESS**. G5: **NOT RUN**. MIR-SEC-WORLD-001: **OPEN**. MSDSS P2: **NO-GO**.
+Decision: **Option B approved**. Implementation: **IN PROGRESS**. G5: **NOT RUN**. MIR-SEC-WORLD-001: **OPEN**. 外部端權限驗收: **NO-GO**.

@@ -13,7 +13,7 @@ VECTORS = json.loads((Path(__file__).parent / "fixtures/golden_vectors/request_f
 
 @pytest.mark.parametrize("vector", VECTORS, ids=[case["name"] for case in VECTORS])
 def test_independent_client_matches_fixed_wire_vectors(vector):
-    """不載入 MSDSS，以相同公開 wire 向量確認摘要及重複核准標頭拒絕。"""
+    """不載入外部判定程式，以公開 wire 向量確認摘要及重複核准標頭拒絕。"""
     values = vector["request"]
     request = httpx.Request(values["method"], values["raw_url"], content=bytes.fromhex(values["body"]))
     request.headers = httpx.Headers([(name.encode("ascii"), value.encode("latin-1")) for name, value in values["headers"]])

@@ -1,6 +1,6 @@
 # Mirage_API — Trusted HTTP 安全與效能整合改造 RFC v1
 
-**狀態：DESIGN / NOT IMPLEMENTED / NOT ACCEPTED。** 基準分支：`fix/mir-sec-world-001-restore-anchor-lab`；`MIR-SEC-WORLD-001 OPEN`、`MSDSS P2 NO-GO`、Production Trusted Send **OFF**。本文不授權合併、變更 staging、解除 Release Fuse 或降低既有驗證。
+**狀態：DESIGN / NOT IMPLEMENTED / NOT ACCEPTED。** 基準分支：`fix/mir-sec-world-001-restore-anchor-lab`；`MIR-SEC-WORLD-001 OPEN`、`外部端權限驗收 NO-GO`、Production Trusted Send **OFF**。本文不授權合併、變更 staging、解除 Release Fuse 或降低既有驗證。
 
 ## 1. 問題與可證明的承諾
 

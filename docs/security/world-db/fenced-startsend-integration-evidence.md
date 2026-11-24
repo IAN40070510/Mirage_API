@@ -8,7 +8,7 @@ Both parameters are required; unequal DSN strings do not prove different DB iden
 
 ## Isolated test evidence
 
-Ephemeral msdss-mirage:p2-7-acceptance Docker container, source mounted read-only.
+Ephemeral 外部判定服務-mirage:p2-7-acceptance Docker container, source mounted read-only.
 pytest installed inside disposable container only, not on host or production.
 Command: python -m pytest tests/test_trusted_ingress.py tests/test_renderer_admission.py tests/test_fenced_admission_control.py -q --disable-warnings --maxfail=1 -p no:cacheprovider
 Observed: 24 passed, 1 skipped. No live two-DB HTTP integration exercised.
@@ -22,4 +22,4 @@ Observed: 24 passed, 1 skipped. No live two-DB HTTP integration exercised.
 5. Purge/Restore and crash/unknown-COMMIT fault injection not completed.
 6. Same-host Docker isolation does not protect against host root compromise.
 
-Trusted send OFF; MIR-SEC-WORLD-001 OPEN; MSDSS P2 NO-GO.
+Trusted send OFF; MIR-SEC-WORLD-001 OPEN; 外部端權限驗收 NO-GO.
