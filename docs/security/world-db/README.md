@@ -2,6 +2,12 @@
 
 此目錄與 [Architecture Draft ADR v0.2](../../adr/MIR-SEC-WORLD-001-world-db-trust-boundary.md) 保存多輪世界資料庫權限與發送授權架構審查，供 Mirage Owner、DBA、Security 與 MSDSS 跨服務驗收交接。v0.1 可透過同分支 Git 歷史追溯，不用維護兩份互相分叉的草案。
 
+**2026-11-24 Owner 採納人員驗收制度**：
+[Solo Developer Security Acceptance v1](solo-developer-security-acceptance-v1.md)
+取代舊草稿四位不同人工角色各自簽核的要求。Owner `IAN40070510`
+承擔最終責任；外部人員審查改為建議，但**G3b～G6 所有技術、安全角色、
+獨立 Validator 與 Restore Fence 驗收沒有放寬**。現階段仍 OPEN／NO-GO。
+
 **目前狀態：Proposed／Security Weakness OPEN／MSDSS P2 NO-GO。獨立分支已開始原生協定修補；完整權限修復、驗收與正式發送啟用均未完成。**
 
 **2026-11-22 隔離實作更新**：G3b 已有真 PostgreSQL／mTLS 雙程序 Verifier→Executor
@@ -28,6 +34,7 @@
 | [安全修復與 HTTP 效能總表](remediation-and-performance-register.md) | **目前全部已知安全缺口、整合風險、先前選定的解法、速度問題、實測與未測證據、分階段結案門檻**；討論後從這裡追蹤 | **0（快速總覽）** |
 | [ADR v0.2](../../adr/MIR-SEC-WORLD-001-world-db-trust-boundary.md) | 問題、方案 B、Freeze v1 不變、不可變 Snapshot／Operation/Purge 與 I-01～I-19、Owner 未決事項 | 1 |
 | [決策歷史](decisions-log.md) | 多輪採納／否決／校正的具體理由，避免對話結論遺失 | 2 |
+| [獨立開發者安全驗收制度 v1](solo-developer-security-acceptance-v1.md) | 已採納的 Owner 單一簽核責任、證據標準、外部人工審查揭露與正式 Release 門檻；不豁免任何技術測試 | 2 |
 | [權威證據矩陣](evidence-authority-matrix.md) | JWS、Replay、Receipt、Candidate Submission／Validation／Promotion／Binding、Admission、Operation Result 各自可信來源 | 3 |
 | [交易／鎖矩陣](transaction-lock-matrix.md) | 現有鎖順序、可能循環、交易責任、未知 COMMIT 與失敗恢復 | 4 |
 | [威脅能力矩陣](threat-capability-matrix.md) | R1–R5、Runtime/Verifier/主機威脅與每項控制覆蓋能力 | 5 |

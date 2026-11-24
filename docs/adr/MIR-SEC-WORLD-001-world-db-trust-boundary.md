@@ -2,6 +2,13 @@
 
 > **後續決策優先適用（2026-11-21）**：[獨立 Restore Anchor Option B](../security/world-db/restore-anchor-option-b.md) 已核准、[BD-05 自動驗證解禁](../security/world-db/bd-05-restore-quarantine-release.md) 已採納、[BD-11 鎖後 Deadline 語意](../security/world-db/bd-11-deadline-semantics.md) 已決定。本文後續若仍將 BD-05／BD-11 寫成 OPEN 或要求每次 Operator Release Certificate，視為歷史草稿未同步；**以上專用決策文件較新並優先**。完整修復與效能議題另見 [整合總表](../security/world-db/remediation-and-performance-register.md)。上述決策皆不代表已實作或已驗收。
 
+> **2026-11-24 新人員驗收制度（D-73）**：Mirage Owner `IAN40070510` 已採納
+> [Solo Developer Security Acceptance v1](../security/world-db/solo-developer-security-acceptance-v1.md)。
+> 本文歷史上要求 DBA／Security／Release Approver **四方人工簽核**的敘述，
+> 改由 Owner 在 G3b～G6 全部技術證據 PASS 後作可追溯最終核准；
+> 外部獨立人工審查為建議項。**獨立 DB Role／Validator／Fence、全部技術 Gate、
+> MSDSS P2 個別驗收仍必須遵守；採納制度不等於放行。**
+
 | 欄位 | 值 |
 | --- | --- |
 | ADR 版本 | **v0.2 Contract Freeze candidate**（2026-11-21；Proposed、未核准） |
@@ -10,7 +17,7 @@
 | World DB authority remediation | **NOT_IMPLEMENTED**（實作狀態） |
 | 新版安全驗收 | **NOT_RUN**（測試狀態；不得與既有缺口重現測試混算） |
 | Production DECEIVE | **OFF**（政策要求；正式部署強制證據尚缺） |
-| Architecture | **Proposed；未經 Owner／DBA／Security 核准** |
+| Architecture | **Proposed；尚未完成完整技術驗收及特定 Release 的 Owner 最終核准**（人員責任依 D-73） |
 | Security weakness | **MIR-SEC-WORLD-001 — OPEN／尚未修復** |
 | 關聯驗收 | **MSDSS P2 — NO-GO**；P2 是 MSDSS 的驗收代號，不是 Mirage 的漏洞識別碼 |
 | Protocol baseline（MSDSS Freeze v1） | **ACCEPTED as MSDSS baseline**；MSDSS `main` `5a1ee26dcf79f04cf29345a0403e3f3f8082358b` 的 `docs/P2_SEND_AUTHORIZATION_FREEZE.md`；本欄**不是** Mirage Owner 簽核 |
@@ -21,7 +28,7 @@
 | Mirage native conformance | **NOT_RUN**（`WORLD-PROTOCOL-MATRIX-01`／`WORLD-PROTOCOL-01`）；固定 `start_send()` 有**已觀察到的局部差異**，不得以該單點推論完整合約測試已執行或已有全域符合性結論 |
 | 來源 | 多輪安全審查及兩個不同 Repo/SHA 的唯讀核對；**非已實作／通過的安全驗證** |
 | 變更界線 | 文件提案；**不代表已修改 Runtime、資料庫 ACL、staging、金鑰或 production 開關** |
-| 審核責任 | Mirage Owner、DBA、Security；發布仍須 Release Approver 與 MSDSS P2 個別驗收 |
+| 審核責任 | **D-73 已採納**：Owner `IAN40070510` 承擔 DBA／Security／Release 技術責任並在全部技術 Gate PASS 後獨立作最終決議；外部人工 Reviewer 建議但非本個人專案一般阻擋條件。MSDSS P2 若有獨立服務／契約門檻仍須另驗。 |
 
 > **一句話決策方向**：採方案 B，讓 PostgreSQL／獨立可信角色強制關鍵授權狀態轉移；每個不可分割的安全狀態轉移使用同一個 PostgreSQL 交易，但**不假裝整個 HTTP、World Mutation 與外部副作用能共用一個交易**。
 
@@ -63,7 +70,7 @@ T1／T1.5／T2 舊稱僅保留於 [決策歷史](../security/world-db/decisions-
 | A：信任 HTTP Runtime | DB 身分可用既有 DML；依賴程序檢查、憑證管理與稽核 | R1 被竊時無資料庫獨立強制，必須由 Security 正式接受此殘餘風險 |
 | **B：受保護交易與獨立 Verifier／Authorizer（建議）** | Runtime 不具關鍵狀態 DML；可信角色只可執行窄介面，DB 強制來源／轉移／唯一性 | 需調整交易、部署、GC、故障對帳與 CI；**不等於 R4/R5 保障** |
 
-**Architecture Proposed：選 B；尚未取得 Mirage Owner、DBA、Security 核准。** 本 ADR 不是直接套用原始 Assessment Ledger 的 EXECUTE-only 權限。World Runtime 仍有合法 SELECT／INSERT／UPDATE 與部分 DELETE 使用情境；應**按資料表、欄位與操作**逐項拆權限，不能整庫撤銷 DML 造成既有交易壞掉。
+**Architecture Proposed：選 B；Owner 已採納方向，但尚未通過全部技術驗收與特定版本 Release 核准（D-73）。** 本 ADR 不是直接套用原始 Assessment Ledger 的 EXECUTE-only 權限。World Runtime 仍有合法 SELECT／INSERT／UPDATE 與部分 DELETE 使用情境；應**按資料表、欄位與操作**逐項拆權限，不能整庫撤銷 DML 造成既有交易壞掉。
 
 ## 4. 權威證據與不可變綁定（強制合約）
 
@@ -300,7 +307,7 @@ start_send_deadline = min(
 1. **Expand**：在隔離 DB 建立新受保護資料、角色、Receipt／Binding／Operation Receipt 與窄介面，原正式發送保持 OFF。`production trusted-send mode: DISABLED` 是**要求的安全政策**，在查明實際控制面／功能開關、可寫身分、還原後狀態與強制執行證據前，**不能宣稱它是已經存在、不可繞過的開關**。
 2. **Dual-read／Observe-only**：比對新舊策略，但不得因新策略失敗降級成信任 Runtime 宣告的放行路徑。
 3. **Preflight Gate／Mixed Binary Fence**：舊／新 Runtime 必須有**不同 DB Role／Credential**；先撤銷舊 Role 的關鍵 DML／privileged EXECUTE、終止舊連線／清空 Pool，再允許新版 Writer。由部署控制器核對 Schema／Function／Role ACL／Credential 及恢復隔離，**Runtime 自填版本或 session variable 不算可信版本證明**；不相容／舊 Worker 重啟立即 Fail-Closed，Rollback 不得重開舊權限。
-4. **Cutover**：由 Mirage Owner、DBA、Security、Release Approver 明確簽核後才允許安排；若鎖鍵或不可兼容狀態機更動，不承諾零停機滾動，應停流排空再切換。
+4. **Cutover**：依 [Solo Developer Security Acceptance v1](../security/world-db/solo-developer-security-acceptance-v1.md) 在 G3b～G6 必要證據全 PASS 後，由 Mirage Owner 以可追溯的特定 SHA／環境 Release 決議明確核准，並另授權實際部署；外部人工審查為建議但未取得不得冒稱已完成。若鎖鍵或不可兼容狀態機更動，不承諾零停機滾動，應停流排空再切換。
 5. **Rollback**：可回復程式的 Observe-only／正式發送 OFF；**不可**自動撤銷 Receipt/Replay 墓碑、放鬆 ACL、恢復已撤銷金鑰或讓舊 Epoch 復活。回滾程序需在隔離 PG 與還原演練中驗證。
 
 ## 9. 驗收、證據與失效處置
@@ -344,7 +351,7 @@ start_send_deadline = min(
 | BD-07 | Candidate GC 與 Grant 的完整 Scope FK／Row Lock／全域 DAG、原始 Payload 與稽核證據分級保留／清理方案 | DBA＋Mirage Owner＋Security | OPEN |
 | BD-08 | 正式接受 Request Provenance 語意 A 的範圍與殘餘風險；語意 B 另案 | Security＋Mirage Owner | OPEN |
 | BD-09 | Candidate Validator 的可信身分／政策來源、長耗時驗證的交易外證據、短 PromotionTx 與 Revision 撤銷／升級規則 | Mirage Owner＋Security＋DBA | OPEN |
-| BD-10 | 正式發送 DISABLED 的實際控制面、Runtime 權限、Restore 後不可倒退的隔離機制 | Release Approver＋Security＋Operations | OPEN |
+| BD-10 | 正式發送 DISABLED 的實際控制面、Runtime 權限、Restore 後不可倒退的隔離機制 | 依 D-73 由 Owner 承擔 Release／Security／Operations 的實測責任與最終核准 | OPEN |
 | BD-11 | `decision_time` 有效但 `SEND_AUTHORIZED` COMMIT 晚於 deadline 的政策；可驗證 DB 時鐘下界、可接受交易延遲與判斷點，**不得默默改 Freeze v1**。未定案：僅允許鎖後單一 DB `decision_time` 邏輯判定，**不宣稱** COMMIT-before-deadline；若產品必須保證後者，正式發送保持禁用；未知 Commit 不得開始新傳輸，已實際提交的授權不回溯改寫 | Mirage Owner＋Security＋DBA | **OPEN — 預設 Fail-Closed／no production send** |
 | BD-12 | Mirage Owner 是否正式採納 MSDSS Freeze v1 以及對應原生 `start_send()` 相容修正／回歸；現行差異不能只靠改 ADR 消除 | Mirage Owner＋Security＋MSDSS Contract Owner | **Owner 採納已決（D-68）；原生修正、Security 相容審查與完整驗收仍 OPEN／NOT_RUN** |
 

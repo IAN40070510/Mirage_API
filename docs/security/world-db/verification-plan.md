@@ -124,7 +124,7 @@
 | `WORLD-RESTORE-02` | 還原後清理計算、Clock Skew、Key Rotation 不確定 | 不自動提前解除隔離；有可驗證的完整恢復證據 | NOT_RUN |
 | `WORLD-RESTORE-TOMBSTONE-01` | **Given**：在備份後建立並清理 Candidate，寫入不可復活 Tombstone 與後續 Operation/Purge 事件；舊 World DB 備份**不含該 Tombstone**。**Action**：還原舊備份，嘗試重建原五欄 Logical Key／不同 version，再分別令外部錨點可用、不可用／被倒退 | **Expected**：還原前在受保護控制面啟用 Quarantine；無法核對**不隨 World DB 回退**的錨點完整性／單調性／事件涵蓋範圍時始終禁用正式發送與 Identity 復活；只有可信 reconciliation、Owner 批准與正式放行流程才能解除；此案 NOT_RUN 不代表錨點已實作 | NOT_RUN |
 | `WORLD-RESTORE-PUBLISH-01` | **Given**：World DB 與外部 Restore Anchor 是不同提交域。**Action A**：DB Tombstone/Operation 已 COMMIT，但 Anchor publish 斷線／ACK 未知；**Action B**：外部 Anchor `PREPARED` 先發布，DB 明確 ROLLBACK；**Action C**：舊錨點 head 被重播／降低 generation。 | **Expected**：A 不宣稱最新事件已涵蓋，維持 Quarantine 直到 Operation ID/Digest/外部 effect 與 durable Head 完整對帳；B 不能把 PREPARED/UNUSED 當業務提交或執行不存在操作，單調 Head 不回退；C 受獨立權威拒絕。任何未知結果都不可恢復正式發送。 | NOT_RUN |
-| `WORLD-RESTORE-FENCE-01` | **Given**：外部控制面已接受最新 Fence Head H2，另備 H1/H2 checkpoint；H1 有合法簽章但 generation 較低，H2 的 digest manifest 涵蓋 Candidate Tombstone、Binding、Operation／Replay／Revocation；(B) Tombstone DB COMMIT 成功但 H2 checkpoint 發布前當機／ACK 未知。**Action**：還原只對得上 H1 的舊 World DB，嘗試重播 H1、降低 generation、以 Runtime 憑證寫入 Fence、使用錯 digest／timeline 或落後的有效 H1 冒稱涵蓋後續 Tombstone | **Expected**：獨立最高可信 head/世代拒絕可判定的降版與改寫；B 的跨交易 checkpoint 缺口**不會**因 H1 簽章有效而通過，不可證明完整時持續 Quarantine；無可信 reconciliation／獨立 Owner/DBA/Security 放行證據不得恢復發送 | NOT_RUN |
+| `WORLD-RESTORE-FENCE-01` | **Given**：外部控制面已接受最新 Fence Head H2，另備 H1/H2 checkpoint；H1 有合法簽章但 generation 較低，H2 的 digest manifest 涵蓋 Candidate Tombstone、Binding、Operation／Replay／Revocation；(B) Tombstone DB COMMIT 成功但 H2 checkpoint 發布前當機／ACK 未知。**Action**：還原只對得上 H1 的舊 World DB，嘗試重播 H1、降低 generation、以 Runtime 憑證寫入 Fence、使用錯 digest／timeline 或落後的有效 H1 冒稱涵蓋後續 Tombstone | **Expected**：獨立最高可信 head/世代拒絕可判定的降版與改寫；B 的跨交易 checkpoint 缺口**不會**因 H1 簽章有效而通過，不可證明完整時持續 Quarantine；缺 BD-05 受保護自動驗證的完整可信 reconciliation 證據，不得由 Owner 或 Runtime 人工強行解除隔離；正式 Release 另受 D-73 的 Owner 核准門檻限制 | NOT_RUN |
 | `WORLD-MIGRATION-01` | Schema／ACL／函式版本不匹配 | Startup/Release Preflight Fail-Closed；正式發送不能開始 | NOT_RUN |
 | `WORLD-MIGRATION-02` | 舊 Runtime 仍持舊 Role/Pool、舊 Advisory Key 或 schema rollback | 撤銷舊 Role protected DML/EXECUTE 並清空 Pool；Runtime 自填 version 不具權威；舊版本不能重開發送／權限 | NOT_RUN |
 | `WORLD-DISABLE-01` | 實際 Trusted-send 控制面無法確認、Runtime 可自行啟用、或 Restore 使禁用狀態倒退 | Release Preflight 失敗、正式發送停止；不得以未經證實的 `DECEIVE OFF` 字樣代替控制證據 | NOT_RUN |
@@ -144,11 +144,11 @@
 
 ## 6. 關閉與部署限制
 
-測試報告、ACL Dump、容器秘密掛載、真實 Postgres 版本、Key Trust Registry、Restore 手冊與 Owner／DBA／Security／Release Approver 簽核缺一不可。未完成時：`MIR-SEC-WORLD-001: OPEN`、`MSDSS P2: NO-GO`、`production trusted-send mode: DISABLED`（**政策要求；真實強制控制尚待查核**）。沒有 HTTP 攻擊回報或 PR 合併不能取代證據。
+測試報告、ACL Dump、容器秘密掛載、真實 Postgres 版本、Key Trust Registry、Restore 手冊、完整 G3b～G6 技術驗收和 Owner 對固定 SHA／環境的最終核准**缺一不可**。人工責任依已採納的 [Solo Developer Security Acceptance v1](solo-developer-security-acceptance-v1.md) 由 Owner 承擔；外部獨立人工審查建議但非本個人專案的一般強制門檻，未執行不得稱為已受第三方審核。未完成時：`MIR-SEC-WORLD-001: OPEN`、`MSDSS P2: NO-GO`、`production trusted-send mode: DISABLED`（**政策要求；真實強制控制尚待查核**）。沒有 HTTP 攻擊回報或 PR 合併不能取代證據。
 
 ## 7. v0.2 契約完成／狀態交付規則
 
 - 本計畫所有新增或改寫之 `WORLD-*` case 均為 **NOT_RUN**；Mirage API `main` `88dc2008fd35a2d3873949a769653dc9f18e8980` 的 Native baseline 與 MSDSS `main` `5a1ee26dcf79f04cf29345a0403e3f3f8082358b` 的 Freeze v1 **不可混同**，也不能推論新保護已採納。
 - 真 PG 測試需使用獨立角色與多 Backend；驗證 `FOR UPDATE/SHARE/KEY SHARE`、FK implicit locks、lock_timeout、40P01、40001、真正的 role membership／SET ROLE、DB-derived decision_time、外部 Snapshot/Object Storage version、quarantine/mixed binary、各層 ACK lost。
 - `WORLD_COMMITTED_ADMISSION_UNAVAILABLE` 仍只是 reconciliation classification，**不是 Admission／World 狀態**。所有測試報告必須固定 commit SHA／schema／DB 角色／容器與 source hash，且分開記錄實際 PASS／FAIL／SKIP／NOT_RUN。
-- Mirage Owner／DBA／Security／Release Approver 未簽核、真實 ACL／Policy race／Payload Purge／Restore／Mixed Runtime 尚未通過時：`Architecture: Proposed | MIR-SEC-WORLD-001: OPEN | MSDSS P2: NO-GO | Production DECEIVE: OFF`。
+- Mirage Owner 尚未對固定版本作最終核准，或真實 ACL／Policy race／Payload Purge／Restore／Mixed Runtime 任一強制技術子項尚未通過時：`Architecture: Proposed | MIR-SEC-WORLD-001: OPEN | MSDSS P2: NO-GO | Production DECEIVE: OFF`。不得以 D-73 的流程採納補簽任何測試。

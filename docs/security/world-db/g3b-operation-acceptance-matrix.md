@@ -245,9 +245,11 @@ COMMIT ACK 不明或 Client HTTP，不能簽收全部 CAS。
 3. **拒絕與冪等**：缺 Header、重複 JSON Key、路由／編碼歧義、跨 Session／
    Resource／Epoch、負面 ACL、重送 JTI、同 Receipt 重試、DB COMMIT ACK 遺失、
    Executor 503、競態均不得鑄造第二次副作用或未核准的 200／400／404／409。
-4. **發送獨立簽核**：在 G3b 全路由相容和實體角色／網路隔離簽核前不得移交
-   G4 正式 Sender。不能把 mTLS readiness、200 internal RPC、PG test `passed`
-   當成客戶端回應授權。
+4. **發送技術簽收**：在 G3b 全路由相容、實體角色／網路隔離的**可重現技術證據**
+   全 PASS 且 Owner 依 [Solo Developer Security Acceptance v1](solo-developer-security-acceptance-v1.md)
+   核定本 Gate 前，不得移交 G4 正式 Sender。外部人工 Reviewer 非個人專案
+   一般強制條件，但獨立 Validator／受保護來源不能省略。不能把 mTLS readiness、
+   200 internal RPC、PG test `passed` 當成客戶端回應授權。
 
 G3b 整體狀態 `OPEN`。`MIR-SEC-WORLD-001=OPEN`、`MSDSS P2=NO-GO`；
 正式 Trusted Send `OFF`，不合併 main、不部署 staging 或 production。

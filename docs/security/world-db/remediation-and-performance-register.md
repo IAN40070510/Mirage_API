@@ -20,7 +20,7 @@
 | **局部 PASS** | 特定隔離 PostgreSQL／CI 子案例通過；**不得擴寫成整體 Gate PASS**。 |
 | **待實作** | ADR／修補方向已定，但關鍵接線、Migration、部署或閘門尚未完成。 |
 | **NOT_RUN** | 無符合目前完整驗收條件的端到端或故障注入證據；文件檢查不算安全測試。 |
-| **提議** | 需要量測或 Owner／DBA／Security 定量裁決，不是已核准設定。 |
+| **提議** | 需要量測或依 D-73 由 Owner 承擔 DBA／Security 責任完成定量裁決，不是已核准設定。 |
 
 ## 2. 原始已確認安全控制缺口
 
@@ -56,7 +56,7 @@
 
 ### `StartSend` 與實際 HTTP 傳輸的強制邊界
 
-不得宣稱「取得一次 Fence PASS」即可保護之後任意長的傳輸。應由 Owner／DBA／Security 審定以下短交易與傳輸契約（**待實作與驗收**）：
+不得宣稱「取得一次 Fence PASS」即可保護之後任意長的傳輸。應依 D-73 由 Owner 承擔 DBA／Security 技術責任、取得可重現證據並審定以下短交易與傳輸契約（**待實作與驗收**）：
 
 1. 受保護 `StartSendTx` 以同一個權威 Fence Head／Snapshot eligibility 證據、可信 Owner、不可延長的期限及 single-use 條件原子建立 `SEND_STARTED`，同時取得不可重複的**傳輸租約或等價 Pin**。
 2. 交易結果確認後，ASGI 只能送出該租約綁定的 immutable Snapshot；**第一個 byte 送出前**發現中介層修改 bytes／status／headers 必須阻擋並稽核；**已部分送出後**則記錄 partial／unknown、按核准規則終止，不得假裝能撤回網路資料。**不能把持久化 `SEND_STARTED` 當成客戶端收到資料**。
@@ -101,7 +101,7 @@
 | **P0 / G3** | Candidate Clean Cutover、Validator/Promotion、Grant Binding、Session/Admission 受保護函式、禁止舊 Runtime DML | 三項原 SQL 越權必遭拒；新正常商城交易可用；未知 COMMIT 不重做 | **待實作／整體 NOT_RUN** |
 | **P0 / G4** | 獨立 Snapshot 物件與 Pin、兩種 Purge Fence、所有發送路徑接強制 StartSend/Lease/ASGI 邊界 | Payload 替換、Purge/GC/Send 並行、Partial/Unknown HTTP fault 驗收 | **待實作／整體 NOT_RUN** |
 | **P0 / G5** | 外部耐久 Fence/Highest Head、DB-first／Anchor-first 對帳、Restore Quarantine 與自動解禁證據 | 還原、故障、跨 DB commit 未知不得放行；人工修復不等於人工猜測已安全 | **部署與故障注入未完** |
-| **P1 / G6** | 全契約 Freeze v1、Mixed Binary、Migration rollback、真實 PostgreSQL 負面／正向及效能分段測試 | 固定 commit、DB/schema、SQLSTATE、JUnit、fault logs；Owner／DBA／Security／Release Approver 各自簽核 | **完整安全驗收 NOT_RUN** |
+| **P1 / G6** | 全契約 Freeze v1、Mixed Binary、Migration rollback、真實 PostgreSQL 負面／正向及效能分段測試 | 固定 commit、DB/schema、SQLSTATE、JUnit、fault logs；依 [Solo Developer Security Acceptance v1](solo-developer-security-acceptance-v1.md) 由 Owner 逐項核對、最終核准，外部人工審查建議但非強制 | **完整安全驗收 NOT_RUN** |
 | **P1 / PERF** | 計時 → 健康負載基準 → Role-bounded pool → 預先生成／推論分流 → 再測量 | 有效回應率與 P50/P95/P99 同時驗收；不影響 P0 Gate | **僅連線微基準 MEASURED，HTTP NOT_RUN** |
 
 ### 不得當作已完成的證據
@@ -131,6 +131,6 @@
 2. **傳輸與還原**：Fence 不在 World DB 同一還原範圍；Send、Purge、Restore 全呼叫路徑無旁路；跨資料庫提交未知與真實 HTTP 部分傳輸均完成故障注入與對帳。
 3. **安全測試證據**：PG 17 實體權限／SQLSTATE、角色與 Secret、並行鎖 DAG、policy race、rollback/unknown commit、Snapshot GC／Purge、Restore／舊備份、Mixed Binary、現有正常功能皆 PASS；每項 PASS 有版本、Migration、環境、測資、時間與脫敏 log。
 4. **效能與品質**：拿到完整安全路徑的 HTTP P50/P95/P99／TTFB／錯誤率／有效回應率後優化並驗證；不能讓「降低檢查數量」成為性能改善手段。實際量化門檻需 Owner 採納。
-5. **流程與發布**：Owner、DBA、Security、Release Approver 與 MSDSS P2 各依所屬驗收完成審核。**在此之前維持 Draft／獨立分支，production DECEIVE OFF，不合併 main 或擴張到共享 staging。**
+5. **流程與發布**：採用 [Solo Developer Security Acceptance v1](solo-developer-security-acceptance-v1.md)：由 Owner 承擔 DBA／Security／Release 的審查責任，完成所有技術證據後對精確版本及環境單獨核准；外部人工 Reviewer 非個人專案一般強制門檻，但不得冒稱獨立第三方已審查。MSDSS P2 的獨立服務驗收不由本文件豁免。**在技術 Gate 全 PASS 且 Owner 另作特定 Release 核准之前，維持 Draft／獨立分支、production DECEIVE OFF，不合併 main 或擴張到共享 staging。**
 
 本檔僅整合**目前可追溯的討論、固定來源與修補證據**；出現新問題須記錄日期、Work Item ID、affected source SHA、修復方案、實測結果及殘餘風險，並同步更新 [Decisions Log](decisions-log.md) 與 [Verification Plan](verification-plan.md)。不可因新增文字就把 `NOT_RUN` 改成 `PASS`。

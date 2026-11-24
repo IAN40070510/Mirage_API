@@ -2,7 +2,7 @@
 
 **Consolidated v0.2 — 2026-11-21；Architecture Proposed／Weakness OPEN／MSDSS P2 NO-GO。** 本表於同一文件分支依次 Commit，保留 v0.1 歷史。
 
-本紀錄把先前多輪對話中的**結論、假設、已否決方向、仍待 Owner 核准的決策**整理為可版本控制的狀態；不是把每則聊天當作已正式簽核的會議紀錄。完整決策權屬於 [ADR](../../adr/MIR-SEC-WORLD-001-world-db-trust-boundary.md) 指定的 Mirage Owner／DBA／Security。
+本紀錄把先前多輪對話中的**結論、假設、已否決方向、仍待 Owner 核准的決策**整理為可版本控制的狀態；不是把每則聊天當作已正式簽核的會議紀錄。現行人員簽核優先遵循 [Solo Developer Security Acceptance v1](solo-developer-security-acceptance-v1.md)，以前草稿所列 DBA／Security／Release Approver 為技術責任領域，不再是四位獨立人工審核者的強制配置。
 
 ## 已固定為 ADR 提案的方向（不等於已實作）
 
@@ -107,6 +107,7 @@
 | --- | --- | --- |
 | D-71 | **效能目標提議**：預先生成內容的合法快路徑暫以 `P50 ≤ 150 ms`、`P95 ≤ 400 ms`、`P99 ≤ 1,000 ms` 規劃，品質／有效回應率與錯誤率需共同驗收；即時 AI 生成另訂基準。先量測再優化 Role-bounded pool 與預生成內容。 | **PROPOSED／HTTP END-TO-END NOT_RUN**；隔離 PG 單次 `SELECT 1` 連線重用 0.162 ms、重連 4.787 ms 不代表全 HTTP 速度或實際加速倍數；效能 SLO 不是授權截止期限。見 [延遲紀錄](http-latency-baseline.md) 與 [整合總表](remediation-and-performance-register.md)。 |
 | D-72 | **傳輸閘門待實作約束**：只在 `StartSend` 通過外部 Fence 不足以保障後續 ASGI bytes；Send／Snapshot Purge／Restore 需要統一的受保護起送／租約／Pin 與並行隔離協定，外部 Fence Head 必須真正在 World DB 還原域外，證據異常持續 Quarantine。 | **REQUIRED DESIGN BOUNDARY／IMPLEMENTATION NOT_COMPLETE／SECURITY NOT_RUN**；不可宣稱 HTTP 網路傳輸在 PostgreSQL 單一交易內，亦不可將 R1 控制誇大為受控 Runtime 遭完整接管時的 R4 保證。具體實作與故障注入見 [整合總表](remediation-and-performance-register.md)。 |
+| D-73 | **2026-11-24 Owner `IAN40070510` 採納 [Solo Developer Security Acceptance v1](solo-developer-security-acceptance-v1.md)**：用 Owner 最終簽核＋全矩陣真實證據取代四位不同人工角色各自簽核；外部 Reviewer 建議但非本個人專案的一般阻擋條件，未取得不得冒稱第三方審核 | **GOVERNANCE ADOPTED / RELEASE NOT APPROVED**。獨立 Validator／DB 角色及全部 G3b～G6 技術驗收**不減少**，`NOT_RUN` 不可改 PASS；MSDSS P2 或其他外部強制規則不受影響，Trusted Send OFF、Draft／NO-GO 不變。 |
 
 **跨文件最新決策優先權**：先前 D-54／D-55 等仍提及 `BD-05`／`BD-11` OPEN，屬歷史審查文字；2026-11-21 的 [Restore Anchor Option B](restore-anchor-option-b.md)、[BD-05 自動驗證解禁](bd-05-restore-quarantine-release.md)、[BD-11 鎖後 Deadline](bd-11-deadline-semantics.md) 已分別 OWNER APPROVED／ADOPTED／DECIDED，應按最新決策執行。全部仍未完成原生部署及安全驗收；BD-05 不允許以人工／雙人簽核繞過失敗證據。
 

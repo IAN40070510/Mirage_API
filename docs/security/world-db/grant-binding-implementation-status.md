@@ -167,4 +167,4 @@ Runtime ACL preflight 同步列入新 lineage 表；獨立 PostgreSQL 測試新�
 2. 將 `World.resolve()`／`SyntheticCarts.create_cart()` 的衍生 Scope 與合法拒絕模板納入受保護 Executor 來源合約，連接 `trusted_http.create_app()` 原生 Cart／Inventory／Medusa 業務；驗證所有既有 2xx／4xx 結果與冪等／未知 COMMIT。原生 HTTP 入口尚未接線時不得將 G3 視為完整。
 3. 建立實體 Authorized Snapshot／Pin 與一次性 Send Lease，讓 ASGI 起送前的 Snapshot 與 Fence 檢查具同一安全協定；不在 `SEND_AUTHORIZED` 後重判政策。
 4. 完成 World DB 還原範圍外的持久化 Quarantine Fence 與不同 DB Commit 失敗對帳，並封住 Send／Purge／Restore 並行放行競態。
-5. Owner／DBA／Security 審核、G0–G6 真實安全驗收與量測通過前，不解除 Release Fuse。
+5. 依 [Solo Developer Security Acceptance v1](solo-developer-security-acceptance-v1.md) 由 Owner 承擔 DBA／Security 技術責任；G0–G6 真實安全驗收、量測及 Owner 對固定版本最終核准通過前，不解除 Release Fuse。外部人工審查非強制，但不得冒稱已取得。
