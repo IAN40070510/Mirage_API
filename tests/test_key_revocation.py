@@ -181,18 +181,15 @@ def test_revocation_database_failure_does_not_consume_replay(isolated_test_dsn):
     assert verify(checker, token).jti == jti
 
 
-@pytest.mark.parametrize("guard_reply_lost", [False, True])
-def test_unknown_commit_under_key_guard_never_authorizes(isolated_test_dsn, guard_reply_lost):
-    """丟棄 Replay 或 key 控制交易的真實提交回覆都不得回傳可信 claims，已提交 JTI 仍不可重用。"""
+def test_unknown_commit_under_key_guard_never_authorizes(isolated_test_dsn):
+    """同一 Key／Replay 交易的 COMMIT 回覆遺失時不授權，已提交 JTI 仍不可重用。"""
     import psycopg
     from test_postgres_network import lost_commit_proxy
 
     key, jti = Ed25519PrivateKey.generate(), uuid4().hex
     token = signed(key, jti=jti)
     with lost_commit_proxy(isolated_test_dsn) as (proxied, dropped):
-        checker = verifier(isolated_test_dsn, {"old": key}, registry(proxied if guard_reply_lost else isolated_test_dsn))
-        if not guard_reply_lost:
-            checker._replay_store = PostgresReplayStore(proxied)
+        checker = verifier(proxied, {"old": key})
         with pytest.raises((psycopg.OperationalError, psycopg.InterfaceError)):
             verify(checker, token)
         assert dropped.is_set()
@@ -201,6 +198,48 @@ def test_unknown_commit_under_key_guard_never_authorizes(isolated_test_dsn, guar
     with pytest.raises(TrustedSessionError, match="trusted_session_replay"):
         verify(verifier(isolated_test_dsn, {"old": key}), token)
     assert registry(isolated_test_dsn).revoke("gateway", "old", revision=1).revision == 1
+
+
+def test_guarded_replay_rejects_separate_postgres_connection_domain(isolated_test_dsn):
+    """Key 與 Replay DSN 不同時在任何 SQL 寫入前拒絕，避免誤宣稱跨庫原子性。"""
+    import psycopg
+
+    key, jti = Ed25519PrivateKey.generate(), uuid4().hex
+    checker = verifier(isolated_test_dsn, {"old": key})
+    checker._replay_store = PostgresReplayStore(isolated_test_dsn + " application_name=other_pool")
+    with pytest.raises(KeyRevocationError, match="same_postgres_connection_domain"):
+        verify(checker, signed(key, jti=jti))
+    with psycopg.connect(isolated_test_dsn) as connection:
+        assert connection.execute("SELECT count(*) FROM replay_entries WHERE jti=%s", (jti,)).fetchone() == (0,)
+
+
+def test_guarded_replay_does_not_open_second_connection(isolated_test_dsn):
+    """Key 共享鎖和 Replay INSERT 必須使用同一 Cursor，Replay Store 不能私自連線。"""
+    key, jti = Ed25519PrivateKey.generate(), uuid4().hex
+    checker = verifier(isolated_test_dsn, {"old": key})
+    with patch.object(checker._replay_store, "_connection", side_effect=AssertionError("second connection")):
+        assert verify(checker, signed(key, jti=jti)).jti == jti
+
+
+def test_guarded_replay_rolls_back_after_insert_failure(isolated_test_dsn):
+    """同交易 Replay INSERT 後故障會連同 JTI 一起回滾，不留下半途消費。"""
+    import psycopg
+
+    key, jti = Ed25519PrivateKey.generate(), uuid4().hex
+    checker = verifier(isolated_test_dsn, {"old": key})
+    original = PostgresReplayStore._consume_on_cursor
+
+    def interrupted(cursor, **kwargs):
+        """完成真實 Replay INSERT 後注入錯誤，確認外層交易負責 rollback。"""
+        assert original(cursor, **kwargs).value == "accepted"
+        raise RuntimeError("injected_after_replay_insert")
+
+    with patch.object(PostgresReplayStore, "_consume_on_cursor", side_effect=interrupted):
+        with pytest.raises(RuntimeError, match="injected_after_replay_insert"):
+            verify(checker, signed(key, jti=jti))
+    with psycopg.connect(isolated_test_dsn) as connection:
+        assert connection.execute("SELECT count(*) FROM replay_entries WHERE jti=%s", (jti,)).fetchone() == (0,)
+    assert verify(checker, signed(key, jti=jti)).jti == jti
 
 
 @pytest.mark.parametrize("http_worlds", ["rotation"], indirect=True)

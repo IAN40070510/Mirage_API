@@ -25,8 +25,6 @@ metadata、地址、additional_data、locale、query fields 等尚未實作的�
 
 ## 驗證與限制
 
-投影分別以原始 OpenAPI 3.0 及有效投影測試；原生 HTTP 測試核對增刪改、同鍵重試、同鍵換內容拒絕、簽後 header 竄改、下單與內部取消。另用實際 MSDSS proxy／部署組裝器，經 HTTPS 呼叫獨立 Mirage 程序。各次結果與執行位置見[進度紀錄](../../../../docs/implementation-progress.md)。
-
 這份審查不批准正式 Gateway 設定、真實資料 L3 映射或 staging 切換，也不代表完整 Medusa Store／checkout 語意相容。原生取消訂單不借用 transfer/cancel，仍保留 Mirage 專用介面。
 
 自有程式及審查採 Apache-2.0；Medusa 規格僅依原 MIT 聲明保留，參考執行版 validator 但未複製其程式。完整授權見[授權表](../../../../docs/licensing.md)。

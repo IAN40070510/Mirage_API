@@ -4,6 +4,7 @@ from .admission import AdmissionControl, AdmissionOperationResult, AdmissionStat
 from .candidate import CandidateLoadResult, CandidateRecord, CandidateStore, CandidateStoreStatus
 from .commit import CommitResult
 from .models import (
+    CartCreationSource,
     CommitSource,
     DeviationApproval,
     ProjectionCompatibilityProfile,
@@ -18,6 +19,7 @@ from .models import (
 )
 from .postgres_admission import PostgresAdmissionControl
 from .postgres_candidate import PostgresCandidateStore
+from .protected_grant import PostgresCandidatePromoter, PostgresProtectedAuthorizer, ProtectedGrantError
 from .postgres_replay import PostgresReplayStore
 from .postgres_store import PostgresWorldStore
 from .projection_registry import (
@@ -41,11 +43,14 @@ from .store import (
     WorldStoreStatus,
 )
 from .event_store import EventWorldStore, PostgresEventWorldStore
+from .protected_world import PostgresProtectedWorldExecutor
+from .protected_send import PostgresProtectedSender, ProtectedSendLease, ProtectedLeaseTransmission
 
 __all__ = [
     "AdmissionControl",
     "AdmissionOperationResult",
     "AdmissionState",
+    "CartCreationSource",
     "CommitSource",
     "CommitResult",
     "EventWorldStore",
@@ -61,6 +66,13 @@ __all__ = [
     "ProjectionEvidence",
     "PostgresAdmissionControl",
     "PostgresCandidateStore",
+    "PostgresCandidatePromoter",
+    "PostgresProtectedAuthorizer",
+    "PostgresProtectedWorldExecutor",
+    "PostgresProtectedSender",
+    "ProtectedSendLease",
+    "ProtectedLeaseTransmission",
+    "ProtectedGrantError",
     "PostgresReplayStore",
     "PostgresWorldStore",
     "ProjectionAuthorization",

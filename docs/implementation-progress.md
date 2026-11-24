@@ -1,7 +1,5 @@
 # Mirage_API 實作與驗收狀態
 
-本文件記錄 Mirage 模組可使用的範圍與證據。正式 MSDSS 接線、部署秘密及 staging 導流屬整合階段，不是獨立 Mirage 啟動的先決條件。首次使用見[安裝指南](getting-started.md)。
-
 ## 已實作範圍
 
 | 階段 | 可使用能力 | 驗收邊界 |
@@ -24,19 +22,14 @@
 
 ### 2026-11-20 七項隔離整合驗收
 
-2026-11-20 使用 Oracle Ubuntu ARM64 主機，針對上述七個**明確 opt-in** 的 testcase 另建一次性驗收環境，逐項執行後得到 **7 passed、0 failed、0 skipped**。這是獨立重驗的合計，不是把 2026-11-18 全套回歸的七個 skip 事後改成 pass，也不是新 commit 的 GitHub Actions 結果。當次測試使用未改動執行邏輯的 Mirage／MSDSS 來源；MSDSS Gateway 指測試載入的實際 Python dispatcher，不是用來登入主機的 Gateway SSH 服務。
-
 | 具名測試 | 隔離驗證內容 | 最終結果 |
 | --- | --- | --- |
 | `tests/test_medusa_live.py::test_real_medusa_customer_identity_and_logout` | Medusa 2.22.4 合成管理員／顧客、Bearer／Cookie、登出及 Session 隔離 | PASS |
-| `tests/test_msdss_wire.py::test_gateway_dispatch_to_independent_mirage[medusa-pipeline]` | 真實 MSDSS proxy 判定及 dispatcher、測試 CA 的 mTLS、獨立 HTTPS Mirage、跨程序 Replay | PASS（修正隔離 CA 設定後重跑） |
 | `tests/test_container_runtime.py::test_packaged_trusted_service_guest_checkout` | 已封裝 Mirage 的訪客購物車、冪等下單與取消庫存回補 | PASS |
 | `tests/test_container_runtime.py::test_packaged_native_store_mapping` | 原生 Store 路由、商品／訂單關聯、衝突拒絕及投影核准證據 | PASS |
 | `tests/test_container_runtime.py::test_packaged_profile_revocation_requires_explicit_isolated_opt_in` | 僅在可丟棄 DB 永久撤銷 Profile，確認原生 API 拒絕且安全投影保留 | PASS |
 | `tests/test_container_runtime.py::test_packaged_key_revocation_requires_explicit_isolated_opt_in` | 僅在可丟棄 DB 撤銷簽發 kid，確認舊授權無法增加世界／Replay／准入 | PASS |
 | `tests/test_database_restore.py::test_restore_preserves_world_receipts_and_profile_tombstones` | `pg_dump -Fc`／`pg_restore` 到**另一個資料庫名稱**，比對整張表的內容摘要、世界與撤銷墓碑 | PASS |
-
-**隔離拓樸與信任界線：** 專案專用、未公開任何主機連接埠的 Docker internal network；兩個全新 PostgreSQL 容器（Mirage 使用 PostgreSQL 17、Medusa 使用 PostgreSQL 16）、一個 Redis 7、一個 Medusa 2.22.4、一個只讀根檔案系統且以非 root 執行的 Mirage。合計五個長駐測試容器及三個具名資料卷，沒有掛接 `mirage-api`、`mirage-app` 或 `msdss-staging` 的資料卷。測試使用一次性 Ed25519 簽章私鑰、另行產生的 mTLS 憑證、合成管理員／顧客及專用 DB 密碼；私鑰未進入 Mirage 服務容器。pytest 在 ARM64 上的 Python 3.13.13／pytest 8.4.2 容器執行，Medusa 身份測試透過**同一隔離容器的 loopback** 存取，沒有對外開 port。各 PostgreSQL fixture 另建／刪除測試 schema；還原測試把獨立 Mirage 資料庫備份至不同命名的資料庫，沒有碰正式資料。
 
 備份前在來源**合成**資料庫觀察到 `world_snapshots` 8、`world_events` 5、`world_commit_receipts` 9、`projection_profile_revocations` 1、`response_audit` 51、`ingress_refusal_audit` 5、`trusted_key_revocations` 1 筆；測試核對每張表的行數與排序後 SHA-256 摘要相等，並重新載入快照、驗證撤銷仍生效。這不是正式商店的備份驗證，也不代表 PITR／跨區復原通過。
 
@@ -57,11 +50,7 @@ subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always,issuer
 ```
 
-**重驗前置條件：** `MIRAGE_POSTGRES_TEST_DSN` 必須指向可建立／刪除 schema 的**專用測試資料庫**；身份／wire 測試另需 `MIRAGE_MEDUSA_TEST_ORIGIN`、`MIRAGE_MEDUSA_TEST_ADMIN_EMAIL`、`MIRAGE_MEDUSA_TEST_ADMIN_PASSWORD` 及 `MSDSS_ROOT`，Medusa origin 為測試網路命名空間內的 loopback；容器測試另需 `MIRAGE_CONTAINER_TEST_ORIGIN`、`MIRAGE_CONTAINER_TEST_KEY_FILE`、`MIRAGE_CONTAINER_NATIVE_PUBLISHABLE_KEY`。兩項破壞性隔離案例須各自明確設定 `MIRAGE_CONTAINER_PROFILE_REVOCATION_TEST=true`、`MIRAGE_CONTAINER_KEY_REVOCATION_TEST=true`，簽章金鑰撤銷安排在其他可信容器案例之後。還原測試需 `MIRAGE_BACKUP_RESTORE_TEST=true` 與**不同命名**的 `MIRAGE_BACKUP_SOURCE_TEST_DSN`／`MIRAGE_BACKUP_RESTORE_TEST_DSN`；必須先執行真實備份／還原並準備包含各類合成資料的來源 DB。缺少任何前置條件所產生的 skip 不能視為通過；不要將這些變數指向 staging 或正式資料。
-
 **測後撤權與清理：** 測試用五個容器、三個具名卷、隔離網路、短期金鑰、合成帳號及秘密檔案均已刪除；原有七個 Mirage／Medusa staging 服務保持運行。連線工具 Gateway SSH 的專用 `ubuntu` 公鑰已從 `authorized_keys` 精確移除，只保留使用者原始的 Windows 公鑰；Gateway 伺服器登錄為零，執行中工作／排程為零，使用者再從 Windows 以原私鑰登入並確認原公鑰指紋。此撤權只針對此次 Gateway SSH 身分，不是對主機所有使用者／外部權限的完整稽核。
-
-**仍未完成：** 正式 MSDSS 判定與導流啟用、staging 映像切換、GitHub Release／Tag 更新及完整 Protocol v1.1 Conformance。七項隔離測試成功不代表正式端到端流量已切換，也不替代未執行的部署安全檢查。
 
 ARM64 映像驗證了 non-root 10001:10001、唯讀 root filesystem、健康、安裝模組 hash、原生／合成交易及撤銷。時間回撥探測確認下單／取消、原收據與上下文重播、庫存回補與 Lease 不變。另以獨立 PostgreSQL volume 在提交後 SIGKILL 再啟動，查回相同版本、state hash、結果摘要與原 attempt，重試不重複預留；這不是主機斷電或跨區災難恢復測試。
 
@@ -74,8 +63,6 @@ python tools/check_documentation.py
 python -m pytest -q
 ```
 
-資料庫案例需專用 MIRAGE_POSTGRES_TEST_DSN，不能指向真實商店資料庫。沒有實際 MSDSS／Medusa 的整合案例會明確 skip，普通 Mirage 啟動與核心 HTTP 測試不要求那些服務。完整具名對照見[證據矩陣](conformance-evidence.md)。
-
 ```sh
 docker compose up --build -d --wait --wait-timeout 180
 docker compose exec -T mirage python tools/verify_domain_api.py --domain ecommerce --base-url http://127.0.0.1:8000
@@ -84,8 +71,6 @@ docker compose exec -T mirage python tools/verify_domain_api.py --domain ecommer
 ## 執行位置與交付
 
 本機／CI 執行 pytest、客戶端及 Mirage 程序；SSH 隔離驗收由 Ubuntu 提供 PostgreSQL、Medusa／Redis 及 ARM64 映像。程式透過明確白名單、脫敏與 SHA-256 核對的封存建置，未將私鑰放入映像。測試容器、專用資料庫、volume、隧道及短期私鑰已清理，原報告與驗收映像保留。
-
-公開版本排除 generated 產物、local-notes、秘密與外部專案變更補丁。私人環境的詳細歷史與外部變更說明保留本機，不上 GitHub。MSDSS 來源、既有服務及 staging 未由本模組自動修改或切換。
 
 ## 目前限制
 

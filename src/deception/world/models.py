@@ -188,6 +188,20 @@ class CommitSource(SyntheticModel):
     committed_state_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class CartCreationSource(SyntheticModel):
+    """Creator Receipt 經受保護 lineage 指向獨立派生 Cart 世界的建立來源。"""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True, allow_inf_nan=False)
+
+    kind: Literal["cart_creation"] = "cart_creation"
+    derived_session_id: str = Field(min_length=1, max_length=128)
+    derived_world_generation_id: str = Field(min_length=1, max_length=128)
+    resource_id: str = Field(pattern=r"^cart_[0-9a-f]{32}$")
+    commit_attempt_id: str = Field(pattern=r"^[0-9a-f-]{36}$")
+    state_version: int = Field(ge=1)
+    state_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class SecurityErrorSource(SyntheticModel):
     """指出回應只使用固定安全錯誤模板，不代表 Synthetic World 資料。"""
 
@@ -199,7 +213,7 @@ class SecurityErrorSource(SyntheticModel):
 
 
 ResponseSource = Annotated[
-    SnapshotSource | CommitSource | SecurityErrorSource,
+    SnapshotSource | CommitSource | CartCreationSource | SecurityErrorSource,
     Field(discriminator="kind"),
 ]
 
@@ -298,7 +312,12 @@ class ResponseAdmission(SyntheticModel):
         """核對期限、來源世代與已驗證投影契約，避免混用不同回應的准入證據。"""
         if self.transmission_deadline < self.authorization_deadline:
             raise ValueError("transmission_deadline must not precede authorization_deadline")
-        if self.source.kind != "security_error" and self.source.world_generation_id != self.world_generation_id:
+        if self.source.kind == "cart_creation":
+            # 只有受保護 C-01 source 可跨 Scope；此欄是 Creator Admission 世代，
+            # 派生 Cart 世代必須獨立存在且不與其混同。
+            if self.source.derived_world_generation_id == self.world_generation_id:
+                raise ValueError("cart creation source must use a distinct derived generation")
+        elif self.source.kind != "security_error" and self.source.world_generation_id != self.world_generation_id:
             raise ValueError("response source generation does not match admission")
         if self.projection_evidence.projection_contract_hash != self.projection_contract_hash:
             raise ValueError("projection evidence contract does not match admission")

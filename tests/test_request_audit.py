@@ -5,7 +5,9 @@ from uuid import uuid4
 from pydantic import ValidationError
 import pytest
 
-from deception.world import PostgresAdmissionControl, PostgresProjectionRegistry, PostgresWorldStore, SnapshotSource, SecurityErrorSource
+from deception.world import (CartCreationSource, PostgresAdmissionControl,
+                             PostgresProjectionRegistry, PostgresWorldStore,
+                             SnapshotSource, SecurityErrorSource)
 from deception.world.request_audit import PostgresRequestAudit, RequestAuditLink, RequestObservation
 from test_postgres_conformance import isolated_test_dsn, projection_evidence, scope
 
@@ -153,6 +155,24 @@ def test_validated_security_error_has_audit_link_without_fake_committed_state(au
     assert admission is not None
     with psycopg.connect(audit._dsn) as connection:
         assert connection.execute("SELECT source_kind,committed_state_version,committed_state_hash FROM request_observation_results").fetchone() == ("security_error", None, None)
+
+
+def test_legacy_request_audit_cannot_accept_unprotected_cross_scope_creation(audit_case):
+    """舊型 Prototype Grant 不可繞過 Protected Creator Lineage 來放行新型 Source。"""
+    import psycopg
+
+    audit, _, snapshot, _, _ = audit_case
+    source = CartCreationSource(derived_session_id=uuid4().hex,
+                                derived_world_generation_id=uuid4().hex,
+                                resource_id="cart_" + uuid4().hex,
+                                commit_attempt_id=str(uuid4()), state_version=1,
+                                state_hash="d" * 64)
+    assert source.derived_world_generation_id != snapshot.scope.world_generation_id
+    with pytest.raises(ValueError, match="cart creation requires protected authorizer"):
+        audited_grant(audit_case, source=source)
+    with psycopg.connect(audit._dsn) as connection:
+        assert connection.execute("SELECT count(*) FROM response_admissions").fetchone() == (0,)
+        assert connection.execute("SELECT count(*) FROM request_observation_results").fetchone() == (0,)
 
 
 @pytest.mark.parametrize("first", ["grant", "stop"])

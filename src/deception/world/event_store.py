@@ -1,6 +1,7 @@
 """共用 PostgreSQL WorldEvent 交易核心，不包含商品或購物車欄位。"""
 
 from collections.abc import Mapping
+from contextlib import nullcontext
 import hashlib
 import inspect
 import json
@@ -75,8 +76,12 @@ class PostgresEventWorldStore(PostgresSessionWorlds):
 
     def _commit_transaction(self, binding, operation, command, expected_version, key, attempt, now,
                             *, authorized_scope=None, result_buffer=None, require_saved_digest=True,
-                            prepared_command=None) -> CommitResult:
-        """在原 epoch／世代／CAS 交易保存事件與共用結果，供舊介面維持例外相容性。"""
+                            prepared_command=None, _trusted_connection=None) -> CommitResult:
+        """在原 epoch／世代／CAS 交易保存事件、結果與受保護 Executor 的同交易能力。
+
+        既有 API 未提供連線時維持原來的單一交易；受保護 Executor 可注入其已
+        認證實體連線，與權威 Receipt／提交證據在同一交易原子提交，不自行 commit。
+        """
         validate_commit_metadata(operation, expected_version, key, attempt, now)
         binding = SessionBinding.model_validate(binding.model_dump())
         command, digest = prepare_event_command(command) if prepared_command is None else prepared_command
@@ -86,7 +91,8 @@ class PostgresEventWorldStore(PostgresSessionWorlds):
             raise WorldStoreError("unknown_world_operation")
         raw_key, stored_key = key, hashlib.sha256(key.encode()).hexdigest()
         params = self._binding_params(binding)
-        with self._connection() as connection:
+        with (nullcontext(_trusted_connection) if _trusted_connection is not None
+              else self._connection()) as connection:
             head = connection.execute("SELECT session_epoch FROM session_heads WHERE environment_id=%s "
                 "AND deployment_id=%s AND session_id=%s FOR SHARE", params[:3]).fetchone()
             if head != (binding.session_epoch,):

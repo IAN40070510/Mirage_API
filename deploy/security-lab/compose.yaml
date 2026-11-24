@@ -1,0 +1,182 @@
+# MIR-SEC-WORLD-001：只供 Oracle 單主機獨立測試，不是正式 Verifier／Authorizer 部署。
+# 必須將此檔複製到隔離 lab 根目錄，並先產生 ./secrets/* 與既有的專用網路／資料卷。
+name: mir-sec-world001-lab
+
+services:
+  postgres:
+    image: postgres:17.6-alpine
+    container_name: mir-sec-world001-pg
+    restart: "no"
+    environment:
+      POSTGRES_DB: mir_sec_world_lab
+      POSTGRES_USER: mir_sec_owner
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_admin_password
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+    secrets:
+      - pg_admin_password
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - lab
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mir_sec_owner -d mir_sec_world_lab"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+    mem_limit: 768m
+    pids_limit: 128
+    security_opt:
+      - no-new-privileges:true
+
+  bootstrap:
+    profiles: ["bootstrap"]
+    image: mirage-api:standalone
+    user: "0:0"
+    restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    # 一次性資料庫建置須讀取不同 UID 持有的 0600 Secret；只增加唯讀／搜尋能力。
+    cap_add: [DAC_READ_SEARCH]
+    healthcheck:
+      disable: true
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    pids_limit: 64
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONPATH: /lab/source/src
+      PGHOST: mir-sec-world001-pg
+      PGDATABASE: mir_sec_world_lab
+      PGUSER: mir_sec_owner
+      MIRAGE_LAB_EXPLICIT: mir-sec-world001-lab
+    volumes:
+      - ./source:/lab/source:ro
+      - ./secrets:/lab/secrets:ro
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    networks:
+      - lab
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["python", "/lab/source/deploy/security-lab/provision.py"]
+
+  verifier-probe:
+    image: mirage-api:standalone
+    container_name: mir-sec-world001-verifier-probe
+    user: "10011:10011"
+    init: true
+    restart: "no"
+    read_only: true
+    healthcheck:
+      disable: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    mem_limit: 256m
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PGHOST: mir-sec-world001-pg
+      PGPORT: "5432"
+      PGDATABASE: mir_sec_world_lab
+      PGUSER: mir_sec_verifier
+    secrets:
+      - verifier_password
+    volumes:
+      - ./source:/lab/source:ro
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    networks:
+      - lab
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["python", "-c", "import time; time.sleep(86400)"]
+
+  authorizer-probe:
+    image: mirage-api:standalone
+    container_name: mir-sec-world001-authorizer-probe
+    user: "10012:10012"
+    init: true
+    restart: "no"
+    read_only: true
+    healthcheck:
+      disable: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    mem_limit: 256m
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PGHOST: mir-sec-world001-pg
+      PGPORT: "5432"
+      PGDATABASE: mir_sec_world_lab
+      PGUSER: mir_sec_authorizer
+    secrets:
+      - authorizer_password
+    volumes:
+      - ./source:/lab/source:ro
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    networks:
+      - lab
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["python", "-c", "import time; time.sleep(86400)"]
+
+  runtime-probe:
+    profiles: ["negative-tests"]
+    image: mirage-api:standalone
+    user: "10013:10013"
+    init: true
+    restart: "no"
+    read_only: true
+    healthcheck:
+      disable: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    mem_limit: 256m
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PGHOST: mir-sec-world001-pg
+      PGPORT: "5432"
+      PGDATABASE: mir_sec_world_lab
+      PGUSER: mir_sec_http_runtime
+    secrets:
+      - runtime_password
+    volumes:
+      - ./source:/lab/source:ro
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    networks:
+      - lab
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["python", "-c", "import time; time.sleep(86400)"]
+
+networks:
+  lab:
+    external: true
+    name: mir-sec-world001-lab-net
+
+volumes:
+  pgdata:
+    external: true
+    name: mir-sec-world001-pgdata
+
+secrets:
+  pg_admin_password:
+    file: ./secrets/pg_admin_password
+  verifier_password:
+    file: ./secrets/verifier_password
+  authorizer_password:
+    file: ./secrets/authorizer_password
+  runtime_password:
+    file: ./secrets/runtime_password

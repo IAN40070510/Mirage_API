@@ -142,7 +142,7 @@ def test_medusa_product_missing_uses_real_contract_and_synthetic_dataset(tmp_pat
     policy = ScenarioPolicy.model_validate({
         "schema_version": 1, "domain": "ecommerce",
         "policy_id": "medusa-p2-6a-test", "policy_version": "1",
-        "enabled": True, "trusted_sources": ["sentinel"],
+        "enabled": True, "trusted_sources": ["trusted-client"],
         "rules": [rule], "templates": [
             {
                 "template_id": "found",
@@ -161,7 +161,7 @@ def test_medusa_product_missing_uses_real_contract_and_synthetic_dataset(tmp_pat
     })
     engine = ScenarioEngine(policy, domain="ecommerce")
     assessment = AttackAssessment(
-        assessment_id="p2-6a-assessment", source_id="sentinel",
+        assessment_id="p2-6a-assessment", source_id="trusted-client",
         request_id=request.request_id,
         request_fingerprint=fingerprint_request(request),
         **runtime.model_dump(), site_id=scope.site_id,

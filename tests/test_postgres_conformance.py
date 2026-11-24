@@ -72,13 +72,23 @@ def postgres_dsn() -> str:
 
 
 def apply_schema(dsn: str) -> None:
-    """在測試資料庫套用版本化 World Runtime migration。"""
-    import psycopg
+    """以正式 checksum／交易鎖 migration runner 重入測試 Schema，不重建不可變表。"""
+    from deception.world.migrations import apply_migrations
 
     migrations = Path(__file__).parents[1] / "migrations"
-    with psycopg.connect(dsn) as connection:
-        for migration in sorted(migrations.glob("[0-9]*.sql")):
-            connection.execute(migration.read_text(encoding="utf-8"))
+    apply_migrations(dsn, migrations)
+
+
+def test_conformance_schema_bootstrap_is_idempotent(isolated_test_dsn):
+    """重複啟動 Schema 必須比對 checksum 並跳過既有 protected Cart 等不可變表。"""
+    import psycopg
+
+    apply_schema(isolated_test_dsn)
+    apply_schema(isolated_test_dsn)
+    with psycopg.connect(isolated_test_dsn) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM mirage_schema_migrations"
+        ).fetchone()[0] == len(list((Path(__file__).parents[1] / "migrations").glob("*.sql")))
 
 
 def scope(suffix: str) -> WorldScope:
@@ -595,6 +605,31 @@ def test_emergency_revocation_orders_send_authorization(isolated_test_dsn, send_
     assert observer.state(waiting.admission_id) is AdmissionState.ABANDONED
     assert grant_registered(observer, generation, evidence, registry) is None
     assert grant_registered(observer, uuid4().hex, evidence, registry) is not None
+
+
+def test_freeze_v1_start_send_after_generation_emergency_keeps_owner_and_single_use(isolated_test_dsn):
+    """授權後才撤銷 Generation 不回溯拒絕，但仍拒絕錯 owner、過期及重送。"""
+    control = PostgresAdmissionControl(isolated_test_dsn)
+    registry = PostgresProjectionRegistry(isolated_test_dsn)
+    evidence = projection_evidence(uuid4().hex * 2)
+    registry.register(evidence, registry_revision=1)
+    generation = uuid4().hex
+    admission = grant_registered(control, generation, evidence, registry)
+    identifier = admission.admission_id
+
+    assert control.claim(identifier, owner="sender", now=100) is AdmissionOperationResult.SUCCESS
+    assert control.authorize_send(identifier, now=100) is AdmissionOperationResult.SUCCESS
+    still_valid = grant_registered(control, generation, evidence, registry)
+    assert control.claim(still_valid.admission_id, owner="sender", now=100) is AdmissionOperationResult.SUCCESS
+    assert control.authorize_send(still_valid.admission_id, now=100) is AdmissionOperationResult.SUCCESS
+    control.emergency_revoke(generation)
+    assert control.state(identifier) is AdmissionState.SEND_AUTHORIZED
+    assert control.start_send(identifier, owner="intruder", now=101) is AdmissionOperationResult.REJECTED
+    assert control.start_send(identifier, owner="sender", now=admission.transmission_deadline) is AdmissionOperationResult.REJECTED
+    assert control.state(identifier) is AdmissionState.EXPIRED
+
+    assert control.start_send(still_valid.admission_id, owner="sender", now=101) is AdmissionOperationResult.SUCCESS
+    assert control.start_send(still_valid.admission_id, owner="sender", now=101) is AdmissionOperationResult.REJECTED
 
 
 @pytest.mark.parametrize("at_deadline", [False, True])

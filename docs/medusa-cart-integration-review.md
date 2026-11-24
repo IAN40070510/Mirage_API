@@ -22,6 +22,5 @@ Mirage 的 `/synthetic` 購物車、訂單、庫存預留與取消使用獨立�
 
 ## 模組與部署邊界
 
-所有 Profile、投影與領域實作留在 Mirage。外部 Gateway 的啟動、身份及導流由整合端明確配置；本模組不修改外部來源或切換服務。七項映射的固定來源及有效投影不等於完整 Store 相容或正式部署批准，實作與配置見[原生映射](medusa-carts.md)及[可選 Gateway 組裝](gateway-bootstrap.md)。
 
 自有文件採 Apache-2.0；採用的 Medusa 規格子集保留 MIT 聲明，未複製 Medusa 工作流程式。權利與套件見[授權表](licensing.md)。

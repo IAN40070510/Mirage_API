@@ -1,13 +1,26 @@
 # 工具說明文件索引
 
+Mirage 的安全架構仍為 Proposed，MIR-SEC-WORLD-001 維持 OPEN，
+release NO-GO。契約採納、實作與驗收分開記錄。
+
+[獨立運作、可信客戶端與驗收](standalone.md)。
+
 想知道某個工具做什麼、需要哪些資料、怎麼使用，可以從下面的表格找到說明。各份文件也會交代設定方式、檢查方法、授權，以及哪些部分還沒有實作。
 
 首次使用請先看[安裝與第一次使用](getting-started.md)；各節點分工見 [README 架構總覽](../README.md#系統架構)，部署組裝、快取及錯誤分支詳見 [詳細架構與執行邊界](architecture.md)。
 
 專案自有程式採 Apache-2.0；Medusa 規格、OWASP 分類資料、套件及模型的個別授權與封裝聲明見 [專案授權與第三方材料](licensing.md)。
 
+**跨輪修復總表**：[安全漏洞、整合阻礙與 HTTP 效能優化清單](security/world-db/remediation-and-performance-register.md)。此清單分開標示已重現的原始 SQL 權限缺口、隔離 PostgreSQL 局部 PASS、實際 Send／Purge／Restore 未完成的受保護整合，以及目前沒有端到端 HTTP P50／P95／P99 的效能缺口；效能門檻仍是提議，不能當成測試 PASS。
+
+**本輪修補切面**：[G3 Grant Binding／Authorizer 實作與未決驗收](security/world-db/grant-binding-implementation-status.md)。獨立分支新增 Promotion／Binding／受保護 Grant 草案；Row Lock 最小權限、實體 PostgreSQL 驗證、G4 Send Lease／Snapshot 與 G5 Restore 競態仍未完成，正式發送保持關閉。
+
 | 工具／介面 | 程式位置 | 說明文件 |
 | --- | --- | --- |
+| 獨立受保護 mTLS RPC（sealed） | `src/deception/security/protected_rpc.py`、`tests/test_protected_rpc_mtls.py` | [雙向憑證、服務隔離、固定拒絕與未完成的業務接線](protected-rpc.md) |
+| G3b 獨立服務角色與固定路由 | `src/deception/security/protected_services.py`、`deploy/security-lab/g3b-compose.yaml`、`tests/test_protected_services.py` | [Verifier／Inventory／Cart 專用 Secret、真 Login／ACL Preflight 與仍未完成的可信原生 HTTP 接線](protected-services.md) |
+| Medusa 可信 400／404 原生候選投影（G3b 增量） | `src/deception/world/protected_native_http.py`、`migrations/027_protected_medusa_rejections.sql` | [從獨立拒絕來源重建精確 JSON／Envelope Hash，尚非 Sender](protected-services.md#原生-http-回應投影子切面) |
+| 受保護一次性 Send Lease／ASGI（G4 增量） | `src/deception/world/protected_send.py`、`migrations/025_protected_send_leases.sql`、`tests/test_protected_send.py` | [精確 Authorized Snapshot Pin、單次 Lease、ASGI 首訊息與仍未接線的 Restore Fence](protected-send.md) |
 | 獨立 HTTPX 請求摘要 | `src/deception/api/fingerprint.py` | [不依賴外部 Gateway 的客戶端摘要](trusted-session.md#獨立客戶端的請求摘要) |
 | 請求與驗證結果 Audit | `src/deception/world/request_audit.py`、`migrations/016_request_observations.sql` | [假名化觀察、原子 Grant 關聯與故障處理](request-audit.md) |
 | 共用事件提交與標準結果 | `src/deception/world/commit.py`、`event_store.py`、`migrations/015_world_operation_result_digests.sql` | [五類結果、原子事件與唯讀恢復](commit-results.md) |
@@ -15,19 +28,19 @@
 | JWS 固定拒絕碼與簽發向量 | `tests/fixtures/golden_vectors/trusted_session_errors.json`、`sign_trusted_errors.mjs` | [格式、clock、撤銷及 Replay 邊界](trusted-session.md) |
 | 固定安全錯誤 Renderer | `src/deception/core/security_error.py` | [獨立模板、精確封套與請求綁定](security-errors.md) |
 | 可信簽章金鑰撤銷 | `src/deception/security/key_revocation.py`、`migrations/014_trusted_key_revocations.sql` | [永久墓碑、Replay 排序與輪替](key-revocation.md) |
+| 可信 Ingress Receipt 交易子切面 | `src/deception/security/ingress_receipt.py`、`migrations/017_trusted_ingress_receipts.sql`、`deploy/security-lab/receipt_atomic_probe.py`、`verifier_receipt_role_probe.py` | [JWS／Key Guard／Replay／Receipt 單交易與 Verifier 角色驗收界線](ingress-receipt.md) |
+| 可信 HTTP Operation Binding（G3b） | `src/deception/security/operation_binding.py`、`migrations/023_verified_http_operations.sql`、`migrations/024_verified_http_original_path.sql` | [原始 HTTP Snapshot 固定 Operation、Inventory／Cart／Order 受保護 Executor primitive、Medusa pin](ingress-receipt.md) |
+| World DB 隔離權限驗收 Lab | `deploy/security-lab/compose.yaml`、`provision.py`、`probe.py`、`atomic_ingress_probe.py` | [單機獨立 Docker 網路、SCRAM Role、SQLSTATE 42501 及同交易 Replay 實測](security/world-db/isolated-oracle-lab.md) |
 | 可信入口拒絕稽核 | `src/deception/security/ingress_audit.py`、`migrations/013_ingress_refusal_audit.sql` | [固定分類、資料最小化與故障處理](ingress-audit.md) |
 | Profile 整體撤銷 | `src/deception/world/projection_registry.py`、`admission.py`、`postgres_admission.py` | [一般／緊急墓碑、控制邊界與驗證](profile-revocation.md) |
 | Medusa 原生購物車映射 | `src/deception/domains/ecommerce/medusa_cart_http.py`、`medusa_cart_projection.py` | [原生路由、金額、匿名投影與隔離驗收](medusa-carts.md) |
 | 原生資源時間 | `src/deception/domains/ecommerce/native_time.py` | [UTC 格式、單調時間與歷史拒絕](medusa-carts.md) |
-| Gateway 部署組裝與已核准注入點 | `integrations/msdss/gateway_bootstrap.py` | [預設觀察政策、秘密檔與外部變更](gateway-bootstrap.md) |
-| Gateway 原版框架相容性環境 | `integrations/msdss/requirements.compatibility-test.txt` | [隔離版本清單與驗收邊界](gateway-bootstrap.md) |
 | 脫敏封裝與版本化資料庫更新 | `tools/package_runtime.py`、`tools/apply_migrations.py` | [操作邊界、輸入與驗證](runtime-operations.md) |
 | 匿名合成購物車與訂單 | `src/deception/domains/ecommerce/carts.py`、`cart_http.py` | [cart.id、訪客狀態、下單與取消](carts.md) |
 | 原生 Medusa 購物車範圍審查 | 固定來源與獨立 scoped Profile | [合成契約與原生接線的差異](medusa-cart-integration-review.md) |
 | 合成庫存預留與取消 | `src/deception/domains/ecommerce/inventory.py` | [交易、冪等與結果恢復](inventory.md) |
 | Session 世界映射與讀取准入 | `src/deception/world/session.py` | [Session、epoch 與 Watermark](world-runtime.md) |
 | Medusa 身份與匿名唯讀分組 | `src/deception/security/medusa_identity.py`、`anonymous_identity.py` | [驗證介面與啟用範圍](trusted-session.md) |
-| Trusted Session 部署與 Gateway | `src/deception/security/trusted_deployment.py`、`integrations/msdss/` | [JWS 接線、Replay 與限制](trusted-session.md) |
 | 共用模型與資料交換 | `src/deception/common/` | [嚴格型別、隔離範圍與通用資料投影](common-data.md) |
 | Synthetic World Runtime | `src/deception/world/` | [WorldScope、Snapshot、CAS 與 ResponseAdmission](world-runtime.md) |
 | 實作進度追蹤 | `docs/implementation-progress.md` | [目前完成項目、驗證紀錄與下一步](implementation-progress.md) |

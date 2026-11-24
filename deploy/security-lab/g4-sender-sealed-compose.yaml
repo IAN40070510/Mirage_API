@@ -1,0 +1,53 @@
+# G4 獨立 Sender 的封閉隔離部署候選；沒有送出權、沒有 G5 Fence。
+# 僅供 Secret/Network/ACL 實體測試，嚴禁直接用於 staging/production 發送。
+name: mirage-g4-sender-sealed
+
+services:
+  sender:
+    image: mirage-api:standalone
+    command: ["python", "-m", "deception.security.protected_services"]
+    profiles: ["g4-sender-sealed"]
+    user: "10025:10025"
+    restart: "no"
+    read_only: true
+    init: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 64
+    mem_limit: 256m
+    tmpfs: ["/tmp:size=16m,mode=1777"]
+    healthcheck:
+      disable: true
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      MIRAGE_G3B_SERVICE_ROLE: sender
+      MIRAGE_G3B_BIND_HOST: 0.0.0.0
+      MIRAGE_G3B_BIND_PORT: "8446"
+      MIRAGE_G3B_WORLD_SCHEMA: ${MIRAGE_G3B_WORLD_SCHEMA:?required}
+      MIRAGE_G4_SENDER_DSN_FILE: /run/secrets/g4_sender_dsn
+      MIRAGE_G4_SENDER_LOGIN: ${MIRAGE_G4_SENDER_LOGIN:?required}
+      MIRAGE_G4_SENDER_SERVER_CERT_FILE: /run/secrets/g4_sender_server_cert
+      MIRAGE_G4_SENDER_SERVER_KEY_FILE: /run/secrets/g4_sender_server_key
+      MIRAGE_G4_SENDER_CLIENT_CA_FILE: /run/secrets/g4_sender_client_ca
+      MIRAGE_TRUSTED_SEND_ENABLE: "false"
+    secrets:
+      - g4_sender_dsn
+      - g4_sender_server_cert
+      - g4_sender_server_key
+      - g4_sender_client_ca
+    networks: [g4_sender_delivery, g3b_database]
+    expose: ["8446"]
+
+networks:
+  g4_sender_delivery:
+    external: true
+    name: mirage-g4-sender-delivery-net
+  g3b_database:
+    external: true
+    name: mirage-g3b-database-net
+
+secrets:
+  g4_sender_dsn: {external: true}
+  g4_sender_server_cert: {external: true}
+  g4_sender_server_key: {external: true}
+  g4_sender_client_ca: {external: true}

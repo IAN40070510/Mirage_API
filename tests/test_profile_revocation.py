@@ -94,8 +94,8 @@ def test_profile_management_rejects_ambiguous_values_before_storage(profile, rev
 
 
 @pytest.mark.parametrize("stage", ["granted", "claimed", "authorized", "started"])
-def test_emergency_profile_revocation_stops_unsent_output(controls, stage):
-    """緊急撤銷阻止未完成的發送邊界；已起送仍記真實終態，不假稱追回已送 bytes。"""
+def test_emergency_profile_revocation_freezes_completed_authorization(controls, stage):
+    """Freeze v1：撤銷阻止未授權工作，授權已提交則不二次拒絕起送。"""
     registry, _, control, observer = controls
     evidence = projection_evidence(uuid4().hex * 2)
     registry.register(evidence, registry_revision=1)
@@ -120,6 +120,10 @@ def test_emergency_profile_revocation_stops_unsent_output(controls, stage):
     else:
         assert observer.finish_send(identifier, owner="sender", outcome=AdmissionState.SEND_COMPLETED) is AdmissionOperationResult.SUCCESS
         assert observer.state(identifier) is AdmissionState.SEND_COMPLETED
+        return
+    if stage == "authorized":
+        assert outcome is AdmissionOperationResult.SUCCESS
+        assert observer.state(identifier) is AdmissionState.SEND_STARTED
         return
     assert outcome is AdmissionOperationResult.REJECTED
     assert observer.state(identifier) is AdmissionState.ABANDONED
@@ -187,10 +191,11 @@ def test_postgres_emergency_profile_revoke_orders_send_authorization(isolated_te
     if send_first:
         assert first is AdmissionOperationResult.SUCCESS
         assert control.state(admission.admission_id) is AdmissionState.SEND_AUTHORIZED
-        assert control.start_send(admission.admission_id, owner="sender", now=100) is AdmissionOperationResult.REJECTED
+        assert control.start_send(admission.admission_id, owner="sender", now=100) is AdmissionOperationResult.SUCCESS
+        assert control.state(admission.admission_id) is AdmissionState.SEND_STARTED
     else:
         assert second is AdmissionOperationResult.REJECTED
-    assert control.state(admission.admission_id) is AdmissionState.ABANDONED
+        assert control.state(admission.admission_id) is AdmissionState.ABANDONED
 
 
 def test_profile_revocation_is_queryable_after_real_commit_reply_loss(isolated_test_dsn):

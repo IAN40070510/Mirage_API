@@ -1,6 +1,7 @@
 """匿名合成購物車、資源 ID 隔離與下單／取消的庫存事件。"""
 
 from copy import deepcopy
+from contextlib import nullcontext
 from dataclasses import dataclass
 import hashlib
 import json
@@ -32,7 +33,7 @@ class SyntheticCarts(SyntheticInventory):
     def create_cart(self, creator: SessionBinding, *, catalog: dict, inventory: dict,
                     idempotency_key: UUID, commit_attempt_id: UUID, now: int, ttl: int,
                     native_context: dict | None = None, initial_items: list | None = None,
-                    creation_digest: str | None = None) -> CartCreation:
+                    creation_digest: str | None = None, _trusted_connection=None) -> CartCreation:
         """以新隨機 cart ID 原子建立資源與世界，相同建立鍵回傳原結果。
 
         creator 只作已驗證的建立請求分組。購物車後續憑原生資源 ID 存取，
@@ -40,6 +41,7 @@ class SyntheticCarts(SyntheticInventory):
         native_context 為適配器已驗證的地區及聯絡欄位；initial_items 在初始化交易
         內套用，不預留庫存。creation_digest 綁定原生建立內容，同鍵異內容或初始
         品項不可接受時整筆回滾。成功同時保存資源、快照、收據與原生回應上下文。
+        私有交易連線只由獨立 Protected Executor 提供，來源證明與衍生世界須同交易提交。
         """
         if (not isinstance(idempotency_key, UUID) or idempotency_key.version != 4
                 or not isinstance(commit_attempt_id, UUID) or commit_attempt_id.version != 4
@@ -49,7 +51,8 @@ class SyntheticCarts(SyntheticInventory):
             raise ValueError("invalid cart creation digest")
         params = self._binding_params(creator)
         lock_key = json.dumps([*params, str(idempotency_key)])
-        with self._connection() as connection:
+        with (nullcontext(_trusted_connection) if _trusted_connection is not None
+              else self._connection()) as connection:
             current = connection.execute(
                 "SELECT session_epoch FROM session_heads WHERE environment_id=%s AND deployment_id=%s "
                 "AND session_id=%s FOR SHARE", params[:3]).fetchone()

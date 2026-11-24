@@ -1,0 +1,176 @@
+# G3b 服務分離範本，需手動建立外部網路、不可把此檔直接視為正式放行。
+# 無公開埠／無 Sender；未經部署級 Secret／ACL 驗收不得接 staging/production。
+name: mirage-g3b-isolated
+
+x-g3b-hardening: &g3b-hardening
+  image: mirage-api:standalone
+  restart: "no"
+  read_only: true
+  init: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  pids_limit: 64
+  mem_limit: 256m
+  tmpfs: ["/tmp:size=16m,mode=1777"]
+  profiles: ["g3b-isolated"]
+  command: ["python", "-m", "deception.security.protected_services"]
+  # Runtime image 的 /healthz:8000 屬於展示 API，不能當作隔離 mTLS 服務健康判定。
+  healthcheck:
+    disable: true
+
+services:
+  verifier:
+    <<: *g3b-hardening
+    user: "10021:10021"
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      MIRAGE_G3B_SERVICE_ROLE: verifier
+      MIRAGE_G3B_BIND_HOST: 0.0.0.0
+      MIRAGE_G3B_BIND_PORT: "8443"
+      MIRAGE_G3B_ENVIRONMENT_ID: ${MIRAGE_G3B_ENVIRONMENT_ID:?required}
+      MIRAGE_G3B_DEPLOYMENT_ID: ${MIRAGE_G3B_DEPLOYMENT_ID:?required}
+      MIRAGE_G3B_WORLD_SCHEMA: ${MIRAGE_G3B_WORLD_SCHEMA:?required}
+      MIRAGE_G3B_EXPECTED_ISSUER: ${MIRAGE_G3B_EXPECTED_ISSUER:?required}
+      MIRAGE_G3B_EXPECTED_AUDIENCE: ${MIRAGE_G3B_EXPECTED_AUDIENCE:?required}
+      MIRAGE_G3B_VERIFIER_LOGIN: ${MIRAGE_G3B_VERIFIER_LOGIN:?required}
+      MIRAGE_G3B_VERIFIER_DSN_FILE: /run/secrets/g3b_verifier_dsn
+      MIRAGE_G3B_VERIFIER_KEYS_FILE: /run/secrets/g3b_verifier_keys
+      MIRAGE_G3B_VERIFIER_SERVER_CERT_FILE: /run/secrets/g3b_verifier_server_cert
+      MIRAGE_G3B_VERIFIER_SERVER_KEY_FILE: /run/secrets/g3b_verifier_server_key
+      MIRAGE_G3B_GATEWAY_CLIENT_CA_FILE: /run/secrets/g3b_gateway_client_ca
+      MIRAGE_G3B_VERIFIER_CLIENT_CERT_FILE: /run/secrets/g3b_verifier_client_cert
+      MIRAGE_G3B_VERIFIER_CLIENT_KEY_FILE: /run/secrets/g3b_verifier_client_key
+      MIRAGE_G3B_EXECUTOR_SERVER_CA_FILE: /run/secrets/g3b_executor_server_ca
+      MIRAGE_G3B_INVENTORY_EXECUTOR_ORIGIN: https://inventory-executor:8444
+      MIRAGE_G3B_CART_EXECUTOR_ORIGIN: https://cart-executor:8444
+      MIRAGE_G3B_NATIVE_VALIDATOR_ORIGIN: https://native-validator:8445
+      MIRAGE_G3B_VERIFIER_VALIDATOR_CERT_FILE: /run/secrets/g3b_verifier_validator_cert
+      MIRAGE_G3B_VERIFIER_VALIDATOR_KEY_FILE: /run/secrets/g3b_verifier_validator_key
+      MIRAGE_G3B_NATIVE_VALIDATOR_SERVER_CA_FILE: /run/secrets/g3b_native_validator_server_ca
+      MIRAGE_TRUSTED_SEND_ENABLE: "false"
+    secrets:
+      - g3b_verifier_dsn
+      - g3b_verifier_keys
+      - g3b_verifier_server_cert
+      - g3b_verifier_server_key
+      - g3b_gateway_client_ca
+      - g3b_verifier_client_cert
+      - g3b_verifier_client_key
+      - g3b_executor_server_ca
+      - g3b_verifier_validator_cert
+      - g3b_verifier_validator_key
+      - g3b_native_validator_server_ca
+    networks: [g3b_gateway, g3b_execution, g3b_database]
+    expose: ["8443"]
+
+  inventory-executor:
+    <<: *g3b-hardening
+    user: "10022:10022"
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      MIRAGE_G3B_SERVICE_ROLE: executor
+      MIRAGE_G3B_BIND_HOST: 0.0.0.0
+      MIRAGE_G3B_BIND_PORT: "8444"
+      MIRAGE_G3B_EXECUTOR_DSN_FILE: /run/secrets/g3b_inventory_executor_dsn
+      MIRAGE_G3B_EXECUTOR_LOGIN: ${MIRAGE_G3B_INVENTORY_LOGIN:?required}
+      MIRAGE_G3B_EXECUTOR_PLATFORM: synthetic-inventory
+      MIRAGE_G3B_WORLD_SCHEMA: ${MIRAGE_G3B_WORLD_SCHEMA:?required}
+      MIRAGE_G3B_EXECUTOR_SERVER_CERT_FILE: /run/secrets/g3b_inventory_server_cert
+      MIRAGE_G3B_EXECUTOR_SERVER_KEY_FILE: /run/secrets/g3b_inventory_server_key
+      MIRAGE_G3B_VERIFIER_CLIENT_CA_FILE: /run/secrets/g3b_verifier_client_ca
+      MIRAGE_TRUSTED_SEND_ENABLE: "false"
+    secrets:
+      - g3b_inventory_executor_dsn
+      - g3b_inventory_server_cert
+      - g3b_inventory_server_key
+      - g3b_verifier_client_ca
+    networks: [g3b_execution, g3b_database]
+    expose: ["8444"]
+
+  cart-executor:
+    <<: *g3b-hardening
+    user: "10023:10023"
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      MIRAGE_G3B_SERVICE_ROLE: executor
+      MIRAGE_G3B_BIND_HOST: 0.0.0.0
+      MIRAGE_G3B_BIND_PORT: "8444"
+      MIRAGE_G3B_EXECUTOR_DSN_FILE: /run/secrets/g3b_cart_executor_dsn
+      MIRAGE_G3B_EXECUTOR_LOGIN: ${MIRAGE_G3B_CART_LOGIN:?required}
+      MIRAGE_G3B_EXECUTOR_PLATFORM: synthetic-carts
+      MIRAGE_G3B_WORLD_SCHEMA: ${MIRAGE_G3B_WORLD_SCHEMA:?required}
+      MIRAGE_G3B_CART_STATE_FILE: /run/secrets/g3b_cart_initial_state
+      MIRAGE_G3B_MEDUSA_PUBLISHABLE_KEY_FILE: /run/secrets/g3b_medusa_publishable_key
+      MIRAGE_G3B_EXECUTOR_SERVER_CERT_FILE: /run/secrets/g3b_cart_server_cert
+      MIRAGE_G3B_EXECUTOR_SERVER_KEY_FILE: /run/secrets/g3b_cart_server_key
+      MIRAGE_G3B_VERIFIER_CLIENT_CA_FILE: /run/secrets/g3b_verifier_client_ca
+      MIRAGE_TRUSTED_SEND_ENABLE: "false"
+    secrets:
+      - g3b_cart_executor_dsn
+      - g3b_cart_initial_state
+      - g3b_medusa_publishable_key
+      - g3b_cart_server_cert
+      - g3b_cart_server_key
+      - g3b_verifier_client_ca
+    networks: [g3b_execution, g3b_database]
+    expose: ["8444"]
+
+  native-validator:
+    <<: *g3b-hardening
+    user: "10024:10024"
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      MIRAGE_G3B_SERVICE_ROLE: validator
+      MIRAGE_G3B_BIND_HOST: 0.0.0.0
+      MIRAGE_G3B_BIND_PORT: "8445"
+      MIRAGE_G3B_WORLD_SCHEMA: ${MIRAGE_G3B_WORLD_SCHEMA:?required}
+      MIRAGE_G3B_VALIDATOR_DSN_FILE: /run/secrets/g3b_native_validator_dsn
+      MIRAGE_G3B_VALIDATOR_LOGIN: ${MIRAGE_G3B_VALIDATOR_LOGIN:?required}
+      MIRAGE_G3B_VALIDATOR_SERVER_CERT_FILE: /run/secrets/g3b_native_validator_server_cert
+      MIRAGE_G3B_VALIDATOR_SERVER_KEY_FILE: /run/secrets/g3b_native_validator_server_key
+      MIRAGE_G3B_VALIDATOR_CLIENT_CA_FILE: /run/secrets/g3b_native_validator_client_ca
+      MIRAGE_TRUSTED_SEND_ENABLE: "false"
+    secrets:
+      - g3b_native_validator_dsn
+      - g3b_native_validator_server_cert
+      - g3b_native_validator_server_key
+      - g3b_native_validator_client_ca
+    networks: [g3b_execution, g3b_database]
+    expose: ["8445"]
+
+networks:
+  g3b_gateway:
+    external: true
+    name: mirage-g3b-gateway-net
+  g3b_execution:
+    external: true
+    name: mirage-g3b-execution-net
+  g3b_database:
+    external: true
+    name: mirage-g3b-database-net
+
+secrets:
+  g3b_verifier_dsn: {external: true}
+  g3b_verifier_keys: {external: true}
+  g3b_verifier_server_cert: {external: true}
+  g3b_verifier_server_key: {external: true}
+  g3b_gateway_client_ca: {external: true}
+  g3b_verifier_client_cert: {external: true}
+  g3b_verifier_client_key: {external: true}
+  g3b_executor_server_ca: {external: true}
+  g3b_verifier_validator_cert: {external: true}
+  g3b_verifier_validator_key: {external: true}
+  g3b_native_validator_server_ca: {external: true}
+  g3b_inventory_executor_dsn: {external: true}
+  g3b_inventory_server_cert: {external: true}
+  g3b_inventory_server_key: {external: true}
+  g3b_verifier_client_ca: {external: true}
+  g3b_cart_executor_dsn: {external: true}
+  g3b_cart_initial_state: {external: true}
+  g3b_medusa_publishable_key: {external: true}
+  g3b_cart_server_cert: {external: true}
+  g3b_cart_server_key: {external: true}
+  g3b_native_validator_dsn: {external: true}
+  g3b_native_validator_server_cert: {external: true}
+  g3b_native_validator_server_key: {external: true}
+  g3b_native_validator_client_ca: {external: true}
