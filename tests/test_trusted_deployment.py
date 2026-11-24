@@ -34,30 +34,27 @@ def test_deployment_builds_provider_without_connecting_database():
     assert callable(settings().build_provider(postgres_dsn="postgresql://test"))
 
 
-def test_original_assessment_strict_mode_requires_independent_consumer_dsn():
-    """Strict receiver cannot silently use World DSN or downgrade to claims-only."""
-    with pytest.raises(ValueError, match="consumer DSN required"):
+def test_original_assessment_strict_mode_requires_injected_lookup():
+    """嚴格接收端缺可信外部查回時必須在啟動階段拒絕，不降級為 claims-only。"""
+    with pytest.raises(ValueError, match="trusted lookup"):
         settings(require_original_assessment=True).build_provider(
             postgres_dsn="postgresql://world-only"
         )
     with pytest.raises(ValueError, match="requires strict mode"):
         settings().build_provider(
             postgres_dsn="postgresql://world",
-            original_assessment_dsn="postgresql://consumer",
+            original_lookup=lambda _id: None,
         )
 
 
-def test_original_assessment_consumer_uses_exact_deployment_scope_without_connect():
-    """Strict private lookup is constructed with its own DSN, scope and consumer mode."""
-    from deception.security.original_assessment_store import PostgresOriginalAssessmentStore
-
+def test_original_assessment_consumer_injects_trusted_lookup_without_connect():
+    """嚴格模式只持有部署者傳入的查回介面，SQL 與 DB 角色由外部持有。"""
+    def lookup(_assessment_id):
+        """此測試刻意不建立外部連線；回傳缺失由接收端嚴格拒絕。"""
+        return None
     provider = settings(require_original_assessment=True).build_provider(
         postgres_dsn="postgresql://world",
-        original_assessment_dsn="postgresql://separate-consumer",
+        original_lookup=lookup,
     )
-    original = provider._original_lookup
-    assert isinstance(original, PostgresOriginalAssessmentStore)
-    assert original._dsn == "postgresql://separate-consumer"
-    assert original._mode == "consumer"
-    assert original._scope == ("env-1", "deploy-1", "detector", "store", "shop")
+    assert provider._original_lookup is lookup
     assert provider._require_original_assessment is True
