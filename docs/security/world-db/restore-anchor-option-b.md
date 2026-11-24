@@ -179,7 +179,8 @@ BD-05 automated Quarantine transition or Sender/Purge concurrency test.
 `.github/workflows/world-security-contract.yml` 新增**第二個全新 PostgreSQL
 17.6 CI service**（獨立於 World PG），以三個隨機臨時 SCRAM Login 測試
 Publisher／Reader／Runtime 的資料表 ACL、真正持久化 Head、舊世界回退、
-重送／缺口／錯簽章、直接 DML 防護。只允許專用 CI／Lab 啟用
+重送／缺口／錯簽章、直接 DML 防護，另以兩條獨立連線競爭相同下一個
+Checkpoint，核對唯一成功與 Ledger 不重複。只允許專用 CI／Lab 啟用
 `MIRAGE_G5_FENCE_TEST_DSN`；沒有變數必須 SKIP，不可算 PASS。
 
 **此項狀態仍是 G5 PARTIAL／NO-GO**：CI 只有兩個測試資料庫與用後即刪的

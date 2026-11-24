@@ -1,6 +1,7 @@
 """G5 第二個實體 PostgreSQL 的簽章 Anchor 發布／讀取與隔離 ACL 子驗收。"""
 
 from dataclasses import replace
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import os
 import secrets
@@ -162,3 +163,35 @@ def test_fence_lab_reader_cannot_write_or_forge_latest_head(fence_lab):
             restored_world_digest=first.world_digest, publisher_public_key=_public(publisher_key),
             head_public_key=_public(Ed25519PrivateKey.generate()),
         )
+
+
+def test_fence_lab_two_publishers_compete_for_one_next_head(fence_lab):
+    """兩個獨立 DB 連線同時發布同一下一節，只能成功一次且無重複 Ledger。"""
+    dsns, roles = fence_lab
+    namespace = f"isolated-{uuid4().hex}"
+    publisher_key = Ed25519PrivateKey.generate()
+    publisher = PostgresAnchorPublisher(
+        dsns["publisher"], expected_login=roles["publisher"],
+        publisher_public_key=_public(publisher_key))
+    first = _checkpoint(publisher_key, namespace=namespace, sequence=1,
+                        prior="0" * 64, first=1, last=3)
+    second = _checkpoint(publisher_key, namespace=namespace, sequence=2,
+                         prior=first.chain_digest(), first=4, last=7)
+    assert publisher.append(first) == first.chain_digest()
+
+    def attempt():
+        """以獨立連線競爭同一固定下一個 Head，不盲目 retry 不明結果。"""
+        try:
+            return publisher.append(second)
+        except RestoreAnchorError:
+            return "refused"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(lambda _: attempt(), range(2)))
+    assert sorted(outcomes) == [second.chain_digest(), "refused"]
+    with psycopg.connect(dsns["reader"]) as conn:
+        assert conn.execute("SELECT count(*) FROM mirage_restore_fence.checkpoints "
+                            "WHERE namespace=%s", (namespace,)).fetchone()[0] == 2
+        assert conn.execute("SELECT sequence,checkpoint_digest FROM mirage_restore_fence.heads "
+                            "WHERE namespace=%s", (namespace,)).fetchone() == (
+                                2, second.chain_digest())
