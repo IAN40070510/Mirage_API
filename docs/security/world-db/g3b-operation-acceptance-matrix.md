@@ -141,21 +141,27 @@ Validator 重建 200 `cancelled`，再以第三個 Receipt 重複取消該資源
 `success`。I-02 200／特定 409 **受保護候選子項 PASS**，仍缺 CAS conflict／
 其他 409 與原生 Client HTTP，整體 OPEN。
 
-**C-04／C-05 真品項更新／刪除候選（待本次真 PG CI）**：延伸同一受保護
+**C-04／C-05 真品項更新／刪除候選（固定 SHA `bcb0c68af9dc84693ead1b464be211d30354032a`，隔離 PASS）**：延伸同一受保護
 Cart→Order 測試，在 C-03 add 後以獨立 Receipt 綁定實際品項 ID，執行
 C-04 update 200（數量與合成總額）、C-05 delete 200（空品項與總額歸零），
 並分別重送同 Receipt 確認不雙寫。兩條均另取新 Receipt 驗證真正不存在的
 品項 `cart_item_not_found` 409，由 `rejected` WorldOperation 與獨立 Validator
 重建固定 JSON，失敗不推進 World 版本；惡意替換更新 Body／Path 或刪除
 Body 不得重綁 Proof。最後再 add→complete→order GET→cancel，核對連續
-世界版本。只有程式與測試準備好，**目前不得標記 CI PASS、正式 Client HTTP
-或 G3b 解封**。
+世界版本。[真 PostgreSQL 17.6 CI 45316183177](https://github.com/IAN40070510/Mirage_API/actions/runs/45316183177)
+`152 passed`、實體 mTLS `5 passed`，
+[Python CI 45316183239](https://github.com/IAN40070510/Mirage_API/actions/runs/45316183239)
+`1425 passed / 21 skipped / 2 warnings`，
+[容器 CI 45316183175](https://github.com/IAN40070510/Mirage_API/actions/runs/45316183175)
+`success`。**只有受保護候選來源及隔離子項 PASS**，非 Client 原生 HTTP，
+亦不得據此解封 G3b。
 
-**Cart 成功候選與快照一致性補強（待本次真 PG CI）**：C-03～C-05
+**Cart 成功候選與快照一致性補強（同 SHA `bcb0c68`，隔離 PASS）**：C-03～C-05
 獨立 Validator 現在要求已提交 Result 的 Cart ID、全部品項 ID／數量／價格、
 總額、狀態與已驗雜湊的當前 WorldSnapshot 逐欄相同；品項的原生陣列順序
 不影響等值，但重複品項、跨 Cart、不同金額或缺少品項固定拒絕。這防止
-一份結構合法且自行重算 Digest 的錯誤 Cart Result 冒充該次成功候選；
+一份結構合法且自行重算 Digest 的錯誤 Cart Result 冒充該次成功候選。
+真 PG 合約 `152 passed` 包含這道檢查的正向路徑與負面單元測試，
 不等於已驗證 Client HTTP 或擁有 Send 授權。
 
 | G3b 子門檻 | 獨立實測結果 | 正式簽收 |
@@ -181,8 +187,8 @@ Body 不得重綁 Proof。最後再 add→complete→order GET→cancel，核對
 | C-01 | POST `/synthetic/carts` | 隔離 PASS | 受保護 Creator→衍生 Cart | OPEN：200／409、原始成功封套 |
 | C-02 | GET `/synthetic/carts/{cart_id}` | 隔離 PASS | 受保護 ReadAdmission＋來源 ID；獨立 Validator 按派生 Cart、目前 Snapshot 重建 200 候選，真 PG 測試 PASS | OPEN：409 來源、客戶端原生 HTTP |
 | C-03 | POST `/synthetic/carts/{cart_id}/line-items` | 隔離 PASS | 受保護 add 200 Commit／Validator 候選真 PG PASS；409 候選固定 Handler 存在 | OPEN：其餘 409、原生 HTTP |
-| C-04 | POST `/synthetic/carts/{cart_id}/line-items/{item_id}` | 隔離 PASS | 受保護 update；新增真品項 200、缺品項 409、重送與 Proof 防替換測試，待真 PG CI | OPEN：其他 409／CAS、原生 HTTP、實體部署 |
-| C-05 | DELETE `/synthetic/carts/{cart_id}/line-items/{item_id}` | 隔離 PASS | 受保護 remove；新增真品項 200、重複刪除 409、重送與 Proof 防替換測試，待真 PG CI | OPEN：其他 409／CAS、原生 HTTP、實體部署 |
+| C-04 | POST `/synthetic/carts/{cart_id}/line-items/{item_id}` | 隔離 PASS | 受保護 update；真品項 200、缺品項 409、重送與 Proof 防替換，SHA `bcb0c68` 真 PG PASS | OPEN：其他 409／CAS、原生 HTTP、實體部署 |
+| C-05 | DELETE `/synthetic/carts/{cart_id}/line-items/{item_id}` | 隔離 PASS | 受保護 remove；真品項 200、重複刪除 409、重送與 Proof 防替換，SHA `bcb0c68` 真 PG PASS | OPEN：其他 409／CAS、原生 HTTP、實體部署 |
 | C-06 | POST `/synthetic/carts/{cart_id}/complete` | 隔離 PASS | 受保護 complete 版本 3／獨立 Validator 200 候選，SHA `eb118a7` 真 PG PASS；409 固定 Handler 存在 | OPEN：其餘 409、原生 HTTP |
 | C-07 | GET `/synthetic/orders/{order_id}` | 隔離 PASS | 獨立 Validator 按受保護派生 Order、ReadAdmission 重建 200，SHA `eb118a7` 真 PG PASS | OPEN：409 來源、原生 HTTP |
 | C-08 | POST `/synthetic/orders/{order_id}/cancel` | 隔離 PASS | 受保護 cancel_order 版本 4／獨立 Validator 按原始 Order ID 綁定 200，SHA `eb118a7` 真 PG PASS | OPEN：其餘 409、原生 HTTP |
