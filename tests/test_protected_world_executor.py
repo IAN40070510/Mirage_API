@@ -782,7 +782,13 @@ def test_cart_http_verified_receipt_drives_real_fixed_world_handler(isolated_tes
     executor = PostgresProtectedWorldExecutor(dsn, expected_login=_real_login(dsn),
                                                world_store=store,
                                                cart_initial_state={"catalog": catalog, "inventory": inventory},
-                                               rejection_templates={"cart_item_not_found": "synthetic-carts-1"})
+                                               rejection_templates={
+                                                   code: "synthetic-carts-1" for code in (
+                                                       "cart_item_not_found", "unknown_synthetic_variant",
+                                                       "insufficient_synthetic_inventory", "empty_synthetic_cart",
+                                                       "cart_not_active", "order_not_cancellable",
+                                                   )
+                                               })
     created = executor.create_cart(receipt_id=creator_receipt, creator=creator,
                                    request_fingerprint=digest("a"), idempotency_key=uuid4(),
                                    commit_attempt_id=uuid4(), creation_digest=digest("d"), ttl=180)
@@ -937,6 +943,49 @@ def test_cart_http_verified_receipt_drives_real_fixed_world_handler(isolated_tes
             )
         return new_receipt, original.raw_path
 
+    def assert_fixed_cart_rejection(*, request_path: str, body: dict,
+                                    resource: SessionBinding, expected_operation: str,
+                                    expected_code: str, version: int) -> None:
+        """在真 PG 由獨立 Receipt 重建固定 409，並核對重送未建立第二份來源或世界事件。"""
+        raw_body = json.dumps({**body, "commit_attempt_id": str(uuid4())}).encode()
+        rejection_receipt, rejection_path = issue_cart_http_proof(
+            request_path, body=raw_body, resource=resource,
+        )
+        rejected = executor.execute_verified_http(
+            receipt_id=rejection_receipt, raw_path=rejection_path, raw_body=raw_body,
+        )
+        assert rejected["operation"] == expected_operation
+        assert rejected["status"] == "rejected" and rejected["state_version"] is None
+        projection = projector.project_synthetic_rejection(rejection_receipt)
+        assert projection.operation_id == expected_operation and projection.status_code == 409
+        assert projection.body_bytes == json.dumps({"code": expected_code}, sort_keys=True,
+                                                  separators=(",", ":")).encode()
+        assert executor.execute_verified_http(
+            receipt_id=rejection_receipt, raw_path=rejection_path, raw_body=raw_body,
+        )["status"] == "rejected"
+        with psycopg.connect(dsn) as connection:
+            assert connection.execute(
+                "SELECT version FROM world_snapshots WHERE world_generation_id=%s",
+                (snapshot.scope.world_generation_id,),
+            ).fetchone()[0] == version
+            assert connection.execute(
+                "SELECT count(*) FROM protected_world_rejection_sources WHERE receipt_id=%s",
+                (rejection_receipt,),
+            ).fetchone()[0] == 1
+
+    # C-03：只准由已提交的真正 Handler 拒絕核發 409；未知變體與庫存不足
+    # 都不能改動已存在的 Cart 品項或假稱一次成功 Commit。
+    for variant, quantity, code, idempotency in (
+            ("absent", 1, "unknown_synthetic_variant", "unknown-variant"),
+            ("v1", 99, "insufficient_synthetic_inventory", "overstocked")):
+        assert_fixed_cart_rejection(
+            request_path=path,
+            body={"variant_id": variant, "quantity": quantity,
+                  "expected_version": 2, "idempotency_key": idempotency},
+            resource=binding, expected_operation="addGuestCartItem",
+            expected_code=code, version=2,
+        )
+
     item_id = cart_payload["cart"]["items"][0]["id"]
     item_path = path + "/" + item_id
     update_body = json.dumps({"quantity": 3, "expected_version": 2,
@@ -1037,6 +1086,14 @@ def test_cart_http_verified_receipt_drives_real_fixed_world_handler(isolated_tes
             (snapshot.scope.world_generation_id,),
         ).fetchone()[0] == 4
 
+    # C-06：Cart 品項確實已空，empty_synthetic_cart 只能來自真 Handler。
+    assert_fixed_cart_rejection(
+        request_path="/synthetic/carts/" + binding.resource_id + "/complete",
+        body={"expected_version": 4, "idempotency_key": "complete-empty-cart"},
+        resource=binding, expected_operation="completeGuestCart",
+        expected_code="empty_synthetic_cart", version=4,
+    )
+
     refill_body = json.dumps({"variant_id": "v1", "quantity": 2, "expected_version": 4,
                               "idempotency_key": "refill-for-complete",
                               "commit_attempt_id": str(uuid4())}).encode()
@@ -1067,6 +1124,14 @@ def test_cart_http_verified_receipt_drives_real_fixed_world_handler(isolated_tes
     assert complete_payload["order"]["cart_id"] == binding.resource_id
     assert complete_payload["order"]["status"] == "placed"
     order_id = complete_payload["order"]["id"]
+
+    # C-06：已完成的 Cart 不能再次完成，沒有新 Order 或新 World 版本。
+    assert_fixed_cart_rejection(
+        request_path="/synthetic/carts/" + binding.resource_id + "/complete",
+        body={"expected_version": 6, "idempotency_key": "complete-twice"},
+        resource=binding, expected_operation="completeGuestCart",
+        expected_code="cart_not_active", version=6,
+    )
 
     order_binding = store.resource_binding(
         order_id, environment_id=binding.environment_id,
@@ -1103,6 +1168,14 @@ def test_cart_http_verified_receipt_drives_real_fixed_world_handler(isolated_tes
     assert cancelled_payload["order"]["cart_id"] == binding.resource_id
     assert cancelled_payload["order"]["status"] == "cancelled"
     assert cancelled_payload["state_version"] == 7
+
+    # C-08：已取消的 Order 不能再次釋回庫存；拒絕來源仍和原 Order ID 綁定。
+    assert_fixed_cart_rejection(
+        request_path="/synthetic/orders/" + order_id + "/cancel",
+        body={"expected_version": 7, "idempotency_key": "cancel-order-twice"},
+        resource=order_binding, expected_operation="cancelSyntheticOrder",
+        expected_code="order_not_cancellable", version=7,
+    )
 
 
 def test_untrusted_legacy_cart_cannot_enter_verified_http_executor(isolated_test_dsn):
