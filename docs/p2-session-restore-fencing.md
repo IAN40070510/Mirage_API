@@ -33,7 +33,7 @@ approval before accepting new trusted deception traffic.
 
 Verification:
 - Native no-DB test: test_session_worlds.py::test_reserved_recovery_epoch_is_always_refused_without_database.
-- MSDSS isolated PostgreSQL acceptance: 7/7 World/Session/Admission tests
+- 外部判定服務 isolated PostgreSQL acceptance: 7/7 World/Session/Admission tests
   including a real T0 backup, T1 emergency + epoch advance + start_send, T2
   offline restore, and forged reserved-epoch rejection.
 - All code and patch for review remain in Draft PRs. Never apply the

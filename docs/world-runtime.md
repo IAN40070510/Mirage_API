@@ -103,11 +103,11 @@ PostgreSQL Conformance 沒有設定 DSN 時會明確 skip；Golden Vector 與 Fa
 
 兩個 worker 正常退出後，父程序另建第三個控制器驗證重放仍拒絕、Claim 不可再領取、世界不被新提案覆蓋。這驗證程序退出後的共享資料持久性，不是 PostgreSQL 重啟或多主機分區測試。90 秒觀察期限只用於測試等待，超時不算成功，也不自動重做操作。測試只終止自己建立的 worker，結束會刪除自身 schema；不得指向正式資料庫。
 
-AUTH-10 另外使用 `tests/test_ingress_processes.py` 啟動兩個不同 PID 的 HTTPS 驗章入口，使用真正 ingress 正規化、TrustedSession provider 及共享 PostgreSQL Replay。父程序確認兩個 TLS healthz 已回應後並行送同一固定 JWS；網路目的 socket 不同，但簽章涵蓋的 authority、path、query、原始 headers 及 JWS 相同。必須一個成功、一個固定 503；後續兩者都拒絕，worker 退出後重建 provider 仍拒絕。這是驗章邊界的端到端測試，不啟動模型或執行業務；完整 Gateway→業務流程由 test_msdss_wire 另驗。需要 OpenSSL 與專用 DSN，TLS 測試 key 只在本機 pytest 暫存目錄，不上傳 SSH。
+AUTH-10 另外使用 `tests/test_ingress_processes.py` 啟動兩個不同 PID 的 HTTPS 驗章入口，使用真正 ingress 正規化、TrustedSession provider 及共享 PostgreSQL Replay。父程序確認兩個 TLS healthz 已回應後並行送同一固定 JWS；網路目的 socket 不同，但簽章涵蓋的 authority、path、query、原始 headers 及 JWS 相同。必須一個成功、一個固定 503；後續兩者都拒絕，worker 退出後重建 provider 仍拒絕。這是驗章邊界的端到端測試，不啟動模型或執行業務；完整 Gateway→業務流程由 外部端歷史相容案例 另驗。需要 OpenSSL 與專用 DSN，TLS 測試 key 只在本機 pytest 暫存目錄，不上傳 SSH。
 
 `tests/test_http_world_isolation.py` 則啟動兩個完整可信電商服務程序，包含資源接收端核對、交易、Gate、Renderer 及傳輸紀錄。SEC-05 的 72 組負例使用有效測試簽章，分別變異環境、部署、Session、epoch、mode、世代 claims 或路徑資源，核對已存在／不存在資源在 `/store`／`/synthetic` 都有相同拒絕 bytes。世代不屬於 Client 可指定的 JWS 欄位，加入該欄位即拒絕。服務先重查完整資源 binding，拒絕不初始化替代世界；這項檢查獨立於 Gateway 身份適配器。
 
-WORLD-02 透過兩個 TLS 服務交錯增加不同數量，再跨程序完成兩個 Session 的訂單、取消 A 並查詢 B，檢查 B 的完整快照保持一致。測試只用固定合成資料與本機短期 key，不接 Medusa、庫存或付款系統；需要專用 PostgreSQL DSN、OpenSSL 及本機 MSDSS request fingerprint 原始碼供比對。失敗不改走其他 Backend，也不自動重試操作。
+WORLD-02 透過兩個 TLS 服務交錯增加不同數量，再跨程序完成兩個 Session 的訂單、取消 A 並查詢 B，檢查 B 的完整快照保持一致。測試只用固定合成資料與本機短期 key，不接 Medusa、庫存或付款系統；需要專用 PostgreSQL DSN、OpenSSL 及公開的 request fingerprint golden vectors供比對。失敗不改走其他 Backend，也不自動重試操作。
 
 ## 授權與限制
 

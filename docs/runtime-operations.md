@@ -2,14 +2,14 @@
 
 ## 用途與邊界
 
-`tools/package_runtime.py` 建立 Docker runtime 所需檔案的白名單封存，不連線、不上傳、不切換服務。`tools/apply_migrations.py` 只更新指定 Mirage 資料庫；不可指向 Medusa 或其他 MSDSS 元件資料庫。部署者仍須確認資料庫備份與變更時機。
+`tools/package_runtime.py` 建立 Docker runtime 所需檔案的白名單封存，不連線、不上傳、不切換服務。`tools/apply_migrations.py` 只更新指定 Mirage 資料庫；不可指向 Medusa 或其他外部判定服務元件資料庫。部署者仍須確認資料庫備份與變更時機。
 
 ## 輸入、輸出與範例
 
 在本機專案根目錄執行：
 
 ```powershell
-python tools/package_runtime.py --output generated/runtime.tar.gz --redact-doc '/private/workspace/mirage=/srv/MSDSS/mirage'
+python tools/package_runtime.py --output generated/runtime.tar.gz
 python tools/apply_migrations.py
 ```
 
@@ -42,7 +42,7 @@ python tools/check_documentation.py
 
 ## 隔離邏輯備份還原
 
-先停止專用驗收 runtime 的寫入，以 PostgreSQL 16 `pg_dump -Fc` 備份 Mirage 專用來源 DB，再用 `createdb` 建立不同名稱的空 DB，透過 `pg_restore --no-owner --no-privileges --exit-on-error -d <新DB>` 還原。不要對既有 DB 使用清除或覆寫選項；備份可能含敏感資料，需留在已授權的隔離環境。本次範圍只有合成資料，不包含 Medusa 或其他 MSDSS DB。
+先停止專用驗收 runtime 的寫入，以 PostgreSQL 16 `pg_dump -Fc` 備份 Mirage 專用來源 DB，再用 `createdb` 建立不同名稱的空 DB，透過 `pg_restore --no-owner --no-privileges --exit-on-error -d <新DB>` 還原。不要對既有 DB 使用清除或覆寫選項；備份可能含敏感資料，需留在已授權的隔離環境。本次範圍只有合成資料，不包含 Medusa 或其他外部判定服務 DB。
 
 還原完成後，設定 `MIRAGE_BACKUP_RESTORE_TEST=true`、`MIRAGE_BACKUP_SOURCE_TEST_DSN` 及 `MIRAGE_BACKUP_RESTORE_TEST_DSN`，執行 `python -m pytest tests/test_database_restore.py -q`。測試要求不同 DB 名稱與相同 schema，以唯讀一致快照比對所有表的列數及完整資料摘要，確認世界、事件、提交收據、兩種稽核與 Profile／key 墓碑非空，並重新驗證快照完整性及撤銷拒絕。完整性檢查不延長已到期 lease，也不重新授權世界。
 
