@@ -20,8 +20,10 @@ BEGIN
     IF current_state IS NULL THEN
         RAISE EXCEPTION 'protected_snapshot_purge_admission_missing' USING ERRCODE = '42501';
     END IF;
-    IF current_state = 'SEND_STARTED' OR EXISTS (
-        SELECT 1 FROM protected_send_leases WHERE admission_id = NEW.admission_id
+    IF current_state = 'SEND_STARTED' OR (
+        current_state = 'SEND_AUTHORIZED' AND EXISTS (
+            SELECT 1 FROM protected_send_leases WHERE admission_id = NEW.admission_id
+        )
     ) THEN
         RAISE EXCEPTION 'protected_snapshot_purge_active_or_unknown_send'
             USING ERRCODE = '42501';

@@ -139,6 +139,36 @@ def test_active_send_lease_prevents_snapshot_purge_fence(isolated_test_dsn):
         ).fetchone() == ("SEND_STARTED",)
 
 
+def test_terminal_send_allows_retention_fence_without_rearming_lease(isolated_test_dsn):
+    """真實 ASGI 終態落盤後可建立清理 Fence，但不可撤銷過去 Lease 或重送。"""
+    import psycopg
+
+    admission, owner, envelope, seeded = _authorized_pin(isolated_test_dsn)
+    sender = PostgresProtectedSender(isolated_test_dsn, expected_login=_login(isolated_test_dsn))
+    purger = PostgresProtectedSnapshotPurger(isolated_test_dsn,
+                                             expected_login=_login(isolated_test_dsn))
+    args = dict(admission_id=admission.admission_id, receipt_id=seeded[3],
+                owner=owner, request_fingerprint=admission.request_binding_digest,
+                expected_envelope=envelope)
+    lease = sender.start_send(**args)
+    assert lease is not None
+    assert sender.finish_send(admission_id=admission.admission_id, owner=owner,
+                              lease_id=lease.lease_id, outcome=AdmissionState.SEND_COMPLETED,
+                              attempted=True) is AdmissionOperationResult.SUCCESS
+    assert purger.fence_snapshot(admission_id=admission.admission_id,
+                                 gc_operation_id=uuid4(), purge_reason="retention_expired")
+    assert sender.start_send(**args) is None
+    with psycopg.connect(isolated_test_dsn) as connection:
+        assert connection.execute(
+            "SELECT state FROM response_admissions WHERE admission_id=%s",
+            (admission.admission_id,),
+        ).fetchone() == ("SEND_COMPLETED",)
+        assert connection.execute("SELECT count(*) FROM protected_send_leases").fetchone() == (1,)
+        assert connection.execute(
+            "SELECT count(*) FROM protected_authorized_snapshot_purge_fences",
+        ).fetchone() == (1,)
+
+
 def test_concurrent_snapshot_purge_and_start_send_are_serialized(isolated_test_dsn):
     """GC／Sender 競爭只能 Fence 或 StartSend 擇一成功，不能同時提交。"""
     import psycopg
