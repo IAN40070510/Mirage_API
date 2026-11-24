@@ -200,6 +200,27 @@ G5 實體 DB 案例在此流程因未設第二 DSN 而明確 SKIP，不能重複
 實際生產環境、實際 World DB `pg_restore` 後的原子 Quarantine
 或 `RESTORE-ANCHOR-01`～`06` 完整簽核；不得因子項成功解除 Sender。
 
+### 2026-11-24 Fence COMMIT ACK 遺失增量（隔離紅綠驗證）
+
+在最新獨立 Mirage 主線（已移除 consumer-owned MSDSS integration）新增
+`test_fence_lab_lost_commit_ack_fails_closed_and_does_not_republish`：
+對全新、內部網路、SCRAM PostgreSQL 17.6 的 Publisher 真正完成第一筆
+Checkpoint 與 Head 更新，卻在交易 context 返回前注入 `OSError` 模擬
+COMMIT ACK 遺失。修補前 `job_01M872NHKW007H9CZSQW7Z1WFK` **1 failed**，
+確認原始系統層例外直接逸出；修補後 `PostgresAnchorPublisher.append()`
+與 `PostgresAnchorHeadReader._query()` 將 `OSError` 和 `psycopg.Error`
+統一為固定的 `RestoreAnchorError`。`job_01M872QV9H00ERXYFVVFV1DKZ3`
+真 PostgreSQL **6 passed**：Ledger/Head 僅有第一節、同一鏈節重送遭拒、
+第二節正確前進，Head Reader Transport 錯誤亦固定 fail-closed。
+`job_01M872S382003FFHANZ58PDX80` 另有密碼學與 standalone runtime
+**12 passed**；第一次 `-I` 執行因臨時 Runner 未安裝原生 Python Package
+而報錯，補齊一次性隔離 venv 中的本地封包連結後全過，未更動產品入口。
+
+此增量只處理**單一 Fence DB 交易結果的不可驗證錯誤類型**與防盲重送；
+World DB ↔ Fence DB 的跨庫 Commit Intent／ACK 對帳、完整事件語意、
+BD-05 Quarantine 原子解禁及 Sender／Purge 競態仍未實作，G5 不得簽成 PASS。
+本輪資料庫和網路均為拋棄式合成實驗，未觸及 staging/production。
+
 **此項狀態仍是 G5 PARTIAL／NO-GO**：CI 只有兩個測試資料庫與用後即刪的
 隔離角色，尚未完成正式憑證隔離、不可回退的獨立最高 Head Authority、
 端到端事件語意覆蓋、World DB 發布意圖與雙向未知 ACK 對帳、BD-05

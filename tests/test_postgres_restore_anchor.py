@@ -195,3 +195,81 @@ def test_fence_lab_two_publishers_compete_for_one_next_head(fence_lab):
         assert conn.execute("SELECT sequence,checkpoint_digest FROM mirage_restore_fence.heads "
                             "WHERE namespace=%s", (namespace,)).fetchone() == (
                                 2, second.chain_digest())
+
+
+def test_fence_lab_lost_commit_ack_fails_closed_and_does_not_republish(
+    fence_lab, monkeypatch,
+):
+    """真 PG COMMIT 成功但回覆遺失時，回報固定失敗且不重寫同一鏈節。"""
+    from deception.world import postgres_restore_anchor as anchor_module
+
+    dsns, roles = fence_lab
+    namespace = f"isolated-{uuid4().hex}"
+    key = Ed25519PrivateKey.generate()
+    publisher = PostgresAnchorPublisher(
+        dsns["publisher"], expected_login=roles["publisher"],
+        publisher_public_key=_public(key),
+    )
+    first = _checkpoint(key, namespace=namespace, sequence=1,
+                        prior="0" * 64, first=1, last=3)
+    second = _checkpoint(key, namespace=namespace, sequence=2,
+                         prior=first.chain_digest(), first=4, last=5)
+    real_connect = psycopg.connect
+
+    class DropCommittedAck:
+        """只將測試連線的真 COMMIT 回覆改為遺失，不攔截資料庫寫入。"""
+
+        def __init__(self, connection):
+            """持有單一已建立的真 PostgreSQL 連線。"""
+            self.connection = connection
+
+        def __enter__(self):
+            """原封不動進入真正的 psycopg 交易。"""
+            return self.connection.__enter__()
+
+        def __exit__(self, error_type, error, traceback):
+            """先由 psycopg 真提交，再丟棄觀察者收到的 ACK。"""
+            result = self.connection.__exit__(error_type, error, traceback)
+            if error_type is None:
+                raise OSError("synthetic_commit_ack_lost")
+            return result
+
+    def lost_ack_connect(*args, **kwargs):
+        """僅在一次 Publisher append 呼叫中包裝連線。"""
+        return DropCommittedAck(real_connect(*args, **kwargs))
+
+    with monkeypatch.context() as patcher:
+        patcher.setattr(anchor_module.psycopg, "connect", lost_ack_connect)
+        with pytest.raises(RestoreAnchorError, match="publish_unverifiable"):
+            publisher.append(first)
+
+    with psycopg.connect(dsns["reader"]) as connection:
+        assert connection.execute(
+            "SELECT sequence,checkpoint_digest FROM mirage_restore_fence.heads "
+            "WHERE namespace=%s", (namespace,),
+        ).fetchone() == (1, first.chain_digest())
+        assert connection.execute(
+            "SELECT count(*) FROM mirage_restore_fence.checkpoints WHERE namespace=%s",
+            (namespace,),
+        ).fetchone()[0] == 1
+    with pytest.raises(RestoreAnchorError, match="sequence_or_coverage"):
+        publisher.append(first)
+    assert publisher.append(second) == second.chain_digest()
+
+
+def test_fence_head_transport_oserror_is_fail_closed(monkeypatch):
+    """Head Authority 連線中斷必須回傳固定不可驗證錯誤，不能宣告安全復原。"""
+    from deception.world import postgres_restore_anchor as anchor_module
+
+    reader = PostgresAnchorHeadReader(
+        "postgresql://unreachable.invalid/not-used", expected_login="fence_reader",
+        head_private_key=Ed25519PrivateKey.generate(),
+    )
+
+    def fail_connection(*args, **kwargs):
+        """在任何真實網路連線前模擬底層 Transport OSError。"""
+        raise OSError("synthetic_fence_network_failure")
+
+    monkeypatch.setattr(anchor_module.psycopg, "connect", fail_connection)
+    with pytest.raises(RestoreAnchorError, match="head_unverifiable"):
+        reader.observe_head("isolated-test", "epoch-test", b"x" * 32)

@@ -94,7 +94,7 @@ class PostgresAnchorPublisher:
                             (checkpoint.sequence, digest, checkpoint.namespace, checkpoint.epoch),
                         )
             return digest
-        except psycopg.Error as exc:
+        except (psycopg.Error, OSError) as exc:
             raise RestoreAnchorError("restore_anchor_publish_unverifiable") from exc
 
 
@@ -121,7 +121,7 @@ class PostgresAnchorHeadReader:
                         raise RestoreAnchorError("restore_anchor_head_login_mismatch")
                     cursor.execute(statement, args)
                     return cursor.fetchall()
-        except psycopg.Error as exc:
+        except (psycopg.Error, OSError) as exc:
             raise RestoreAnchorError("restore_anchor_head_unverifiable") from exc
 
     def observe_head(self, namespace: str, epoch: str, challenge: bytes) -> SignedAnchorHead:
