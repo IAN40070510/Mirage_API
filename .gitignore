@@ -36,4 +36,3 @@ generated/*
 .aws/
 .codex/
 .agents/
-integrations/msdss/gateway-lifespan.proposed.patch

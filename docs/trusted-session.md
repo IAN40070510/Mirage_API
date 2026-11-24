@@ -2,7 +2,7 @@
 
 ## 用途與邊界
 
-### 可選原始判定嚴格綁定（MSDSS 測試移交）
+### 可選原始判定嚴格綁定（外部資料提供者）
 
 `TrustedSessionAssessmentProvider` 新增 `original_lookup: OriginalAssessmentLookup | None` 與 `require_original_assessment: bool = False`。預設維持原行為：驗章、請求 fingerprint、部署 scope 及共享 Replay 通過後，以簽章 claims 建立 malicious 判定；**預設並未查回或核對原始 AttackAssessment digest**。
 
@@ -54,7 +54,7 @@ python -m pytest tests/test_trusted_error_vectors.py tests/test_commit_vectors.p
 
 `tests/fixtures/golden_vectors/request_fingerprint.json` 另固定六組 canonicalization v1 請求：percent-encoded path、重複 query 與 Unicode 值、二進位 body、忽略標頭不改 hash、核准標頭順序有綁定，以及重複 Host／Authorization 拒絕。`verify_fingerprint.mjs` 以 Node 獨立重算標準化快照的精確摘要，Python 與實際 MSDSS dispatcher 的最終 HTTPX request 適配器也核對同一批資料。這補足「只把預先算好的 fingerprint 放入 JWS」的證據缺口；不代表所有語言 HTTP parser 或代理改寫都已驗證，真正 HTTPS 邊界仍由 test_msdss_wire 覆蓋。
 
-`TrustedDeploymentSettings` 將部署者核准的 issuer、audience、環境、部署、服務與公鑰集合接到 PostgreSQL Replay。Gateway adapter 原始碼保存在 `integrations/msdss/trusted_session_dispatch.py`，供 MSDSS 的 `src/msdss/adapters/` 使用；必須由部署程式明確注入，不會自動切換 staging。
+`TrustedDeploymentSettings` 將部署者核准的 issuer、audience、環境、部署、服務與公鑰集合接到 PostgreSQL Replay。外部客戶端自行提供簽章與發送流程，Mirage 不提供該客戶端的 Python adapter。
 
 Gateway 僅對 `approved_attack` 的 DECEIVE 決策簽發授權。Session ID／epoch 必須由可信 resolver 提供，不能轉抄訪客 header。簽發器不存取鑑識庫；私鑰由部署程式注入，Mirage 只保存公鑰。使用 HTTPS，HTTPX 送出已簽章的同一個請求，不跟隨 redirect 或轉送真實後端。
 

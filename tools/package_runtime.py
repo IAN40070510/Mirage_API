@@ -11,7 +11,7 @@ import tarfile
 
 ROOT_FILES = ("Dockerfile", ".dockerignore", "pyproject.toml", "LICENSE", "NOTICE", "README.md")
 ROOT_DIRECTORIES = ("src", "mirage_validator", "configs", "domains", "inputs/security_taxonomies",
-                    "migrations", "tools", "docs", "licenses", "integrations")
+                    "migrations", "tools", "docs", "licenses")
 PRIVATE_SUFFIXES = {".key", ".pem", ".p12", ".pfx", ".gguf", ".safetensors", ".onnx"}
 EXCLUDED_PARTS = {".git", ".venv", "__pycache__", "generated", "outputs", ".pytest_cache", "node_modules"}
 

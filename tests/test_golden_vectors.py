@@ -107,31 +107,6 @@ def test_request_fingerprint_vectors_match_python_and_node():
     assert result.stdout == "request-fingerprint-vectors-ok"
 
 
-def test_request_vectors_match_actual_gateway_dispatcher(monkeypatch):
-    """由實際 Gateway 的最終 HTTPX request 適配器核對同一批 wire 向量。"""
-    import os
-    import httpx
-
-    root = Path(os.environ.get("MSDSS_ROOT", Path(__file__).resolve().parents[2] / "MSDSS"))
-    if not (root / "src/msdss/adapters/request_binding.py").is_file():
-        pytest.skip("requires MSDSS request binding adapter checkout")
-    monkeypatch.syspath_prepend(str(root / "src"))
-    from integrations.msdss.trusted_session_dispatch import wire_fingerprint
-
-    fixture = json.loads((vector_path().parent / "request_fingerprint.json").read_text(encoding="utf-8"))
-    for vector in fixture["cases"]:
-        values = vector["request"]
-        request = httpx.Request(values["method"], values["raw_url"], content=bytes.fromhex(values["body"]))
-        # 以向量明列的最終標頭覆蓋 client 建構時的自動補值，保留 case 與順序。
-        request.headers = httpx.Headers([(name.encode("ascii"), value.encode("latin-1"))
-                                        for name, value in values["headers"]])
-        if "error" in vector:
-            with pytest.raises(ValueError):
-                wire_fingerprint(request, values["request_id"])
-        else:
-            assert wire_fingerprint(request, values["request_id"]) == vector["fingerprint"], vector["name"]
-
-
 def test_world_runtime_golden_vector_matches_canonical_hash():
     """確認固定 JSON 狀態在不同執行環境得到相同 SHA-256。"""
     vector = json.loads(vector_path().read_text(encoding="utf-8"))
