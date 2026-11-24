@@ -731,6 +731,117 @@ def _gateway() -> None:
             "validated_native_status": 409, "template_id": "empty_synthetic_cart",
             "native_business_response": False,
         }, sort_keys=True))
+        # 重新對同一 Cart 版本 4 加商品，證明先前 409 沒有偷渡狀態提交。
+        refill_id = "g3b-ci-derived-cart-refill"
+        refill_attempt = str(uuid4())
+        refill_body = json.dumps({
+            "variant_id": "known", "quantity": 1, "expected_version": 4,
+            "idempotency_key": "g3b-cart-refill-once",
+            "commit_attempt_id": refill_attempt,
+        }, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        refill = gateway.build_request(
+            "POST", origin + "/synthetic/carts/" + derived_id + "/line-items",
+            content=refill_body,
+            headers={"x-request-id": refill_id, "content-type": "application/json"},
+        )
+        refill.headers["x-trusted-session"] = _sign(
+            key, fingerprint=fingerprint_httpx_request(refill, refill_id),
+            session=derived_session, mode="cart", resource_id=derived_id,
+        )
+        refilled = gateway.send(refill)
+        if refilled.status_code != 200:
+            raise RuntimeError("g3b_ci_derived_cart_refill_rpc_unverifiable")
+        refill_metadata = refilled.json().get("executor_result", {})
+        refill_projection = refilled.json().get("native_projection", {})
+        refill_bytes = base64.b64decode(refill_projection.get("body_b64", ""), validate=True)
+        refill_payload = json.loads(refill_bytes)
+        refill_items = refill_payload.get("cart", {}).get("items", [])
+        if (refill_metadata.get("kind") != "world_mutation"
+                or refill_metadata.get("operation") != "addGuestCartItem"
+                or refill_metadata.get("status") != "committed"
+                or refill_metadata.get("commit_attempt_id") != refill_attempt
+                or refill_metadata.get("state_version") != 5
+                or refill_projection.get("status_code") != 200
+                or refill_projection.get("source", {}).get("kind") != "committed_operation"
+                or refill_projection.get("source", {}).get("operation_result_digest")
+                    != refill_metadata.get("result_digest")
+                or refill_projection.get("source", {}).get("committed_state_hash")
+                    != refill_metadata.get("state_hash")
+                or refill_projection.get("scope", {}).get("session_id") != derived_session
+                or refill_projection.get("delivery") != "candidate_only_no_send_authorization"
+                or refill_payload.get("state_version") != 5
+                or refill_payload.get("state_hash") != refill_metadata.get("state_hash")
+                or refill_payload.get("cart", {}).get("id") != derived_id
+                or refill_payload.get("cart", {}).get("total") != 100
+                or not isinstance(refill_items, list) or len(refill_items) != 1
+                or refill_items[0].get("variant_id") != "known"
+                or refill_items[0].get("quantity") != 1
+                or refill_projection.get("envelope_hash") != response_hashes(
+                    200, read_headers, refill_bytes)[0]
+                or gateway.send(refill).status_code != 403):
+            raise RuntimeError("g3b_ci_derived_cart_refill_source_mismatch")
+        # C-06 正向：只有真版本 5 的非空 Cart 才能生成新的 Order ID。
+        complete_id = "g3b-ci-derived-cart-complete-200"
+        complete_attempt = str(uuid4())
+        complete_body = json.dumps({
+            "expected_version": 5, "idempotency_key": "g3b-cart-complete-once",
+            "commit_attempt_id": complete_attempt,
+        }, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        complete = gateway.build_request(
+            "POST", origin + "/synthetic/carts/" + derived_id + "/complete",
+            content=complete_body,
+            headers={"x-request-id": complete_id, "content-type": "application/json"},
+        )
+        complete.headers["x-trusted-session"] = _sign(
+            key, fingerprint=fingerprint_httpx_request(complete, complete_id),
+            session=derived_session, mode="cart", resource_id=derived_id,
+        )
+        completed = gateway.send(complete)
+        if completed.status_code != 200:
+            raise RuntimeError("g3b_ci_derived_cart_complete_rpc_unverifiable")
+        completed_metadata = completed.json().get("executor_result", {})
+        completed_projection = completed.json().get("native_projection", {})
+        completed_bytes = base64.b64decode(
+            completed_projection.get("body_b64", ""), validate=True,
+        )
+        completed_payload = json.loads(completed_bytes)
+        completed_order = completed_payload.get("order", {})
+        derived_order_id = completed_order.get("id")
+        if (not isinstance(derived_order_id, str)
+                or re.fullmatch(r"order_[0-9a-f]{32}", derived_order_id) is None
+                or completed_metadata.get("kind") != "world_mutation"
+                or completed_metadata.get("operation") != "completeGuestCart"
+                or completed_metadata.get("status") != "committed"
+                or completed_metadata.get("commit_attempt_id") != complete_attempt
+                or completed_metadata.get("state_version") != 6
+                or completed_projection.get("status_code") != 200
+                or completed_projection.get("source", {}).get("kind") != "committed_operation"
+                or completed_projection.get("source", {}).get("operation_result_digest")
+                    != completed_metadata.get("result_digest")
+                or completed_projection.get("source", {}).get("committed_state_version") != 6
+                or completed_projection.get("source", {}).get("committed_state_hash")
+                    != completed_metadata.get("state_hash")
+                or completed_projection.get("scope", {}).get("session_id") != derived_session
+                or completed_projection.get("scope", {}).get("world_generation_id")
+                    != created_source.get("derived_world_generation_id")
+                or completed_projection.get("delivery")
+                    != "candidate_only_no_send_authorization"
+                or completed_payload.get("state_version") != 6
+                or completed_payload.get("state_hash") != completed_metadata.get("state_hash")
+                or completed_payload.get("commit_attempt_id") != complete_attempt
+                or completed_order.get("cart_id") != derived_id
+                or completed_order.get("status") != "placed"
+                or completed_order.get("total") != 100
+                or completed_order.get("items") != refill_items
+                or completed_projection.get("envelope_hash") != response_hashes(
+                    200, read_headers, completed_bytes)[0]
+                or gateway.send(complete).status_code != 403):
+            raise RuntimeError("g3b_ci_derived_cart_complete_source_mismatch")
+        print("G3B_ROUTE_CART_DERIVED_COMPLETE_ORDER_CANDIDATE " + json.dumps({
+            "operation_id": "completeGuestCart", "source": "protected_world_commit_sources",
+            "validated_native_status": 200, "state_version": 6, "derived_scope": True,
+            "native_business_response": False,
+        }, sort_keys=True))
         # C-02：同樣透過真 Gateway→Cart Executor→獨立唯讀 Validator，
         # 只能查驗與既有派生 Cart Session 相符的原生成功 JSON 候選。
         cart_request_id = "g3b-ci-cart-get-200"
@@ -825,6 +936,7 @@ def _gateway() -> None:
           "cart_derived_unknown_variant_409=1 cart_derived_update_200=1 "
           "cart_derived_remove_200=1 "
           "cart_derived_empty_complete_409=1 "
+          "cart_derived_complete_200=1 "
           "medusa_400=1 medusa_404=1 "
           "replay=denied anonymous=denied "
           "execution_network=unreachable trusted_send=off")
@@ -875,7 +987,7 @@ def _audit(root: Path) -> None:
             raise RuntimeError("g3b_ci_cross_role_secret_exposure:" + name)
     with psycopg.connect("postgresql://mirage_ci_owner:mirage_ci_only@127.0.0.1:55433/"
                          "mirage_g3b_ci?connect_timeout=5") as admin:
-        if admin.execute("SELECT count(*) FROM protected_world_commit_sources").fetchone()[0] != 4:
+        if admin.execute("SELECT count(*) FROM protected_world_commit_sources").fetchone()[0] != 6:
             raise RuntimeError("g3b_ci_inventory_commit_evidence_missing")
         if admin.execute("SELECT count(*) FROM protected_medusa_rejection_sources").fetchone()[0] != 2:
             raise RuntimeError("g3b_ci_medusa_rejection_evidence_missing")
@@ -891,10 +1003,10 @@ def _audit(root: Path) -> None:
                 "getSyntheticOperation": 2,
                 "createGuestCart": 4,
                 "getGuestCart": 3,
-                "addGuestCartItem": 2,
+                "addGuestCartItem": 3,
                 "updateGuestCartItem": 1,
                 "removeGuestCartItem": 1,
-                "completeGuestCart": 1,
+                "completeGuestCart": 2,
                 "PostCartsIdLineItems": 2,
         }:
             raise RuntimeError("g3b_ci_operation_proof_count_mismatch")
