@@ -65,7 +65,9 @@ ReadAdmission；原始操作驗證通過後，Read 與受保護 World Commit 才
 空 Body、精確 Cart／Order ID 與可查證的派生 Capability、native_context，
 Executor 僅回 `medusa_read_admitted` 的 ID／世代／版本／Hash，mTLS Client
 亦拒絕 HTTP Status／Payload／Send 欄位。未接獨立 Medusa 200 Validator，
-不應將此 Metadata 當成原生成功回應。Medusa M-03 另允許已固定
+不應將此 Metadata 當成原生成功回應。相同 Receipt 再次直接呼叫
+ReadAdmission 由不可變來源唯一約束固定拒絕，不應假裝可無條件重試；
+真正 JWS Replay 則在 Verifier 階段拒絕。Medusa M-03 另允許已固定
 `POST /store/carts/{id}/line-items` 的合法拒絕：錯誤 publishable key／
 NativeItemBody（400），或已受保護 Cart catalog 中確實沒有 variant（404）。
 每種拒絕都必須從同 Receipt 的受保護 ReadAdmission 取得來源，寫入

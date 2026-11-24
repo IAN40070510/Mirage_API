@@ -703,7 +703,9 @@ def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolat
             "medusa_read_admitted", "GetCartsId", binding.resource_id,
             snapshot.scope.world_generation_id, snapshot.version, snapshot.state_hash,
         )
-        assert client.post("/internal/v1/execute", json=get_wire).json() == read_metadata
+        # GET ReadAdmission 不可憑同 Receipt 盲目重做：第一次來源不可變，
+        # 第二次必須固定 503，而不是多簽第二筆來源。
+        assert client.post("/internal/v1/execute", json=get_wire).status_code == 503
         _, denied_receipt, _, denied_wire = prepare_request(
             b"", route="/store/carts/" + binding.resource_id,
             method="GET", key="incorrect_public_key",
@@ -821,7 +823,7 @@ def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolat
                 order_read.json()["state_version"], order_read.json()["state_hash"]) == (
             "medusa_read_admitted", order_id, latest.version, latest.state_hash,
         )
-        assert client.post("/internal/v1/execute", json=order_wire).json() == order_read.json()
+        assert client.post("/internal/v1/execute", json=order_wire).status_code == 503
 
 
 def test_cart_http_verified_receipt_drives_real_fixed_world_handler(isolated_test_dsn):
