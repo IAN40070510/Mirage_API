@@ -27,10 +27,11 @@ def _public(key: Ed25519PrivateKey) -> bytes:
 
 
 def _checkpoint(key: Ed25519PrivateKey, *, namespace: str, sequence: int,
-                prior: str, first: int, last: int) -> SignedAnchorCheckpoint:
+                prior: str, first: int, last: int,
+                epoch: str = "epoch-test") -> SignedAnchorCheckpoint:
     """建立簽章有效且具有事件範圍的單一測試 Checkpoint。"""
     unsigned = SignedAnchorCheckpoint(
-        namespace=namespace, epoch="epoch-test", sequence=sequence,
+        namespace=namespace, epoch=epoch, sequence=sequence,
         previous_digest=prior, world_digest=f"{sequence:064x}",
         events_digest=f"{sequence + 100:064x}", first_event=first,
         last_event=last, publication_id=f"publication-{sequence}",
@@ -88,8 +89,10 @@ def test_fence_lab_persists_latest_head_and_rejects_restored_world_rollback(fenc
     publisher_key, head_key = Ed25519PrivateKey.generate(), Ed25519PrivateKey.generate()
     publisher = PostgresAnchorPublisher(
         dsns["publisher"], expected_login=roles["publisher"],
+        trusted_namespace=namespace, trusted_epoch="epoch-test",
         publisher_public_key=_public(publisher_key))
     reader = PostgresAnchorHeadReader(dsns["reader"], expected_login=roles["reader"],
+                                      trusted_namespace=namespace, trusted_epoch="epoch-test",
                                       head_private_key=head_key)
     first = _checkpoint(publisher_key, namespace=namespace, sequence=1,
                         prior="0" * 64, first=1, last=3)
@@ -114,6 +117,7 @@ def test_fence_lab_refuses_replay_gap_signature_and_direct_mutation(fence_lab):
     publisher_key = Ed25519PrivateKey.generate()
     publisher = PostgresAnchorPublisher(
         dsns["publisher"], expected_login=roles["publisher"],
+        trusted_namespace=namespace, trusted_epoch="epoch-test",
         publisher_public_key=_public(publisher_key))
     first = _checkpoint(publisher_key, namespace=namespace, sequence=1,
                         prior="0" * 64, first=1, last=3)
@@ -147,6 +151,7 @@ def test_fence_lab_reader_cannot_write_or_forge_latest_head(fence_lab):
     publisher_key, head_key = Ed25519PrivateKey.generate(), Ed25519PrivateKey.generate()
     publisher = PostgresAnchorPublisher(
         dsns["publisher"], expected_login=roles["publisher"],
+        trusted_namespace=namespace, trusted_epoch="epoch-test",
         publisher_public_key=_public(publisher_key))
     first = _checkpoint(publisher_key, namespace=namespace, sequence=1,
                         prior="0" * 64, first=1, last=3)
@@ -156,6 +161,7 @@ def test_fence_lab_reader_cannot_write_or_forge_latest_head(fence_lab):
             conn.execute("DELETE FROM mirage_restore_fence.checkpoints WHERE namespace=%s",
                          (namespace,))
     reader = PostgresAnchorHeadReader(dsns["reader"], expected_login=roles["reader"],
+                                      trusted_namespace=namespace, trusted_epoch="epoch-test",
                                       head_private_key=head_key)
     with pytest.raises(RestoreAnchorError):
         verify_restore_anchor(
@@ -172,6 +178,7 @@ def test_fence_lab_publisher_cannot_advance_head_without_linked_checkpoint(fence
     key = Ed25519PrivateKey.generate()
     publisher = PostgresAnchorPublisher(
         dsns["publisher"], expected_login=roles["publisher"],
+        trusted_namespace=namespace, trusted_epoch="epoch-test",
         publisher_public_key=_public(key),
     )
     first = _checkpoint(key, namespace=namespace, sequence=1,
@@ -232,6 +239,7 @@ def test_fence_lab_two_publishers_compete_for_one_next_head(fence_lab):
     publisher_key = Ed25519PrivateKey.generate()
     publisher = PostgresAnchorPublisher(
         dsns["publisher"], expected_login=roles["publisher"],
+        trusted_namespace=namespace, trusted_epoch="epoch-test",
         publisher_public_key=_public(publisher_key))
     first = _checkpoint(publisher_key, namespace=namespace, sequence=1,
                         prior="0" * 64, first=1, last=3)
@@ -268,6 +276,7 @@ def test_fence_lab_lost_commit_ack_fails_closed_and_does_not_republish(
     key = Ed25519PrivateKey.generate()
     publisher = PostgresAnchorPublisher(
         dsns["publisher"], expected_login=roles["publisher"],
+        trusted_namespace=namespace, trusted_epoch="epoch-test",
         publisher_public_key=_public(key),
     )
     first = _checkpoint(key, namespace=namespace, sequence=1,
@@ -323,6 +332,7 @@ def test_fence_head_transport_oserror_is_fail_closed(monkeypatch):
 
     reader = PostgresAnchorHeadReader(
         "postgresql://unreachable.invalid/not-used", expected_login="fence_reader",
+        trusted_namespace="isolated-test", trusted_epoch="epoch-test",
         head_private_key=Ed25519PrivateKey.generate(),
     )
 
@@ -333,3 +343,69 @@ def test_fence_head_transport_oserror_is_fail_closed(monkeypatch):
     monkeypatch.setattr(anchor_module.psycopg, "connect", fail_connection)
     with pytest.raises(RestoreAnchorError, match="head_unverifiable"):
         reader.observe_head("isolated-test", "epoch-test", b"x" * 32)
+
+
+def test_fence_authority_rejects_restored_epoch_and_namespace_before_database(monkeypatch):
+    """舊 World 傳來的 epoch/namespace 不能誘使獨立 Head 簽章或 Publisher 寫鏈。"""
+    namespace = "deployed-namespace"
+    epoch = "deployed-epoch"
+    publisher_key, head_key = Ed25519PrivateKey.generate(), Ed25519PrivateKey.generate()
+    reader = PostgresAnchorHeadReader(
+        "postgresql://unreachable.invalid/not-used", expected_login="fence_reader",
+        trusted_namespace=namespace, trusted_epoch=epoch, head_private_key=head_key,
+    )
+    publisher = PostgresAnchorPublisher(
+        "postgresql://unreachable.invalid/not-used", expected_login="fence_publisher",
+        trusted_namespace=namespace, trusted_epoch=epoch,
+        publisher_public_key=_public(publisher_key),
+    )
+    queried = []
+
+    def observed_query(statement, args):
+        """以不連線的可信 Head 模擬正常唯讀查詢，核對拒絕是否在查詢前。"""
+        queried.append(args)
+        return [(1, "a" * 64)]
+
+    monkeypatch.setattr(reader, "_query", observed_query)
+    valid = reader.observe_head(namespace, epoch, b"x" * 32)
+    head_key.public_key().verify(valid.signature, valid.payload())
+    assert queried == [(namespace, epoch)]
+
+    for bad_namespace, bad_epoch in (("retired-namespace", epoch),
+                                     (namespace, "retired-epoch")):
+        with pytest.raises(RestoreAnchorError, match="head_scope_mismatch"):
+            reader.observe_head(bad_namespace, bad_epoch, b"y" * 32)
+        with pytest.raises(RestoreAnchorError, match="head_scope_mismatch"):
+            reader.read_checkpoints(bad_namespace, bad_epoch, 1, 1)
+    assert queried == [(namespace, epoch)]
+
+    retired_epoch = _checkpoint(
+        publisher_key, namespace=namespace, epoch="retired-epoch", sequence=1,
+        prior="0" * 64, first=1, last=3,
+    )
+    retired_namespace = _checkpoint(
+        publisher_key, namespace="retired-namespace", epoch=epoch, sequence=1,
+        prior="0" * 64, first=1, last=3,
+    )
+    with pytest.raises(RestoreAnchorError, match="publisher_scope_mismatch"):
+        publisher.append(retired_epoch)
+    with pytest.raises(RestoreAnchorError, match="publisher_scope_mismatch"):
+        publisher.append(retired_namespace)
+
+
+def test_fence_authority_requires_pinned_deployment_scope():
+    """獨立權威啟動若沒有明確釘選 namespace/epoch，直接拒絕服務。"""
+    key = Ed25519PrivateKey.generate()
+    for invalid_scope in ("", "../restored", "bad namespace"):
+        with pytest.raises(RestoreAnchorError, match="publisher_config_invalid"):
+            PostgresAnchorPublisher(
+                "postgresql://unused/not-used", expected_login="fence_publisher",
+                trusted_namespace="deployed", trusted_epoch=invalid_scope,
+                publisher_public_key=_public(key),
+            )
+        with pytest.raises(RestoreAnchorError, match="head_config_invalid"):
+            PostgresAnchorHeadReader(
+                "postgresql://unused/not-used", expected_login="fence_reader",
+                trusted_namespace=invalid_scope, trusted_epoch="deployed",
+                head_private_key=key,
+            )

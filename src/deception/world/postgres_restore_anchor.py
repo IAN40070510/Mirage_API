@@ -18,19 +18,25 @@ from .restore_anchor import (
 class PostgresAnchorPublisher:
     """僅限獨立 Fence Publisher 登入，在同一交易提交簽署鏈節及單調 Head。"""
 
-    def __init__(self, dsn: str, *, expected_login: str, publisher_public_key: bytes) -> None:
-        """固定外部 DB 登入與 Publisher 公鑰；不接受 Runtime 自選簽章密鑰。"""
+    def __init__(self, dsn: str, *, expected_login: str, trusted_namespace: str,
+                 trusted_epoch: str, publisher_public_key: bytes) -> None:
+        """從獨立部署設定固定登入、權威範圍與公鑰，不接受還原庫自選世代。"""
         if (not dsn or not _identifier(expected_login)
+                or not _identifier(trusted_namespace) or not _identifier(trusted_epoch)
                 or type(publisher_public_key) is not bytes or len(publisher_public_key) != 32):
             raise RestoreAnchorError("restore_anchor_publisher_config_invalid")
         self._dsn = dsn
         self._login = expected_login
+        self._namespace = trusted_namespace
+        self._epoch = trusted_epoch
         self._key = Ed25519PublicKey.from_public_bytes(publisher_public_key)
 
     def append(self, checkpoint: SignedAnchorCheckpoint) -> str:
         """原子發布下一節 COMMITTED 證據；ACK 不明時由上游另查，絕不盲重送。"""
         if not isinstance(checkpoint, SignedAnchorCheckpoint) or checkpoint.status != "COMMITTED":
             raise RestoreAnchorError("restore_anchor_not_committed")
+        if (checkpoint.namespace != self._namespace or checkpoint.epoch != self._epoch):
+            raise RestoreAnchorError("restore_anchor_publisher_scope_mismatch")
         try:
             self._key.verify(checkpoint.signature, checkpoint.payload())
         except (ValueError, InvalidSignature) as exc:
@@ -101,14 +107,17 @@ class PostgresAnchorPublisher:
 class PostgresAnchorHeadReader:
     """獨立 Head Authority 以 Fence DB 最新 Head 回答挑戰並唯讀提供簽章鏈。"""
 
-    def __init__(self, dsn: str, *, expected_login: str,
-                 head_private_key: Ed25519PrivateKey) -> None:
-        """由獨立秘密通道注入 Head 私鑰；禁止從 World DB 或 HTTP 傳入。"""
+    def __init__(self, dsn: str, *, expected_login: str, trusted_namespace: str,
+                 trusted_epoch: str, head_private_key: Ed25519PrivateKey) -> None:
+        """由獨立設定釘住 Head 範圍和私鑰，禁止還原庫與 HTTP 指定舊世代。"""
         if (not dsn or not _identifier(expected_login)
+                or not _identifier(trusted_namespace) or not _identifier(trusted_epoch)
                 or not isinstance(head_private_key, Ed25519PrivateKey)):
             raise RestoreAnchorError("restore_anchor_head_config_invalid")
         self._dsn = dsn
         self._login = expected_login
+        self._namespace = trusted_namespace
+        self._epoch = trusted_epoch
         self._key = head_private_key
 
     def _query(self, statement: str, args: tuple) -> list[tuple]:
@@ -129,6 +138,8 @@ class PostgresAnchorHeadReader:
         if (not _identifier(namespace) or not _identifier(epoch)
                 or type(challenge) is not bytes or len(challenge) != 32):
             raise RestoreAnchorError("restore_anchor_head_request_invalid")
+        if namespace != self._namespace or epoch != self._epoch:
+            raise RestoreAnchorError("restore_anchor_head_scope_mismatch")
         rows = self._query(
             """SELECT sequence, checkpoint_digest FROM mirage_restore_fence.heads
                WHERE namespace=%s AND epoch=%s""", (namespace, epoch),
@@ -147,6 +158,8 @@ class PostgresAnchorHeadReader:
                 or type(first) is not int or type(last) is not int
                 or first < 1 or last < first or last > _MAX_CHECKPOINTS):
             raise RestoreAnchorError("restore_anchor_range_invalid")
+        if namespace != self._namespace or epoch != self._epoch:
+            raise RestoreAnchorError("restore_anchor_head_scope_mismatch")
         rows = self._query(
             """SELECT namespace,epoch,sequence,previous_digest,world_digest,events_digest,
                       first_event,last_event,publication_id,status,signature

@@ -221,6 +221,26 @@ World DB ↔ Fence DB 的跨庫 Commit Intent／ACK 對帳、完整事件語意�
 BD-05 Quarantine 原子解禁及 Sender／Purge 競態仍未實作，G5 不得簽成 PASS。
 本輪資料庫和網路均為拋棄式合成實驗，未觸及 staging/production。
 
+### 2026-11-25 Fence authority namespace／epoch 強制釘選（局部修補）
+
+在獨立 `PostgresAnchorPublisher` 與 `PostgresAnchorHeadReader` 的建構介面加入
+必填 `trusted_namespace`、`trusted_epoch`。這些值必須來自**獨立 Fence
+服務的部署設定**，不得從恢復後的 World DB、受信任 HTTP 請求或 Runtime
+參數取得。Publisher 在驗章／DB 寫入前拒絕不同範圍的 Checkpoint；Head
+Reader 在 DB 查詢／簽署 nonce 前拒絕不同 namespace 或 epoch，讀取原始鏈節
+也使用相同限制。這防止部署已釘選新世代時，舊世界資料誘使同一獨立服務
+替歷史世代簽署有效但過期的最新 Head。
+
+新增不需要資料庫的負面測試，驗證跨 namespace／舊 epoch 的 Publisher／
+Reader 請求在任何查詢前拒絕、未設定合法範圍不能啟動，並保留合法範圍的
+Head nonce 驗章。現有實體 PostgreSQL 測試仍負責證明合法發布與歷史鏈節
+讀取；未提供第二個專用 Fence DSN 的環境必須保留 SKIP，不可算成實體 PASS。
+
+**仍未解決**：單一 namespace 下具權威性的最高 active epoch 登錄、完整事件
+涵蓋、跨 World/Fence DB 未知 COMMIT／ACK 對帳、BD-05 原子自動解禁，以及
+Restore↔Sender↔Purge 競態。此切面不提供釋放 Quarantine 的 API，
+不修改正式發送封鎖，G5 仍 **OPEN／NO-GO**。
+
 **隔離主線 CI 補證**：固定提交
 [`d35af3f`](https://github.com/IAN40070510/Mirage_API/commit/d35af3f62c9ab7bf667bfcae903540a3ec333f7d)
 的 [World PG17.6 #45426410173](https://github.com/IAN40070510/Mirage_API/actions/runs/45426410173)
