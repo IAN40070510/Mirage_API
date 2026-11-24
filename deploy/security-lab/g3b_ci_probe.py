@@ -326,6 +326,86 @@ def _gateway() -> None:
             "validated_native_status": 409, "template_id": "unknown_synthetic_sku",
             "source": "protected_world_rejection_sources", "native_business_response": False,
         }, sort_keys=True))
+        # I-02：直接沿用 I-01 真 Commit 的 Reservation ID，版本 2→3 取消。
+        # 同資源第二次取消必須是 Handler 的 reservation_not_active 409 來源，
+        # 不能被誤解成未知授權的內部 503，也不能再提交一次 Inventory 變更。
+        reservation_id = native_json.get("reservation", {}).get("reservation_id")
+        if (not isinstance(reservation_id, str)
+                or re.fullmatch(r"[0-9a-f]{32}", reservation_id) is None):
+            raise RuntimeError("g3b_ci_inventory_committed_reservation_id_invalid")
+        cancel_route = origin + "/synthetic/inventory/reservations/" + reservation_id + "/cancel"
+        for label, version, expected_status in (
+                ("first", 2, 200), ("second", 3, 409)):
+            cancel_id = "g3b-ci-inventory-cancel-" + label
+            cancel_attempt = str(uuid4())
+            cancel_body = json.dumps({
+                "expected_version": version,
+                "idempotency_key": "g3b-inventory-cancel-" + label,
+                "commit_attempt_id": cancel_attempt,
+            }, separators=(",", ":"), sort_keys=True).encode("utf-8")
+            cancellation = gateway.build_request(
+                "POST", cancel_route, content=cancel_body,
+                headers={"x-request-id": cancel_id, "content-type": "application/json"},
+            )
+            cancellation.headers["x-trusted-session"] = _sign(
+                key, fingerprint=fingerprint_httpx_request(cancellation, cancel_id),
+                session="session", mode="inventory",
+            )
+            cancel_response = gateway.send(cancellation)
+            if cancel_response.status_code != 200:
+                raise RuntimeError("g3b_ci_inventory_cancel_" + label + "_rpc_unverifiable")
+            cancel_json = cancel_response.json()
+            cancel_metadata = cancel_json.get("executor_result", {})
+            cancel_projection = cancel_json.get("native_projection", {})
+            cancel_bytes = base64.b64decode(
+                cancel_projection.get("body_b64", ""), validate=True,
+            )
+            if (cancel_metadata.get("kind") != "world_mutation"
+                    or cancel_metadata.get("operation") != "cancelSyntheticInventory"
+                    or cancel_metadata.get("status")
+                        != ("committed" if expected_status == 200 else "rejected")
+                    or cancel_projection.get("status_code") != expected_status
+                    or cancel_projection.get("scope", {}).get("session_id") != "session"
+                    or cancel_projection.get("delivery")
+                        != "candidate_only_no_send_authorization"
+                    or cancel_projection.get("envelope_hash") != response_hashes(
+                        expected_status, read_headers, cancel_bytes)[0]
+                    or gateway.send(cancellation).status_code != 403):
+                raise RuntimeError("g3b_ci_inventory_cancel_" + label + "_source_mismatch")
+            if expected_status == 200:
+                payload = json.loads(cancel_bytes)
+                if (cancel_metadata.get("state_version") != 3
+                        or cancel_metadata.get("commit_attempt_id") != cancel_attempt
+                        or cancel_projection.get("source", {}).get("kind")
+                            != "committed_operation"
+                        or cancel_projection.get("source", {}).get("operation_result_digest")
+                            != cancel_metadata.get("result_digest")
+                        or cancel_projection.get("source", {}).get("committed_state_version") != 3
+                        or cancel_projection.get("source", {}).get("committed_state_hash")
+                            != cancel_metadata.get("state_hash")
+                        or payload.get("state_version") != 3
+                        or payload.get("state_hash") != cancel_metadata.get("state_hash")
+                        or payload.get("commit_attempt_id") != cancel_attempt
+                        or payload.get("reservation", {}).get("reservation_id") != reservation_id
+                        or payload.get("reservation", {}).get("sku") != "sku-1"
+                        or payload.get("reservation", {}).get("quantity") != 2
+                        or payload.get("reservation", {}).get("status") != "cancelled"):
+                    raise RuntimeError("g3b_ci_inventory_cancel_commit_candidate_mismatch")
+            else:
+                denial_headers, denial_body = fixed_synthetic_rejection_bytes(
+                    "synthetic-inventory", "reservation_not_active")
+                if (cancel_projection.get("source", {}).get("template_id")
+                        != "reservation_not_active"
+                        or cancel_projection.get("headers") != [list(h) for h in denial_headers]
+                        or cancel_bytes != denial_body):
+                    raise RuntimeError("g3b_ci_inventory_cancel_rejection_source_mismatch")
+            print("G3B_ROUTE_INVENTORY_CANCEL_CANDIDATE " + json.dumps({
+                "operation_id": "cancelSyntheticInventory", "source": (
+                    "protected_world_commit_sources" if expected_status == 200
+                    else "protected_world_rejection_sources"),
+                "validated_native_status": expected_status, "case": label,
+                "native_business_response": False,
+            }, sort_keys=True))
         # C-01：合法 Creator JWS 真走四容器建立 Cart，獨立 Validator 只能由
         # 新派生世界建立 200 候選，不得把 Derived Scope 當成 Creator Admission。
         create_request_id = "g3b-ci-cart-create-200"
@@ -1105,6 +1185,7 @@ def _gateway() -> None:
           "cart_derived_complete_200=1 "
           "derived_order_get_200=1 derived_order_cancel_200=1 "
           "cart_historical_operation_200=1 cart_missing_operation_409=1 "
+          "inventory_cancel_200=1 inventory_repeat_cancel_409=1 "
           "medusa_400=1 medusa_404=1 "
           "replay=denied anonymous=denied "
           "execution_network=unreachable trusted_send=off")
@@ -1155,11 +1236,11 @@ def _audit(root: Path) -> None:
             raise RuntimeError("g3b_ci_cross_role_secret_exposure:" + name)
     with psycopg.connect("postgresql://mirage_ci_owner:mirage_ci_only@127.0.0.1:55433/"
                          "mirage_g3b_ci?connect_timeout=5") as admin:
-        if admin.execute("SELECT count(*) FROM protected_world_commit_sources").fetchone()[0] != 7:
+        if admin.execute("SELECT count(*) FROM protected_world_commit_sources").fetchone()[0] != 8:
             raise RuntimeError("g3b_ci_inventory_commit_evidence_missing")
         if admin.execute("SELECT count(*) FROM protected_medusa_rejection_sources").fetchone()[0] != 2:
             raise RuntimeError("g3b_ci_medusa_rejection_evidence_missing")
-        if admin.execute("SELECT count(*) FROM protected_world_rejection_sources").fetchone()[0] != 3:
+        if admin.execute("SELECT count(*) FROM protected_world_rejection_sources").fetchone()[0] != 4:
             raise RuntimeError("g3b_ci_synthetic_rejection_evidence_missing")
         proof_counts = dict(admin.execute(
             """SELECT operation_id,count(*) FROM protected_http_operation_bindings
@@ -1167,6 +1248,7 @@ def _audit(root: Path) -> None:
         ).fetchall())
         if proof_counts != {
                 "reserveSyntheticInventory": 2,
+                "cancelSyntheticInventory": 2,
                 "getSyntheticInventory": 2,
                 "getSyntheticOperation": 2,
                 "createGuestCart": 4,
