@@ -271,6 +271,21 @@ Receipt 成功一筆），**不得因第二張 Receipt 多出第三筆**。既�
 這一個負面子案例**；同 Receipt 未知 COMMIT、所有 C-01 業務拒絕、
 客戶端原生 HTTP 和 G4～G6 仍 OPEN。
 
+**C-01 客戶端偽造建立 Body 負面增量（2026-11-24，隔離 PASS）**：
+固定提交 [`2fe7fb0`](https://github.com/IAN40070510/Mirage_API/commit/2fe7fb0a422acbf139bfdd337af30723f03b7171)
+的 [四服務 CI #73](https://github.com/IAN40070510/Mirage_API/actions/runs/45335393441)
+`success`。兩次各有獨立有效 JWS／JTI／Receipt 的真 mTLS
+`POST /synthetic/carts`，分別送入重複 `idempotency_key` JSON 欄位與
+Client 自稱 `inventory={"sku-1":999}`，皆在原始 Body Proof／嚴格 Model
+邊界被拒，對外控制面為 fail-closed `503` 而非業務 200／409；
+`G3B_ROUTE_CART_CREATION_INVALID_BODY_DENIED cases=2`，同批真 PG
+受保護 Cart 建立與原始建立表仍只各有預置一筆＋合法建立一筆，
+未由無效輸入產生第三個 Cart。[PG 契約 CI 45335400708](https://github.com/IAN40070510/Mirage_API/actions/runs/45335400708)
+與 [容器 CI 45335400698](https://github.com/IAN40070510/Mirage_API/actions/runs/45335400698)
+皆 `success`。**僅簽收重複 JSON Key／額外 World 權威欄位這兩個
+隔離負面子案例**；不能據此宣稱 C-01 所有非法 Body、原生 HTTP 或
+G3b／G4～G6 已完成。
+
 | G3b 子門檻 | 獨立實測結果 | 正式簽收 |
 | --- | --- | --- |
 | 真 HTTPS Gateway→Verifier→Executor、互異 Client CA、拒絕重播／竄改 | 隔離 CI PASS | 僅實驗室傳輸子項 PASS |
@@ -283,6 +298,7 @@ Receipt 成功一筆），**不得因第二張 Receipt 多出第三筆**。既�
 | Inventory I-04 GET ReadAdmission→唯讀 WorldSnapshot→獨立 Validator 200／409 | 獨立 Validator 按 Receipt 重建精確 JSON／Scope／Hash，與 Executor ReadAdmission ID／Generation／Version／State Hash 逐欄相符；既有 SKU 200、真缺 SKU 409 與正規編碼 URI 均已真 PG/mTLS CI PASS | **I-04 200／409 與 SKU 編碼來源候選隔離 PASS**；客戶端原生 HTTP 與 G4 Send OPEN |
 | C-01 Creator→Derived 實體四服務候選 200、最小權限 Row Lock／不可變資源拒絕 | [四服務 #68](https://github.com/IAN40070510/Mirage_API/actions/runs/45334119506) PASS，`source=protected_cart_creations`、`authorization_scope=creator`、`native_business_response=false`；真 PG／mTLS／Trigger SQL 拒絕 PASS | **C-01 實體候選子項隔離 PASS**；客戶端原生 200／409、正式發送及未知 COMMIT OPEN |
 | C-01 不同 Receipt 重用同一建立鍵 | [四服務 #71](https://github.com/IAN40070510/Mirage_API/actions/runs/45334890206) Gateway fail-closed `503`、兩個建立來源表均無第三筆，PG／Container 同版 PASS | **單一跨 Receipt 重用鍵負面子項隔離 PASS**；同 Receipt ACK 未知與業務 409 OPEN |
+| C-01 不合法原始建立 Body／Client 偽造初始庫存 | [四服務 #73](https://github.com/IAN40070510/Mirage_API/actions/runs/45335393441) 真 JWS/mTLS 的重複 JSON Key／額外 Inventory 兩次 `503`，真 DB 無新增 Cart | **兩個輸入拒絕隔離子項 PASS**；完整 Body／業務 409／正式原生 HTTP OPEN |
 | 正式獨立服務部署、Secret Mount／網路來源、無共享憑證可見性 | 一次性 Docker CI 真容器角色隔離 PASS | 隔離環境 PASS；staging／production 正式部署 OPEN |
 | 20 條正式原生 2xx／4xx Payload 與獨立來源／Validator | 20 條均未具全套證據 | OPEN |
 | G3b 整體解封並移交 G4 Sender | 前述兩項未完成 | **NO-GO** |
@@ -293,7 +309,7 @@ Receipt 成功一筆），**不得因第二張 Receipt 多出第三筆**。既�
 | I-02 | POST `/synthetic/inventory/reservations/{reservation_id}/cancel` | 隔離 PASS | 受保護 cancel；真 Reservation 200＋重複取消 `reservation_not_active` 409 候選，SHA `6f42a51` 真 PG PASS | OPEN：CAS conflict、其他 409、原生 HTTP |
 | I-03 | GET `/synthetic/operations/{attempt}` | 隔離 PASS | 固定 UUID4／空 Body Proof → ReadAdmission；獨立 Validator 核對 WorldOperation、Commit Receipt、Snapshot／Epoch／Key，重建歷史 200 或確定不存在的 409 候選；固定 SHA `88d286f` 真 PG/mTLS CI PASS | OPEN：客戶端原生 200／409、競態與故障路徑 |
 | I-04 | GET `/synthetic/inventory/{sku}` | 隔離 PASS | 固定 SKU／空 Body Proof → Executor ReadAdmission → 獨立 Validator 200 成功／真正缺 SKU 409 候選；SHA `c1769b9` 原始 UTF-8、SHA `4e2cecc` 正規 percent URL 候選真 PG/mTLS PASS | OPEN：Client 原生 200／409、全 URL 相容、G4 Send |
-| C-01 | POST `/synthetic/carts` | 隔離 PASS | Creator→Derived `cart_creation` 200 候選、獨立 Validator／Promotion／Creator Admission 真 PG（`f4ef309`）；真四服務實際 JWS／mTLS／Cart-only DB Role 候選 200、越權更新拒絕（`8f3aea4`、CI #68），跨 Receipt 重用鍵 fail-closed 且無第二次副作用（`43d11ba`、CI #71），來源漂移在 Grant 拒絕 | OPEN：Client 原生 200／409、未知 COMMIT、Grant→Sender 競態、正式部署 |
+| C-01 | POST `/synthetic/carts` | 隔離 PASS | Creator→Derived `cart_creation` 200 候選、獨立 Validator／Promotion／Creator Admission 真 PG（`f4ef309`）；真四服務實際 JWS／mTLS／Cart-only DB Role 候選 200、越權更新拒絕（`8f3aea4`、CI #68），跨 Receipt 重用鍵 fail-closed（`43d11ba`、CI #71），雙重 JSON Key／Client 偽造 Inventory 拒絕（`2fe7fb0`、CI #73），來源漂移在 Grant 拒絕 | OPEN：Client 原生 200／409、未知 COMMIT、Grant→Sender 競態、正式部署 |
 | C-02 | GET `/synthetic/carts/{cart_id}` | 隔離 PASS | 受保護 ReadAdmission＋來源 ID；獨立 Validator 按派生 Cart、目前 Snapshot 重建 200 候選，真 PG 測試 PASS | OPEN：409 來源、客戶端原生 HTTP |
 | C-03 | POST `/synthetic/carts/{cart_id}/line-items` | 隔離 PASS | 受保護 add 200 Commit／Validator 候選真 PG PASS；真未知 Variant／庫存不足 409 候選 SHA `45b0285` 真 PG PASS；舊版本 CAS fail-closed SHA `c62c79c` 真 PG PASS | OPEN：其餘 409／CAS 並行、原生 HTTP |
 | C-04 | POST `/synthetic/carts/{cart_id}/line-items/{item_id}` | 隔離 PASS | 受保護 update；真品項 200、缺品項 409、重送與 Proof 防替換，SHA `bcb0c68` 真 PG PASS | OPEN：其他 409／CAS、原生 HTTP、實體部署 |
