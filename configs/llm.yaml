@@ -4,8 +4,10 @@ schema_version: 1
 execution_mode: local
 base_url: http://127.0.0.1:11434/v1
 model_name: hf.co/fdtn-ai/Foundation-Sec-8B-Reasoning-Q4_K_M-GGUF:Q4_K_M
-# 本次已核對的本機權重版本快照；換模型或更新權重時重新核對，不能填短 ID。
-model_digest: '77a78066847b2002fd602955667bd26857eb2cb751c6ed2e975c21b4a826b0a5'
+# 最新 HF 主支 commit 4a04f7b19513ff9f672169b8fe4288000ab87b07（2026-02-18）。
+# GGUF SHA-256 7a61e41b1ca1b339d41caf3001ea7832469d866e7c52a23980a1e95cbf5cd58b。
+# 下方 model_digest 是 Ollama /api/tags manifest digest（不是 GGUF blob SHA-256）；換權重時須重新核對。
+model_digest: 'd354dd3e0e64877d71a20baeef6b7b89ba245e07f1b362d6f8a07e34e5b8946f'
 # 此已安裝 Reasoning Q4_K_M 變體沒有原生 tools 能力，以受控 JSON action 規劃。
 planner_mode: structured_actions
 temperature: 0.0
