@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 import hashlib
 import hmac
@@ -13,7 +14,8 @@ from deception.api.fingerprint import fingerprint_request
 
 from .admission import AdmissionOperationResult, AdmissionState
 from .models import ResponseAdmission
-from .protected_grant import _ProtectedConnection, _verified_envelope_hashes, ProtectedGrantError
+from .protected_grant import (_ProtectedConnection, _verified_envelope_fields,
+                              _verified_envelope_hashes, ProtectedGrantError)
 from .transmission import TransmissionError, current_time, response_envelope, response_hashes
 
 
@@ -418,3 +420,86 @@ class ProtectedLeaseTransmission:
                 lease_id=lease.lease_id, outcome=outcome, attempted=attempted,
         ) is not AdmissionOperationResult.SUCCESS:
             raise TransmissionError("protected_send_terminal_unverifiable")
+
+
+@dataclass
+class ProtectedPinnedASGIResponse:
+    """只從持久化受保護 Snapshot 的一次性 Lease 發出原生 ASGI HTTP 訊息。
+
+    本類別是獨立 Sender 的**內部傳輸元件**，不是可由 Runtime 呼叫的 HTTP
+    路由；外層仍須完成可信 Caller/Request 身分、G5 與正式 Release Gate。
+    """
+
+    sender: PostgresProtectedSender
+    admission_id: str
+    receipt_id: UUID
+    owner: str
+    request_fingerprint: str
+    expected_envelope: bytes
+    clock: Callable[[], int] = current_time
+    _used: bool = field(default=False, init=False)
+
+    async def __call__(self, scope, receive, send) -> None:
+        """核發單把 Lease 後輸出 DB Pin 原始 status／headers／body，並稽核傳輸結果。
+
+        首個 ASGI byte 前必須完成資料庫 COMMIT；任何起送失敗都不輸出
+        `http.response.start`。未知 COMMIT、重入、非法封套或逾期不可重試。
+        送出時僅以呼叫者已核准的 Deadline 做本地守衛，不宣稱遠端已收 bytes。
+        """
+        if self._used:
+            raise TransmissionError("protected_pinned_asgi_reused")
+        self._used = True
+        if scope.get("type") != "http" or scope.get("scheme") != "https":
+            raise TransmissionError("protected_pinned_asgi_tls_required")
+        if not isinstance(self.expected_envelope, bytes):
+            raise TransmissionError("protected_pinned_asgi_envelope_invalid")
+        lease = self.sender.start_send(
+            admission_id=self.admission_id, receipt_id=self.receipt_id,
+            owner=self.owner, request_fingerprint=self.request_fingerprint,
+            expected_envelope=self.expected_envelope,
+        )
+        if (not isinstance(lease, ProtectedSendLease)
+                or lease.admission_id != self.admission_id
+                or lease.receipt_id != self.receipt_id or lease.send_owner != self.owner
+                or lease.request_fingerprint != self.request_fingerprint
+                or not hmac.compare_digest(lease.envelope_bytes, self.expected_envelope)
+                or not hmac.compare_digest(hashlib.sha256(lease.envelope_bytes).hexdigest(),
+                                           lease.candidate_hash)):
+            raise TransmissionError("protected_pinned_asgi_lease_refused")
+        attempted = False
+        try:
+            status, headers, body = _verified_envelope_fields(lease.envelope_bytes)
+            if (not 200 <= status <= 599 or status in {204, 205, 304}
+                    or any(name in {"connection", "keep-alive", "proxy-authenticate",
+                                    "proxy-authorization", "te", "trailer", "transfer-encoding",
+                                    "upgrade", "content-encoding"} for name, _ in headers)):
+                raise TransmissionError("protected_pinned_asgi_http_unsupported")
+            for message in (
+                {"type": "http.response.start", "status": status,
+                 "headers": [(name.encode("ascii"), value.encode("latin-1"))
+                             for name, value in headers]},
+                {"type": "http.response.body", "body": body},
+            ):
+                remaining = lease.transmission_deadline - self.clock()
+                if remaining <= 0:
+                    raise TransmissionError("protected_pinned_asgi_deadline_exceeded")
+                attempted = True
+                async with asyncio.timeout(remaining):
+                    await send(message)
+        except BaseException:
+            result = self.sender.finish_send(
+                admission_id=lease.admission_id, owner=lease.send_owner,
+                lease_id=lease.lease_id,
+                outcome=(AdmissionState.SEND_PARTIAL_FAILURE if attempted
+                         else AdmissionState.SEND_FAILED), attempted=attempted,
+            )
+            if result is not AdmissionOperationResult.SUCCESS:
+                raise TransmissionError("protected_pinned_asgi_terminal_unverifiable") from None
+            raise
+        result = self.sender.finish_send(
+            admission_id=lease.admission_id, owner=lease.send_owner,
+            lease_id=lease.lease_id,
+            outcome=AdmissionState.SEND_COMPLETED, attempted=True,
+        )
+        if result is not AdmissionOperationResult.SUCCESS:
+            raise TransmissionError("protected_pinned_asgi_terminal_unverifiable")

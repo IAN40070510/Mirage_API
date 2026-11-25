@@ -77,6 +77,19 @@ bytes 拒絕、不可改寫 Lease、Lease INSERT 故障時 transaction rollback�
 另有隔離 ASGI 負面測試故意回傳錯誤 Deadline 或非 UUIDv4 Lease ID，
 均必須拒絕且不送出 `http.response.start`；這不代表 G5 已接線。
 
+**G4 原生 ASGI bytes 接線核心（新增、待確切 SHA CI）**：
+`ProtectedPinnedASGIResponse` 由獨立 Sender 的真實 PostgreSQL
+`start_send()` 先提交唯一 Lease、`SEND_STARTED` 與 Audit，才將**資料庫內
+Pin 的原始 Envelope v1** 嚴格解碼為兩個原生 ASGI 訊息。它不從 Runtime
+的候選重新產生 status、headers 或 body，且對不支援的 HTTP 狀態、
+hop-by-hop headers、沒有 HTTPS scope、重入、錯 Pin、期限或已知 Restore
+全部拒絕。真 PostgreSQL 加非同步 ASGI 回呼測試會在收到首個訊息時直接
+查看已提交的 Lease；Body 故障須保留 `SEND_PARTIAL_FAILURE` 且永不重發。
+此內部元件**尚未掛上對外 `/internal/v1/send`**；Caller 憑證、原始
+Request、Authorizer→Sender mTLS RPC、啟動／復原協定與 Release Fuse
+未驗收前，固定 Sender HTTP 仍只能回 503。這是可驗證的真實 bytes 傳輸
+子功能，**不能**當成 G3b 客戶端原生回應或 G4 整體完成。
+
 隔離測試的 Sender 登入者為專用 schema 管理者，不等於真實
 `mirage_sender` 的最小權限 SCRAM／pg_hba／Secret 分離驗收。這裡的
 Snapshot 是同一 PostgreSQL 內的不可變 BYTEA，未證明任何外部

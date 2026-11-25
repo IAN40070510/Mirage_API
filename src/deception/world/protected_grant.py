@@ -53,12 +53,8 @@ def _decode_fields(data: bytes, *, expected: int | None = None) -> tuple[bytes, 
     return tuple(values)
 
 
-def _verified_envelope_hashes(envelope: bytes) -> tuple[str, str, str]:
-    """從**實際保存**的 v1 Envelope 重新計算 body／semantic headers 摘要。
-
-    不能只驗 supplied envelope_hash 就採信 Runtime 或 Validator 傳入的另外
-    兩個摘要；本函式亦拒絕非規範 status/header 的重序列化歧義。
-    """
+def _verified_envelope_fields(envelope: bytes) -> tuple[int, tuple[tuple[str, str], ...], bytes]:
+    """從受保護 v1 Envelope 解析原生 HTTP 三元組，拒絕任何非正規編碼。"""
     version, status_data, encoded_headers, body = _decode_fields(envelope, expected=4)
     if version != b"1" or not status_data.isdigit():
         raise ProtectedGrantError("candidate_envelope_invalid_version_or_status")
@@ -79,6 +75,12 @@ def _verified_envelope_hashes(envelope: bytes) -> tuple[str, str, str]:
         headers.append((name, value))
     if response_envelope(status, headers, body) != envelope:
         raise ProtectedGrantError("candidate_envelope_not_canonical")
+    return status, tuple(headers), body
+
+
+def _verified_envelope_hashes(envelope: bytes) -> tuple[str, str, str]:
+    """從**實際保存**的 v1 Envelope 重算三種摘要，不採信 Runtime 自填 hash。"""
+    status, headers, body = _verified_envelope_fields(envelope)
     return response_hashes(status, headers, body)
 
 

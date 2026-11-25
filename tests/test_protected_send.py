@@ -15,7 +15,8 @@ from deception.core.renderer import ResponseRenderer
 from deception.world import (
     AdmissionOperationResult, AdmissionState, PostgresProtectedAuthorizer,
     PostgresKnownRestoreRecorder, PostgresProtectedSender, PostgresProtectedSnapshotPurger,
-    ProtectedGrantError, ProtectedLeaseTransmission, ProtectedSendLease,
+    ProtectedGrantError, ProtectedLeaseTransmission, ProtectedPinnedASGIResponse,
+    ProtectedSendLease,
     ProtectedSendReconciliation,
 )
 from deception.world.transmission import TransmissionError, response_envelope, response_hashes
@@ -102,6 +103,126 @@ def test_single_send_lease_claims_exact_snapshot_and_never_rearms(isolated_test_
             "SELECT sequence,event_name FROM response_audit WHERE admission_id=%s ORDER BY sequence",
             (admission.admission_id,),
         ).fetchall() == [(0, "send_started"), (1, "response_send_attempted"), (2, "asgi_send_completed")]
+
+
+def test_pinned_sender_emits_original_native_asgi_only_after_committed_lease(isolated_test_dsn):
+    """真 PG Lease 已提交後，Sender 才發出 DB Pin 的原生 HTTP 與完全相同的 body bytes。"""
+    import psycopg
+
+    admission, owner, envelope, seeded = _authorized_pin(isolated_test_dsn)
+    sender = PostgresProtectedSender(isolated_test_dsn, expected_login=_login(isolated_test_dsn))
+    response = ProtectedPinnedASGIResponse(
+        sender=sender, admission_id=admission.admission_id, receipt_id=seeded[3],
+        owner=owner, request_fingerprint=admission.request_binding_digest,
+        expected_envelope=envelope,
+    )
+    messages = []
+
+    async def record(message):
+        """在 ASGI 第一訊息時驗證資料庫已存在唯一 Lease 與必要 Audit。"""
+        if not messages:
+            with psycopg.connect(isolated_test_dsn) as connection:
+                assert connection.execute(
+                    "SELECT state FROM response_admissions WHERE admission_id=%s",
+                    (admission.admission_id,),
+                ).fetchone() == ("SEND_STARTED",)
+                assert connection.execute("SELECT count(*) FROM protected_send_leases").fetchone() == (1,)
+                assert connection.execute(
+                    "SELECT event_name FROM response_audit WHERE admission_id=%s AND sequence=0",
+                    (admission.admission_id,),
+                ).fetchone() == ("send_started",)
+        messages.append(message)
+
+    asyncio.run(response({"type": "http", "scheme": "https"}, None, record))
+    assert messages == [
+        {"type": "http.response.start", "status": 200,
+         "headers": [(b"content-type", b"application/json")]},
+        {"type": "http.response.body", "body": b'{"synthetic":true}'},
+    ]
+    with pytest.raises(TransmissionError, match="protected_pinned_asgi_reused"):
+        asyncio.run(response({"type": "http", "scheme": "https"}, None, record))
+    with psycopg.connect(isolated_test_dsn) as connection:
+        assert connection.execute(
+            "SELECT state FROM response_admissions WHERE admission_id=%s",
+            (admission.admission_id,),
+        ).fetchone() == ("SEND_COMPLETED",)
+        assert connection.execute("SELECT count(*) FROM protected_send_leases").fetchone() == (1,)
+
+
+def test_pinned_sender_partial_asgi_failure_keeps_lease_nonretryable(isolated_test_dsn):
+    """真 PostgreSQL 首個 ASGI 訊息後 Body 傳輸失敗，保留不可重發的部分失敗終態。"""
+    import psycopg
+
+    admission, owner, envelope, seeded = _authorized_pin(isolated_test_dsn)
+    sender = PostgresProtectedSender(isolated_test_dsn, expected_login=_login(isolated_test_dsn))
+    selectors = dict(admission_id=admission.admission_id, receipt_id=seeded[3],
+                     owner=owner, request_fingerprint=admission.request_binding_digest)
+    response = ProtectedPinnedASGIResponse(
+        sender=sender, expected_envelope=envelope, **selectors,
+    )
+    messages = []
+
+    async def fail_on_body(message):
+        """保留已輸出的 Header，再模擬 Body 的非同步傳輸通道失敗。"""
+        if message["type"] == "http.response.body":
+            raise ConnectionError("simulated_body_send_failure")
+        messages.append(message)
+
+    with pytest.raises(ConnectionError, match="simulated_body_send_failure"):
+        asyncio.run(response({"type": "http", "scheme": "https"}, None, fail_on_body))
+    assert len(messages) == 1 and messages[0]["type"] == "http.response.start"
+    observation = sender.reconcile_send(**selectors)
+    assert observation == ProtectedSendReconciliation(
+        "TERMINAL_RECORDED", AdmissionState.SEND_PARTIAL_FAILURE, True)
+    assert not observation.retry_permitted
+    with psycopg.connect(isolated_test_dsn) as connection:
+        assert connection.execute("SELECT count(*) FROM protected_send_leases").fetchone() == (1,)
+        assert connection.execute(
+            "SELECT sequence,event_name,outcome FROM response_audit "
+            "WHERE admission_id=%s ORDER BY sequence", (admission.admission_id,),
+        ).fetchall() == [
+            (0, "send_started", None), (1, "response_send_attempted", None),
+            (2, "asgi_send_failed", AdmissionState.SEND_PARTIAL_FAILURE.value),
+        ]
+    assert sender.start_send(**selectors, expected_envelope=envelope) is None
+
+
+def test_pinned_sender_denies_untrusted_transport_and_restore_before_first_asgi(isolated_test_dsn):
+    """HTTPS 缺失或已知 Restore 均必須零 ASGI 訊息、零新 Lease，且不可重用回應實例。"""
+    import psycopg
+
+    admission, owner, envelope, seeded = _authorized_pin(isolated_test_dsn)
+    login = _login(isolated_test_dsn)
+    sender = PostgresProtectedSender(isolated_test_dsn, expected_login=login)
+    selectors = dict(admission_id=admission.admission_id, receipt_id=seeded[3],
+                     owner=owner, request_fingerprint=admission.request_binding_digest)
+    messages = []
+
+    async def record(message):
+        """任何被拒絕的 Sender 路徑都不准呼叫這個 ASGI 傳輸函式。"""
+        messages.append(message)
+
+    untrusted = ProtectedPinnedASGIResponse(
+        sender=sender, expected_envelope=envelope, **selectors,
+    )
+    with pytest.raises(TransmissionError, match="protected_pinned_asgi_tls_required"):
+        asyncio.run(untrusted({"type": "http", "scheme": "http"}, None, record))
+    with pytest.raises(TransmissionError, match="protected_pinned_asgi_reused"):
+        asyncio.run(untrusted({"type": "http", "scheme": "https"}, None, record))
+    recorder = PostgresKnownRestoreRecorder(isolated_test_dsn, expected_login=login)
+    assert recorder.mark_known_restore(uuid4())
+    quarantined = ProtectedPinnedASGIResponse(
+        sender=sender, expected_envelope=envelope, **selectors,
+    )
+    with pytest.raises(TransmissionError, match="protected_pinned_asgi_lease_refused"):
+        asyncio.run(quarantined({"type": "http", "scheme": "https"}, None, record))
+    assert messages == []
+    with psycopg.connect(isolated_test_dsn) as connection:
+        assert connection.execute("SELECT count(*) FROM protected_send_leases").fetchone() == (0,)
+        assert connection.execute(
+            "SELECT state FROM response_admissions WHERE admission_id=%s",
+            (admission.admission_id,),
+        ).fetchone() == ("SEND_AUTHORIZED",)
 
 
 def test_known_local_restore_blocks_future_send_lease_persistently(isolated_test_dsn):
