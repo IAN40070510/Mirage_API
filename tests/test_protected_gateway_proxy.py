@@ -84,6 +84,56 @@ def test_gateway_candidate_denies_untrusted_request_before_any_rpc(tmp_path, mon
     assert requests == {"verifier": 0, "sender": 0}
 
 
+def test_gateway_verifier_forwards_every_original_header_without_httpx_defaults(tmp_path, monkeypatch):
+    """Gateway 不得替原始 Client 加 Accept／Accept-Encoding／User-Agent 或改變標頭順序。"""
+    (verifier, _), _ = _gateway_clients(tmp_path, verifier_port=52403, sender_port=52404)
+    receipt = uuid4()
+    source = NormalizedRequest(
+        request_id="req-exact", method="GET", raw_url="https://client.example/store/carts",
+        path="/store/carts", raw_path=b"/store/carts", query_string=b"", query=(),
+        headers=(("host", "client.example"), ("x-request-id", "req-exact"),
+                 ("x-trusted-session", "signed")), body=b"",
+    )
+    seen = []
+
+    class CaptureClient:
+        """攔截 HTTPX 出站但保持它原始的 `Request` 實體不受測試改寫。"""
+
+        def __init__(self, **kwargs):
+            """驗證 Client 不可使用系統代理或允許自動重新導向。"""
+            assert kwargs["trust_env"] is False
+            assert kwargs["follow_redirects"] is False
+
+        async def __aenter__(self):
+            """建立單次受控非網路 HTTPX context。"""
+            return self
+
+        async def __aexit__(self, *_):
+            """結束單次受控 HTTPX context。"""
+            return False
+
+        async def send(self, outbound):
+            """驗證所有原 Header bytes 精確一致，返回可信的固定測試授權。"""
+            seen.extend(outbound.headers.raw)
+            return httpx.Response(200, json={
+                "receipt_id": str(receipt),
+                "candidate_promotion": {"receipt_id": str(receipt),
+                                        "candidate_hash": "a" * 64},
+                "receipt_authorization": {"receipt_id": str(receipt),
+                                          "candidate_hash": "a" * 64,
+                                          "request_fingerprint": fingerprint_request(source),
+                                          "send_owner": "protected-sender-" + receipt.hex,
+                                          "trusted_send": "disabled"},
+            })
+
+    monkeypatch.setattr("deception.security.protected_gateway.httpx.AsyncClient", CaptureClient)
+    pin = asyncio.run(verifier.verify_original(source))
+    assert pin.receipt_id == receipt and pin.candidate_hash == "a" * 64
+    assert seen == [(b"host", b"client.example"),
+                    (b"x-request-id", b"req-exact"),
+                    (b"x-trusted-session", b"signed")]
+
+
 def test_gateway_candidate_two_real_mtls_hops_forward_native_bytes(tmp_path, monkeypatch):
     """真 Client→Gateway→Verifier/Authorizer 證據→Sender mTLS→Client 409、唯一 Lease。"""
     verifier_port, sender_port, gateway_port = (

@@ -98,13 +98,17 @@ class FixedGatewayVerifierMTLSClient:
                       if request.method == "POST" or request.body else {})
             async with httpx.AsyncClient(verify=self._tls, trust_env=False,
                                          timeout=8.0, follow_redirects=False) as client:
-                outbound = client.build_request(
-                    request.method, url, headers=list(request.headers), **kwargs)
-                forwarded = [(name.decode("latin-1").lower(), value.decode("latin-1"))
-                             for name, value in outbound.headers.raw
-                             if name.decode("latin-1").lower() in FINGERPRINT_HEADERS]
-                if (forwarded != relevant
-                        or outbound.url.raw_path.partition(b"?")[0] != request.raw_path):
+                # 不使用 Client.build_request()：它會合併預設 Accept/UA/Encoding，
+                # 低信任 Client 未送出的 Header 不得由 Gateway 自行補入。
+                outbound = httpx.Request(
+                    request.method, url,
+                    headers=[(name.encode("latin-1"), value.encode("latin-1"))
+                             for name, value in request.headers], **kwargs)
+                original_headers = tuple((name.encode("latin-1"), value.encode("latin-1"))
+                                         for name, value in request.headers)
+                if (tuple(outbound.headers.raw) != original_headers
+                        or outbound.url.raw_path.partition(b"?")[0] != request.raw_path
+                        or outbound.url.query != request.query_string):
                     raise GatewayNativeProxyUnverifiable("gateway_original_http_rewritten")
                 response = await client.send(outbound)
         except (ValueError, UnicodeError, httpx.HTTPError) as exc:
