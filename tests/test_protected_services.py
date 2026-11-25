@@ -14,7 +14,8 @@ import yaml
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from deception.security.protected_rpc import (
-    FixedAuthorizerMTLSClient, FixedExecutorMTLSClient, FixedNativeValidatorMTLSClient,
+    FixedAuthorizerMTLSClient, FixedCandidatePublisherMTLSClient,
+    FixedExecutorMTLSClient, FixedNativeValidatorMTLSClient,
     ProtectedRpcConfigurationError, create_fixed_authorizer_app,
     create_fixed_candidate_publisher_app, create_fixed_sender_app, create_native_validator_app,
 )
@@ -272,6 +273,60 @@ def test_candidate_publisher_rejects_shared_login_and_unpinned_profiles():
                 "postgresql://localhost/invalid-test", expected_login="promoter",
             ), evidence_by_platform=profiles,
         )
+
+
+def test_fixed_candidate_publisher_mtls_client_rejects_rebound_receipt(monkeypatch):
+    """Publisher mTLS Client 僅一次送 Receipt，拒絕假 Hash、參照與發送許可。"""
+    from deception.security import protected_rpc
+
+    receipt = uuid4()
+    valid = {"receipt_id": str(receipt), "candidate_ref": "verified-native-" + receipt.hex,
+             "candidate_hash": "a" * 64, "candidate_version": 1, "trusted_send": "disabled"}
+    payload = dict(valid)
+    sent = []
+
+    class StubAsyncClient:
+        """將 mTLS 網路改為可控的單次回應，檢查固定 URL 與送出欄位。"""
+
+        def __init__(self, **kwargs):
+            """驗證 TLS 設定不讀取 ambient proxy／外部 Credentials。"""
+            assert kwargs["trust_env"] is False
+
+        async def __aenter__(self):
+            """模擬 mTLS HTTPX 進入獨立連線生命週期。"""
+            return self
+
+        async def __aexit__(self, *_):
+            """模擬 HTTPX 清理，禁止暗中重試第二次連線。"""
+            return False
+
+        async def post(self, url, *, json):
+            """僅允許 Publisher Receipt-only URL 及唯一 JSON 身分。"""
+            assert url == "https://publisher.invalid:8446/internal/v1/publish-receipt"
+            assert json == {"receipt_id": str(receipt)}
+            sent.append(json)
+            return httpx.Response(200, json=payload)
+
+    monkeypatch.setattr(protected_rpc.httpx, "AsyncClient", StubAsyncClient)
+    client = object.__new__(FixedCandidatePublisherMTLSClient)
+    client._origin, client._tls = "https://publisher.invalid:8446", object()
+    assert asyncio.run(client.publish_receipt(receipt, expected_candidate_hash="a" * 64)) == valid
+    for forged in (
+        {**valid, "receipt_id": str(uuid4())},
+        {**valid, "candidate_ref": "other"},
+        {**valid, "candidate_hash": "not-a-sha256"},
+        {**valid, "candidate_hash": "b" * 64},
+        {**valid, "candidate_version": True},
+        {**valid, "trusted_send": "enabled"},
+        {**valid, "body_b64": "e30="},
+    ):
+        payload = forged
+        with pytest.raises(ProtectedRpcConfigurationError,
+                           match="fixed_publisher_result_binding_mismatch"):
+            asyncio.run(client.publish_receipt(receipt, expected_candidate_hash="a" * 64))
+    with pytest.raises(ProtectedRpcConfigurationError, match="fixed_publisher_receipt_invalid"):
+        asyncio.run(client.publish_receipt(receipt, expected_candidate_hash="caller-forged"))
+    assert len(sent) == 8
 
 
 def test_fixed_authorizer_https_rpc_accepts_only_receipt_and_never_sends_bytes(monkeypatch):

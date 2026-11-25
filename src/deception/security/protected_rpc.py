@@ -58,6 +58,59 @@ class FixedAuthorizerCall(SyntheticModel):
     receipt_id: UUID4
 
 
+class FixedCandidatePublisherMTLSClient:
+    """Verifier 以獨立 mTLS 身分只傳 Receipt，核對 Promotion Ref/Hash 不取 bytes。"""
+
+    def __init__(self, *, origin: str, client_cert: Path, client_key: Path,
+                 server_ca: Path) -> None:
+        """釘選專屬 HTTPS 服務與相互驗證憑證，拒絕 URL 夾帶任意路徑或身份。"""
+        parsed = urlsplit(origin) if isinstance(origin, str) else None
+        if (parsed is None or parsed.scheme != "https" or not parsed.hostname
+                or parsed.port is None or parsed.path not in {"", "/"}
+                or parsed.query or parsed.fragment or parsed.username or parsed.password):
+            raise ProtectedRpcConfigurationError("fixed_publisher_origin_invalid")
+        require_mtls_files(server_cert=client_cert, server_key=client_key,
+                           client_ca=server_ca)
+        context = ssl.create_default_context(cafile=str(server_ca))
+        context.load_cert_chain(str(client_cert), str(client_key))
+        if not context.check_hostname or context.verify_mode != ssl.CERT_REQUIRED:
+            raise ProtectedRpcConfigurationError("fixed_publisher_server_verification_required")
+        self._origin = origin.rstrip("/")
+        self._tls = context
+
+    async def publish_receipt(self, receipt_id: UUID, *, expected_candidate_hash: str) -> dict[str, object]:
+        """單次 RPC 核對 Receipt 派生 Ref 與原 Validator 已驗 Hash；ACK 不重送。"""
+        if (not isinstance(receipt_id, UUID) or receipt_id.version != 4
+                or not isinstance(expected_candidate_hash, str)
+                or re.fullmatch(r"[0-9a-f]{64}", expected_candidate_hash) is None):
+            raise ProtectedRpcConfigurationError("fixed_publisher_receipt_invalid")
+        async with httpx.AsyncClient(verify=self._tls, trust_env=False, timeout=8.0) as client:
+            response = await client.post(
+                self._origin + "/internal/v1/publish-receipt",
+                json={"receipt_id": str(receipt_id)},
+            )
+        if response.status_code != 200:
+            raise ProtectedRpcConfigurationError("fixed_publisher_result_unverifiable")
+        try:
+            result = json.loads(response.content, object_pairs_hook=unique_object,
+                                parse_constant=reject_constant)
+        except ValueError as exc:
+            raise ProtectedRpcConfigurationError("fixed_publisher_result_invalid") from exc
+        if (not isinstance(result, dict) or set(result) != {
+                    "receipt_id", "candidate_ref", "candidate_hash",
+                    "candidate_version", "trusted_send"}
+                or result["receipt_id"] != str(receipt_id)
+                or result["candidate_ref"] != "verified-native-" + receipt_id.hex
+                or not isinstance(result["candidate_hash"], str)
+                or re.fullmatch(r"[0-9a-f]{64}", result["candidate_hash"]) is None
+                or result["candidate_hash"] != expected_candidate_hash
+                or type(result["candidate_version"]) is not int
+                or result["candidate_version"] != 1
+                or result["trusted_send"] != "disabled"):
+            raise ProtectedRpcConfigurationError("fixed_publisher_result_binding_mismatch")
+        return result
+
+
 class FixedAuthorizerMTLSClient:
     """獨立 Verifier 以固定 mTLS 身分單次呼叫 Authorizer，不重送未知 COMMIT。"""
 

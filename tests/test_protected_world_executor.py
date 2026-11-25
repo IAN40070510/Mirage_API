@@ -4,6 +4,7 @@ import time
 import os
 import secrets
 import json
+import hashlib
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
@@ -604,15 +605,15 @@ def test_native_receipt_publisher_promotes_with_distinct_real_scram_logins(isola
     profiles = {}
     for platform in ("synthetic-inventory", "synthetic-carts", "medusa-native-cart"):
         profiles[platform] = ProjectionEvidence(
-            source_spec_sha256=digest("publisher-source-" + platform),
+            source_spec_sha256=hashlib.sha256(("publisher-source-" + platform).encode()).hexdigest(),
             compatibility_profile=ProjectionCompatibilityProfile(
                 profile_id="publisher-isolated", profile_version="1",
-                profile_sha256=digest("publisher-profile-" + platform),
+                profile_sha256=hashlib.sha256(("publisher-profile-" + platform).encode()).hexdigest(),
                 platform_id=platform, platform_version="1",
-                source_spec_sha256=digest("publisher-source-" + platform),
+                source_spec_sha256=hashlib.sha256(("publisher-source-" + platform).encode()).hexdigest(),
                 world_schema_version="1", domain_adapter_version="1",
             ),
-            projection_contract_hash=digest("publisher-contract-" + platform),
+            projection_contract_hash=hashlib.sha256(("publisher-contract-" + platform).encode()).hexdigest(),
             official_schema_valid=True, effective_projection_valid=True,
         )
     PostgresProjectionRegistry(dsn).ensure_registered_batch((profiles["synthetic-inventory"],))

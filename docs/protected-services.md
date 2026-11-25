@@ -78,7 +78,11 @@ Receipt／ReadAdmission 取 DB 期限，使用固定 `verified-native-{receipt_i
 參照與**平台釘選**、已登錄且未撤銷的 `ProjectionEvidence`，先保存不可變
 Candidate，再透過獨立物理 Login 的 `PostgresCandidatePromoter` 鎖定 Receipt、
 比對真實來源及 Registry 並寫入 version=1 Promotion。回傳只含 Ref／Hash／版本，
-不含任何原生 bytes，無法由呼叫端選 Candidate／證據／期限。ACK 不明不自動
+不含任何原生 bytes，無法由呼叫端選 Candidate／證據／期限。專用
+`FixedCandidatePublisherMTLSClient` 也只送 UUID4 Receipt，精確驗證
+`verified-native-{receipt.hex}`、版本 1、與獨立 Validator 已驗封套相同的
+SHA-256 與 `trusted_send=disabled`；
+額外欄位或錯綁均拒絕。ACK 不明不自動
 重試，Candidate 已保存但 Promotion 失敗也不能冒充 Grant。此為可驗證的
 **接線 primitive／RPC App**；正式獨立 Publisher 角色 Secret、部署網路、
 Verifier 到 Publisher 的 mTLS 導流以及與 Authorizer/Sender 的整路徑整合，
