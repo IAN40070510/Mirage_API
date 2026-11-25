@@ -502,3 +502,68 @@ def test_protected_grant_real_role_acl_and_authorizer(isolated_test_dsn):
             for login, _ in users.values():
                 admin.execute(sql.SQL("DROP OWNED BY {}").format(sql.Identifier(login)))
                 admin.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(login)))
+
+
+def test_receipt_only_authorizer_real_scram_least_privilege(isolated_test_dsn):
+    """真實隔離 PG Login 以欄位級 UPDATE 運行 Receipt 授權，且不得讀 Snapshot bytes。"""
+    if os.environ.get("MIRAGE_WORLD_ROLE_TEST_ISOLATED") != "true":
+        pytest.skip("requires disposable PostgreSQL cluster for login role creation")
+    import psycopg
+    from psycopg import sql
+    from psycopg.conninfo import conninfo_to_dict, make_conninfo
+    from deception.security.protected_services import _login_preflight
+
+    seeded = _seed(isolated_test_dsn)
+    assert _promote(isolated_test_dsn, seeded) == 1
+    login = "mirage_auth_" + uuid4().hex[:12]
+    password = secrets.token_urlsafe(32)
+    options = conninfo_to_dict(isolated_test_dsn).get("options", "")
+    schema = options.split("search_path=", 1)[1].split(" ", 1)[0]
+    identity = sql.Identifier(login)
+    with psycopg.connect(isolated_test_dsn, autocommit=True) as admin:
+        try:
+            admin.execute(sql.SQL("CREATE ROLE {} LOGIN NOINHERIT NOSUPERUSER NOCREATEDB "
+                                  "NOCREATEROLE NOBYPASSRLS PASSWORD {}").format(
+                                      identity, sql.Literal(password)))
+            admin.execute(sql.SQL("GRANT USAGE ON SCHEMA {} TO {}").format(
+                sql.Identifier(schema), identity))
+            admin.execute(sql.SQL(
+                "GRANT SELECT ON protected_candidate_promotions,ingress_receipts,"
+                "projection_registry,session_heads,session_world_bindings,"
+                "generation_controls,trusted_key_revocations,projection_profile_revocations,"
+                "response_admissions,protected_grant_bindings TO {}"
+            ).format(identity))
+            admin.execute(sql.SQL(
+                "GRANT INSERT ON response_admissions,protected_grant_bindings,"
+                "protected_authorized_http_snapshots TO {}"
+            ).format(identity))
+            admin.execute(sql.SQL(
+                "GRANT UPDATE (control_revision) ON generation_controls TO {}"
+            ).format(identity))
+            admin.execute(sql.SQL(
+                "GRANT UPDATE (state,claim_owner,claim_revision,send_authorization_revision) "
+                "ON response_admissions TO {}"
+            ).format(identity))
+            admin.execute(sql.SQL(
+                "GRANT EXECUTE ON FUNCTION protected_lock_reference(text,jsonb) TO {}"
+            ).format(identity))
+
+            dsn = make_conninfo(isolated_test_dsn, user=login, password=password)
+            _login_preflight(dsn, login, role="authorizer", schema=schema)
+            authorizer = PostgresProtectedAuthorizer(dsn, expected_login=login)
+            admission, owner = authorizer.authorize_promoted_receipt_once(seeded[3])
+            assert owner == "protected-sender-" + seeded[3].hex
+            with psycopg.connect(dsn) as least:
+                assert least.execute(
+                    "SELECT state FROM response_admissions WHERE admission_id=%s",
+                    (admission.admission_id,),
+                ).fetchone() == ("SEND_AUTHORIZED",)
+                with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                    least.execute("SELECT envelope_bytes FROM protected_authorized_http_snapshots")
+            with psycopg.connect(isolated_test_dsn) as privileged:
+                assert privileged.execute(
+                    "SELECT count(*) FROM protected_authorized_http_snapshots"
+                ).fetchone() == (1,)
+        finally:
+            admin.execute(sql.SQL("DROP OWNED BY {}").format(identity))
+            admin.execute(sql.SQL("DROP ROLE {}").format(identity))

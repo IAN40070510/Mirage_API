@@ -5,6 +5,7 @@ import base64
 from copy import deepcopy
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import httpx
@@ -13,12 +14,13 @@ import yaml
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from deception.security.protected_rpc import (
-    FixedExecutorMTLSClient, FixedNativeValidatorMTLSClient,
-    ProtectedRpcConfigurationError, create_fixed_sender_app, create_native_validator_app,
+    FixedAuthorizerMTLSClient, FixedExecutorMTLSClient, FixedNativeValidatorMTLSClient,
+    ProtectedRpcConfigurationError, create_fixed_authorizer_app,
+    create_fixed_sender_app, create_native_validator_app,
 )
 from deception.security.protected_services import (
     _json_secret, _login_preflight, _verifier_key_registry, create_executor_service,
-    create_native_validator_service, create_sender_service,
+    create_authorizer_service, create_native_validator_service, create_sender_service,
     create_verifier_service, from_environment,
 )
 from deception.world.protected_grant import ProtectedGrantError
@@ -176,6 +178,123 @@ def test_g3b_service_bootstrap_rejects_missing_role_and_unsafe_sender(monkeypatc
     monkeypatch.setenv("MIRAGE_TRUSTED_SEND_ENABLE", "true")
     with pytest.raises(ProtectedRpcConfigurationError, match="unsafe_runtime_configuration"):
         from_environment()
+
+
+def test_fixed_authorizer_https_rpc_accepts_only_receipt_and_never_sends_bytes(monkeypatch):
+    """獨立 Authorizer HTTP 只收 UUID4 Receipt，拒絕可偽造的 Candidate、Scope 與期限。"""
+    from fastapi.testclient import TestClient
+    from deception.world.protected_grant import PostgresProtectedAuthorizer
+
+    receipt = uuid4()
+    calls = []
+
+    def authorize_once(self, receipt_id):
+        """只保存 Authorizer 真正收到的 Receipt，不接受額外上游授權欄位。"""
+        calls.append(receipt_id)
+        return SimpleNamespace(admission_id="a" * 32,
+                               request_binding_digest="b" * 64,
+                               candidate_hash="c" * 64), "protected-sender-" + receipt_id.hex
+
+    monkeypatch.setattr(PostgresProtectedAuthorizer, "authorize_promoted_receipt_once", authorize_once)
+    authorizer = PostgresProtectedAuthorizer("postgresql://test.invalid/db", expected_login="auth_test")
+    app = create_fixed_authorizer_app(authorizer=authorizer)
+    with TestClient(app, base_url="http://authorizer.test") as insecure:
+        assert insecure.post("/internal/v1/authorize-receipt",
+                             json={"receipt_id": str(receipt)}).status_code == 503
+    with TestClient(app, base_url="https://authorizer.test") as secure:
+        assert secure.get("/internal/ready").json()["trusted_send"] == "disabled"
+        for payload in ({}, {"receipt_id": str(receipt), "candidate_ref": "forged"},
+                        {"receipt_id": str(receipt), "force": True},
+                        {"receipt_id": "not-a-uuid"}):
+            assert secure.post("/internal/v1/authorize-receipt", json=payload).status_code == 400
+        result = secure.post("/internal/v1/authorize-receipt",
+                             json={"receipt_id": str(receipt)})
+    assert result.status_code == 200
+    assert result.json() == {
+        "receipt_id": str(receipt), "admission_id": "a" * 32,
+        "send_owner": "protected-sender-" + receipt.hex,
+        "request_fingerprint": "b" * 64, "candidate_hash": "c" * 64,
+        "trusted_send": "disabled",
+    }
+    assert calls == [receipt]
+
+
+def test_fixed_authorizer_mtls_client_rejects_rebound_response(monkeypatch):
+    """獨立 Client 單次送 Receipt，錯 Owner／Hash／Receipt 或補發旗標一律拒絕。"""
+    from deception.security import protected_rpc
+
+    receipt = uuid4()
+    observed = []
+    payload = {
+        "receipt_id": str(receipt), "admission_id": "a" * 32,
+        "send_owner": "protected-sender-" + receipt.hex,
+        "request_fingerprint": "b" * 64, "candidate_hash": "c" * 64,
+        "trusted_send": "disabled",
+    }
+
+    class FakeAuthorizerTransport:
+        """攔截 HTTPS Client 只檢查固定 URL／JSON，不執行網路傳送。"""
+
+        def __init__(self, **kwargs):
+            """確認 HTTPX 不會信任外部環境代理設定。"""
+            assert kwargs["trust_env"] is False
+
+        async def __aenter__(self):
+            """回傳固定的模擬 mTLS HTTP transport。"""
+            return self
+
+        async def __aexit__(self, *_):
+            """不隱藏任何授權結果驗證失敗。"""
+            return False
+
+        async def post(self, url, *, json):
+            """只准以 Receipt UUID 查固定 Authorizer RPC，不能給上游選 Payload。"""
+            observed.append((url, json))
+            return httpx.Response(200, json=payload)
+
+    monkeypatch.setattr(protected_rpc.httpx, "AsyncClient", FakeAuthorizerTransport)
+    client = object.__new__(FixedAuthorizerMTLSClient)
+    client._origin, client._tls = "https://authorizer.invalid:8446", object()
+    assert asyncio.run(client.authorize_receipt(receipt)) == payload
+    assert observed == [("https://authorizer.invalid:8446/internal/v1/authorize-receipt",
+                         {"receipt_id": str(receipt)})]
+    for change in ({"receipt_id": str(uuid4())}, {"send_owner": "forged"},
+                   {"candidate_hash": "Z" * 64}, {"trusted_send": "enabled"},
+                   {"extra": "forged"}):
+        original = payload.copy()
+        payload.update(change)
+        with pytest.raises(ProtectedRpcConfigurationError, match="result_binding_mismatch"):
+            asyncio.run(client.authorize_receipt(receipt))
+        payload.clear()
+        payload.update(original)
+
+
+def test_g4_authorizer_bootstrap_uses_independent_secret_and_seals_send(tmp_path, monkeypatch):
+    """Authorizer 啟動只能取得自身 SCRAM Secret，必須先檢查獨立 Login 與 ACL。"""
+    from fastapi.testclient import TestClient
+
+    dsn = tmp_path / "authorizer.dsn"
+    dsn.write_text("postgresql://auth-only.invalid/g4", encoding="ascii")
+    seen = []
+
+    def preflight(*args, **kwargs):
+        """證明 Authorizer 僅以自己的實體 Login 與正確角色做安全預檢。"""
+        seen.append((args, kwargs))
+
+    monkeypatch.setattr("deception.security.protected_services._login_preflight", preflight)
+    config = {"MIRAGE_G4_AUTHORIZER_DSN_FILE": str(dsn),
+              "MIRAGE_G4_AUTHORIZER_LOGIN": "auth_only",
+              "MIRAGE_G3B_WORLD_SCHEMA": "public"}
+    app = create_authorizer_service(config)
+    assert seen == [(("postgresql://auth-only.invalid/g4", "auth_only"),
+                     {"role": "authorizer", "schema": "public"})]
+    with TestClient(app, base_url="https://auth.test") as client:
+        assert client.get("/internal/ready").json() == {
+            "control_plane": "authorizer-receipt-only", "trusted_send": "disabled"}
+    with pytest.raises(ProtectedRpcConfigurationError, match="cross_role_secret_denied"):
+        create_authorizer_service({**config, "MIRAGE_G4_SENDER_DSN_FILE": "forbidden"})
+    with pytest.raises(ProtectedRpcConfigurationError, match="unsafe_runtime_configuration"):
+        create_authorizer_service({**config, "MIRAGE_TRUSTED_SEND_ENABLE": "true"})
 
 
 def test_g4_sender_dedicated_secret_and_lease_are_sealed(tmp_path, monkeypatch):

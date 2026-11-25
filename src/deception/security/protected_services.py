@@ -16,9 +16,10 @@ from mirage_validator.json_utils import reject_constant, unique_object
 
 from .protected_rpc import (
     FixedExecutorMTLSClient, FixedNativeValidatorMTLSClient, ProtectedRpcConfigurationError,
-    create_direct_verifier_app, create_fixed_executor_app, create_fixed_sender_app,
+    create_direct_verifier_app, create_fixed_authorizer_app, create_fixed_executor_app,
+    create_fixed_sender_app,
     create_native_validator_app, serve_direct_verifier_mtls, serve_fixed_executor_mtls,
-    serve_fixed_sender_mtls, serve_native_validator_mtls,
+    serve_fixed_authorizer_mtls, serve_fixed_sender_mtls, serve_native_validator_mtls,
 )
 
 
@@ -66,7 +67,7 @@ def _login_preflight(dsn: str, login: str, *, role: str, schema: str,
     if (not re.fullmatch(r"[a-z][a-z0-9_]{2,62}", login)
             or not re.fullmatch(r"[a-z][a-z0-9_]{0,62}", schema)):
         raise ProtectedRpcConfigurationError("g3b_service_login_invalid")
-    if role not in {"verifier", "executor", "validator", "sender"}:
+    if role not in {"verifier", "executor", "validator", "authorizer", "sender"}:
         raise ProtectedRpcConfigurationError("g3b_service_unapproved_role")
     required = (("ingress_receipts", "INSERT"), ("ingress_receipts", "SELECT"),
                 ("replay_entries", "INSERT"), ("trusted_key_revocations", "SELECT"),
@@ -105,6 +106,15 @@ def _login_preflight(dsn: str, login: str, *, role: str, schema: str,
                     ("protected_send_leases", "INSERT"),
                     ("protected_send_leases", "SELECT"),
                     ("response_audit", "INSERT"))
+    if role == "authorizer":
+        required = tuple((table, "SELECT") for table in (
+            "protected_candidate_promotions", "ingress_receipts", "projection_registry",
+            "session_heads", "session_world_bindings", "generation_controls",
+            "trusted_key_revocations", "projection_profile_revocations",
+            "response_admissions", "protected_grant_bindings",
+        )) + (("response_admissions", "INSERT"),
+              ("protected_grant_bindings", "INSERT"),
+              ("protected_authorized_http_snapshots", "INSERT"))
     if role == "validator":
         # C-01 必須可用獨立實體唯讀 Login 核對不可變 Creator→Derived Lineage，
         # M-03 還需唯讀比對原子保存的 Native Context，不得借用 Cart 寫入權。
@@ -138,6 +148,19 @@ def _login_preflight(dsn: str, login: str, *, role: str, schema: str,
                      ("world_snapshots", "UPDATE"),
                      ("session_heads", "UPDATE"),
                      ("generation_controls", "UPDATE"))
+    if role == "authorizer":
+        forbidden = (("ingress_receipts", "INSERT"),
+                     ("protected_candidate_promotions", "INSERT"),
+                     ("protected_authorized_http_snapshots", "SELECT"),
+                     ("protected_send_leases", "INSERT"),
+                     ("response_audit", "INSERT"),
+                     ("protected_local_restore_events", "INSERT"),
+                     ("world_operations", "INSERT"),
+                     ("protected_grant_bindings", "UPDATE"),
+                     ("protected_grant_bindings", "DELETE"),
+                     ("response_admissions", "DELETE"),
+                     ("generation_controls", "UPDATE"),
+                     ("response_admissions", "UPDATE"))
     if role == "executor" and platform == "synthetic-carts":
         required += (("protected_cart_creations", "INSERT"),
                      ("protected_cart_creations", "SELECT"),
@@ -206,6 +229,17 @@ def _login_preflight(dsn: str, login: str, *, role: str, schema: str,
                             ("response_admissions", column),
                     ).fetchone() != (False,):
                         raise ProtectedRpcConfigurationError("g4_sender_excessive_acl_detected")
+            if role == "authorizer":
+                for table, columns in (
+                        ("generation_controls", ("control_revision",)),
+                        ("response_admissions", ("state", "claim_owner",
+                                                 "claim_revision", "send_authorization_revision"))):
+                    for column in columns:
+                        if connection.execute(
+                                "SELECT has_column_privilege(%s,%s,'UPDATE')",
+                                (table, column),
+                        ).fetchone() != (True,):
+                            raise ProtectedRpcConfigurationError("g4_authorizer_column_acl_missing")
             if role == "validator":
                 for table in (
                         "protected_medusa_rejection_sources", "ingress_receipts",
@@ -223,7 +257,7 @@ def _login_preflight(dsn: str, login: str, *, role: str, schema: str,
                             (table, "INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER"),
                     ).fetchone() != (False,):
                         raise ProtectedRpcConfigurationError("g3b_service_readonly_acl_violated")
-            if role == "executor" and connection.execute(
+            if role in {"executor", "authorizer"} and connection.execute(
                     "SELECT has_function_privilege(%s,'EXECUTE')",
                     (schema + ".protected_lock_reference(text,jsonb)",),
             ).fetchone() != (True,):
@@ -272,6 +306,7 @@ def create_verifier_service(config: Mapping[str, str]) -> FastAPI:
 
     if (config.get("MIRAGE_G3B_EXECUTOR_DSN_FILE")
             or config.get("MIRAGE_G3B_VALIDATOR_DSN_FILE")
+            or config.get("MIRAGE_G4_AUTHORIZER_DSN_FILE")
             or config.get("MIRAGE_G4_SENDER_DSN_FILE")
             or config.get("MIRAGE_POSTGRES_DSN")):
         raise ProtectedRpcConfigurationError("g3b_service_cross_role_secret_denied")
@@ -321,6 +356,7 @@ def create_executor_service(config: Mapping[str, str]) -> FastAPI:
 
     if (config.get("MIRAGE_G3B_VERIFIER_DSN_FILE")
             or config.get("MIRAGE_G3B_VALIDATOR_DSN_FILE")
+            or config.get("MIRAGE_G4_AUTHORIZER_DSN_FILE")
             or config.get("MIRAGE_G4_SENDER_DSN_FILE")
             or config.get("MIRAGE_POSTGRES_DSN")):
         raise ProtectedRpcConfigurationError("g3b_service_cross_role_secret_denied")
@@ -360,6 +396,7 @@ def create_native_validator_service(config: Mapping[str, str]) -> FastAPI:
 
     if (config.get("MIRAGE_POSTGRES_DSN") or config.get("MIRAGE_G3B_VERIFIER_DSN_FILE")
             or config.get("MIRAGE_G3B_EXECUTOR_DSN_FILE")
+            or config.get("MIRAGE_G4_AUTHORIZER_DSN_FILE")
             or config.get("MIRAGE_G4_SENDER_DSN_FILE")):
         raise ProtectedRpcConfigurationError("g3b_service_cross_role_secret_denied")
     dsn = _secret_file(config, "MIRAGE_G3B_VALIDATOR_DSN_FILE", max_bytes=4096)
@@ -378,6 +415,26 @@ def create_native_validator_service(config: Mapping[str, str]) -> FastAPI:
     )
 
 
+def create_authorizer_service(config: Mapping[str, str]) -> FastAPI:
+    """用專用 Authorizer 實體 Login、最小權限及固定 Receipt-only mTLS 入口組裝服務。"""
+    from deception.world.protected_grant import PostgresProtectedAuthorizer
+
+    if any(config.get(key) for key in (
+            "MIRAGE_POSTGRES_DSN", "MIRAGE_G3B_VERIFIER_DSN_FILE",
+            "MIRAGE_G3B_EXECUTOR_DSN_FILE", "MIRAGE_G3B_VALIDATOR_DSN_FILE",
+            "MIRAGE_G4_SENDER_DSN_FILE")):
+        raise ProtectedRpcConfigurationError("g3b_service_cross_role_secret_denied")
+    if config.get("MIRAGE_TRUSTED_SEND_ENABLE") not in (None, "false"):
+        raise ProtectedRpcConfigurationError("g3b_service_unsafe_runtime_configuration")
+    dsn = _secret_file(config, "MIRAGE_G4_AUTHORIZER_DSN_FILE", max_bytes=4096)
+    login = _required_config(config, "MIRAGE_G4_AUTHORIZER_LOGIN")
+    _login_preflight(dsn, login, role="authorizer",
+                     schema=_required_config(config, "MIRAGE_G3B_WORLD_SCHEMA"))
+    return create_fixed_authorizer_app(
+        authorizer=PostgresProtectedAuthorizer(dsn, expected_login=login),
+    )
+
+
 def create_sender_service(config: Mapping[str, str]) -> FastAPI:
     """核對 D-74 部署 Profile，再以獨立 Sender Login 建立封閉的 G4 服務。"""
     from deception.world.protected_send import PostgresProtectedSender
@@ -385,7 +442,8 @@ def create_sender_service(config: Mapping[str, str]) -> FastAPI:
 
     if any(config.get(key) for key in (
             "MIRAGE_POSTGRES_DSN", "MIRAGE_G3B_VERIFIER_DSN_FILE",
-            "MIRAGE_G3B_EXECUTOR_DSN_FILE", "MIRAGE_G3B_VALIDATOR_DSN_FILE")):
+            "MIRAGE_G3B_EXECUTOR_DSN_FILE", "MIRAGE_G3B_VALIDATOR_DSN_FILE",
+            "MIRAGE_G4_AUTHORIZER_DSN_FILE")):
         raise ProtectedRpcConfigurationError("g3b_service_cross_role_secret_denied")
     if config.get("MIRAGE_TRUSTED_SEND_ENABLE") not in (None, "false"):
         raise ProtectedRpcConfigurationError("g3b_service_unsafe_runtime_configuration")
@@ -406,7 +464,8 @@ def from_environment() -> None:
     if (config.get("MIRAGE_TRUSTED_SEND_ENABLE") not in (None, "false")
             or sum(bool(config.get(name)) for name in (
                 "MIRAGE_G3B_EXECUTOR_DSN_FILE", "MIRAGE_G3B_VERIFIER_DSN_FILE",
-                "MIRAGE_G3B_VALIDATOR_DSN_FILE", "MIRAGE_G4_SENDER_DSN_FILE")) > 1):
+                "MIRAGE_G3B_VALIDATOR_DSN_FILE", "MIRAGE_G4_AUTHORIZER_DSN_FILE",
+                "MIRAGE_G4_SENDER_DSN_FILE")) > 1):
         raise ProtectedRpcConfigurationError("g3b_service_unsafe_runtime_configuration")
     role = _required_config(config, "MIRAGE_G3B_SERVICE_ROLE")
     raw_port = _required_config(config, "MIRAGE_G3B_BIND_PORT")
@@ -444,6 +503,14 @@ def from_environment() -> None:
             server_cert=_tls_path(config, "MIRAGE_G4_SENDER_SERVER_CERT_FILE"),
             server_key=_tls_path(config, "MIRAGE_G4_SENDER_SERVER_KEY_FILE"),
             sender_client_ca=_tls_path(config, "MIRAGE_G4_SENDER_CLIENT_CA_FILE"),
+        )
+    elif role == "authorizer":
+        app = create_authorizer_service(config)
+        serve_fixed_authorizer_mtls(
+            app=app, host=host, port=int(raw_port),
+            server_cert=_tls_path(config, "MIRAGE_G4_AUTHORIZER_SERVER_CERT_FILE"),
+            server_key=_tls_path(config, "MIRAGE_G4_AUTHORIZER_SERVER_KEY_FILE"),
+            verifier_client_ca=_tls_path(config, "MIRAGE_G4_AUTHORIZER_VERIFIER_CLIENT_CA_FILE"),
         )
     else:
         raise ProtectedRpcConfigurationError("g3b_service_unapproved_role")

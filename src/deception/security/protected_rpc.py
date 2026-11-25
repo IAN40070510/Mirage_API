@@ -52,6 +52,62 @@ class FixedNativeProjectionCall(SyntheticModel):
     receipt_id: UUID4
 
 
+class FixedAuthorizerCall(SyntheticModel):
+    """授權 RPC 只收由 Verifier 已簽驗的 Receipt ID，不收候選或決策資料。"""
+
+    receipt_id: UUID4
+
+
+class FixedAuthorizerMTLSClient:
+    """獨立 Verifier 以固定 mTLS 身分單次呼叫 Authorizer，不重送未知 COMMIT。"""
+
+    def __init__(self, *, origin: str, client_cert: Path, client_key: Path,
+                 server_ca: Path) -> None:
+        """固定 Authorizer HTTPS 身分與專屬 Client 憑證，拒絕 URL 指向任意端點。"""
+        url = urlsplit(origin) if isinstance(origin, str) else None
+        if (url is None or url.scheme != "https" or not url.hostname or url.port is None
+                or url.path not in {"", "/"} or url.query or url.fragment
+                or url.username is not None or url.password is not None):
+            raise ProtectedRpcConfigurationError("fixed_authorizer_origin_invalid")
+        require_mtls_files(server_cert=client_cert, server_key=client_key, client_ca=server_ca)
+        context = ssl.create_default_context(cafile=str(server_ca))
+        context.load_cert_chain(str(client_cert), str(client_key))
+        if not context.check_hostname or context.verify_mode != ssl.CERT_REQUIRED:
+            raise ProtectedRpcConfigurationError("fixed_authorizer_tls_verification_required")
+        self._origin = origin.rstrip("/")
+        self._tls = context
+
+    async def authorize_receipt(self, receipt_id: UUID) -> dict[str, str]:
+        """只送單一 Receipt UUID4，精確核對回傳身分並拒絕任何補發指示。"""
+        if not isinstance(receipt_id, UUID) or receipt_id.version != 4:
+            raise ProtectedRpcConfigurationError("fixed_authorizer_receipt_invalid")
+        async with httpx.AsyncClient(verify=self._tls, trust_env=False, timeout=8.0) as client:
+            response = await client.post(
+                self._origin + "/internal/v1/authorize-receipt",
+                json={"receipt_id": str(receipt_id)},
+            )
+        if response.status_code != 200:
+            raise ProtectedRpcConfigurationError("fixed_authorizer_result_unverifiable")
+        try:
+            data = json.loads(response.content, object_pairs_hook=unique_object,
+                              parse_constant=reject_constant)
+        except ValueError as exc:
+            raise ProtectedRpcConfigurationError("fixed_authorizer_result_invalid") from exc
+        if (not isinstance(data, dict)
+                or set(data) != {"receipt_id", "admission_id", "send_owner",
+                                 "request_fingerprint", "candidate_hash", "trusted_send"}
+                or data["receipt_id"] != str(receipt_id)
+                or data["send_owner"] != "protected-sender-" + receipt_id.hex
+                or not isinstance(data["admission_id"], str)
+                or not re.fullmatch(r"[0-9a-f]{32}", data["admission_id"])
+                or any(not isinstance(data[name], str)
+                       or not re.fullmatch(r"[0-9a-f]{64}", data[name])
+                       for name in ("request_fingerprint", "candidate_hash"))
+                or data["trusted_send"] != "disabled"):
+            raise ProtectedRpcConfigurationError("fixed_authorizer_result_binding_mismatch")
+        return data
+
+
 class FixedExecutorMTLSClient:
     """獨立 Verifier 用專屬 Client Cert 對已固定 Receipt 單次呼叫 Executor。"""
 
@@ -1376,6 +1432,54 @@ def create_native_validator_app(*, projector) -> FastAPI:
     return app
 
 
+def create_fixed_authorizer_app(*, authorizer) -> FastAPI:
+    """以獨立 mTLS Authorizer 提供只接收 Receipt UUID4 的固定一次性授權 RPC。
+
+    不允許 Caller 指定 Body、Status、Candidate、Scope、Owner、Deadline 或
+    Policy Revision；所有真正授權資料在 Authorizer 實體 Login 的 DB 查回。
+    本入口只產生已授權的 Snapshot，不向 Client／Gateway 發送業務 bytes。
+    """
+    from deception.world.protected_grant import PostgresProtectedAuthorizer, ProtectedGrantError
+    import psycopg
+
+    if not isinstance(authorizer, PostgresProtectedAuthorizer):
+        raise ProtectedRpcConfigurationError("fixed_authorizer_requires_protected_authorizer")
+    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+
+    @app.get("/internal/ready")
+    async def ready() -> dict[str, str]:
+        """只回報獨立 Authorizer 入口存活，不冒稱已完成業務回應。"""
+        return {"control_plane": "authorizer-receipt-only", "trusted_send": "disabled"}
+
+    @app.post("/internal/v1/authorize-receipt")
+    async def authorize_receipt(request: Request) -> dict[str, str]:
+        """嚴格解析單一 Receipt，COMMIT／ACL 不明一律 503 且不自行重試。"""
+        if request.scope.get("scheme") != "https":
+            raise HTTPException(status_code=503, detail="fixed_authorizer_tls_required")
+        body = await request.body()
+        if len(body) > 2048:
+            raise HTTPException(status_code=413, detail="fixed_authorizer_rpc_too_large")
+        try:
+            data = json.loads(body, object_pairs_hook=unique_object,
+                              parse_constant=reject_constant)
+            if not isinstance(data, dict) or set(data) != {"receipt_id"}:
+                raise ValueError("fixed_authorizer_fields_invalid")
+            call = FixedAuthorizerCall.model_validate(data)
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=400, detail="fixed_authorizer_rpc_invalid") from exc
+        try:
+            admission, owner = authorizer.authorize_promoted_receipt_once(call.receipt_id)
+        except (ProtectedGrantError, psycopg.Error, ValueError) as exc:
+            raise HTTPException(status_code=503,
+                                detail="fixed_authorizer_result_unverifiable") from exc
+        return {"receipt_id": str(call.receipt_id), "admission_id": admission.admission_id,
+                "send_owner": owner,
+                "request_fingerprint": admission.request_binding_digest,
+                "candidate_hash": admission.candidate_hash, "trusted_send": "disabled"}
+
+    return app
+
+
 def create_fixed_sender_app(*, sender) -> FastAPI:
     """建立獨立 Sender 的封閉 mTLS API；G5 Fence 前絕不觸發一次性 Lease。
 
@@ -1872,6 +1976,29 @@ def serve_fixed_sender_mtls(
     )
     if config.ssl_cert_reqs is not ssl.CERT_REQUIRED:
         raise ProtectedRpcConfigurationError("fixed_sender_mtls_not_required")
+    uvicorn.Server(config).run()
+
+
+def serve_fixed_authorizer_mtls(
+    *, app: FastAPI, host: str, port: int, server_cert: Path,
+    server_key: Path, verifier_client_ca: Path,
+) -> None:
+    """以專屬 HTTPS Server 與 Verifier Client CA 啟動真正憑證驗證的 Authorizer。"""
+    if not isinstance(app, FastAPI):
+        raise ProtectedRpcConfigurationError("fixed_authorizer_app_required")
+    require_mtls_files(server_cert=server_cert, server_key=server_key,
+                       client_ca=verifier_client_ca)
+    if not isinstance(host, str) or not host or type(port) is not int or not 1 <= port <= 65535:
+        raise ProtectedRpcConfigurationError("fixed_authorizer_bind_invalid")
+    config = uvicorn.Config(
+        app, host=host, port=port,
+        ssl_certfile=str(server_cert), ssl_keyfile=str(server_key),
+        ssl_ca_certs=str(verifier_client_ca), ssl_cert_reqs=ssl.CERT_REQUIRED,
+        ssl_version=ssl.PROTOCOL_TLS_SERVER, http="h11", log_level="warning",
+        proxy_headers=False, access_log=False,
+    )
+    if config.ssl_cert_reqs is not ssl.CERT_REQUIRED:
+        raise ProtectedRpcConfigurationError("fixed_authorizer_mtls_not_required")
     uvicorn.Server(config).run()
 
 

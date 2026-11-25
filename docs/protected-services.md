@@ -159,7 +159,7 @@ python -m deception.security.protected_services
 
 | 設定 | 用途 |
 | --- | --- |
-| `MIRAGE_G3B_SERVICE_ROLE` | `verifier`、`executor`、`validator`；`sender` 僅啟動封閉的 G4 入口 |
+| `MIRAGE_G3B_SERVICE_ROLE` | `verifier`、`executor`、`validator`；G4 另有 `authorizer` 的 Receipt-only mTLS、`sender` 封閉入口 |
 | `MIRAGE_G3B_BIND_HOST`、`MIRAGE_G3B_BIND_PORT` | 明確的 Listener 位址與 TCP 埠，不提供公開 HTTP fallback |
 | `MIRAGE_G3B_WORLD_SCHEMA` | 與 PG 連線 `current_schema()` 必須精確一致，避免查詢同名假表 |
 | `MIRAGE_TRUSTED_SEND_ENABLE` | 若存在，只能是 `false`；所有正式發送依舊不可用 |
@@ -199,6 +199,25 @@ Native Validator 專用：
 | `MIRAGE_G3B_VALIDATOR_DSN_FILE`／`MIRAGE_G3B_VALIDATOR_LOGIN` | 專屬唯讀 PostgreSQL SCRAM Login，不使用 Verifier／Executor 密碼 |
 | `MIRAGE_G3B_VALIDATOR_SERVER_CERT_FILE`／`MIRAGE_G3B_VALIDATOR_SERVER_KEY_FILE` | Validator mTLS Server 身份 |
 | `MIRAGE_G3B_VALIDATOR_CLIENT_CA_FILE` | 只接受 Verifier→Validator 專用 Client CA |
+
+G4 獨立 Authorizer（新接線候選，未放行 Sender）專用：
+
+| 設定 | 用途 |
+| --- | --- |
+| `MIRAGE_G4_AUTHORIZER_DSN_FILE`／`MIRAGE_G4_AUTHORIZER_LOGIN` | 獨立 SCRAM 實體 Login；不得共用其他角色 Secret |
+| `MIRAGE_G4_AUTHORIZER_SERVER_CERT_FILE`／`MIRAGE_G4_AUTHORIZER_SERVER_KEY_FILE` | Authorizer mTLS Server 憑證與私鑰 |
+| `MIRAGE_G4_AUTHORIZER_VERIFIER_CLIENT_CA_FILE` | 僅核准 Verifier Client CA，拒絕 Runtime／Executor 自行呼叫 |
+
+Authorizer 服務新增 `POST /internal/v1/authorize-receipt`，只能接收
+`{"receipt_id":"UUIDv4"}`，所有 Candidate／Scope／Policy／Deadline／Owner
+都由保護資料庫的唯一 Promotion／Registry 導出；無 TLS、額外 JSON 欄位、
+未知／重複 Receipt 或授權提交不明皆不得產生成功回應。
+`FixedAuthorizerMTLSClient` 只送 Receipt，精確核對回覆的 Admission／Owner／
+Fingerprint／Candidate Hash，不接受 `trusted_send=enabled` 或額外權限欄位。
+Authorizer 啟動 preflight 驗證專屬物理 Login、固定 Schema、禁止跨角色 DML，
+以及 `generation_controls.control_revision` 和 Admission 必需欄位的 column-only
+UPDATE。此新增服務仍待真 SCRAM／網路隔離與正式 Client HTTP 端到端驗收；
+它**只授權 Snapshot，不傳輸 HTTP bytes**，Sender Release Fuse 保持關閉。
 
 G4 Sender（只准隔離部署；不屬於 G3b 四容器拓樸）專用：
 
