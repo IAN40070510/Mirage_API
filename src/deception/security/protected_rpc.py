@@ -1437,6 +1437,59 @@ def create_native_validator_app(*, projector) -> FastAPI:
     return app
 
 
+def create_fixed_candidate_publisher_app(*, publisher) -> FastAPI:
+    """獨立 Publisher HTTPS/mTLS 只接 Receipt，固定投影、保存、Promotion 一次。
+
+    這不是 Sender；只回傳參照／Hash／version 的內部對帳結果，絕不回應原生
+    Client bytes 或為未知 COMMIT 自動重試。Caller 無法提供 Evidence／Source。
+    """
+    import psycopg
+    from starlette.concurrency import run_in_threadpool
+    from deception.world.protected_grant import (
+        PostgresVerifiedReceiptPublisher, ProtectedGrantError,
+    )
+    from deception.world.store import WorldStoreError
+
+    if not isinstance(publisher, PostgresVerifiedReceiptPublisher):
+        raise ProtectedRpcConfigurationError("fixed_publisher_requires_protected_publisher")
+    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+
+    @app.get("/internal/ready")
+    async def ready() -> dict[str, str]:
+        """只證明受信任 Publisher 入口存活，不宣稱 Promotion 或 Send 已放行。"""
+        return {"control_plane": "native-candidate-publisher", "trusted_send": "disabled"}
+
+    @app.post("/internal/v1/publish-receipt")
+    async def publish(request: Request) -> dict[str, object]:
+        """HTTPS 單一 UUID4 Receipt 固定寫入，拒絕變更候選或 ACK 不明重試。"""
+        if request.scope.get("scheme") != "https":
+            raise HTTPException(status_code=503, detail="fixed_publisher_tls_required")
+        received = bytearray()
+        async for chunk in request.stream():
+            if len(received) + len(chunk) > 1024:
+                raise HTTPException(status_code=413, detail="fixed_publisher_request_too_large")
+            received.extend(chunk)
+        try:
+            parsed = json.loads(received, object_pairs_hook=unique_object,
+                                parse_constant=reject_constant)
+            if not isinstance(parsed, dict) or set(parsed) != {"receipt_id"}:
+                raise ValueError("fixed_publisher_fields_invalid")
+            call = FixedNativeProjectionCall.model_validate_json(received)
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=400, detail="fixed_publisher_rpc_invalid") from exc
+        try:
+            result = await run_in_threadpool(publisher.publish_receipt_once, call.receipt_id)
+        except (ProtectedGrantError, WorldStoreError, psycopg.Error, ValueError) as exc:
+            raise HTTPException(status_code=503,
+                                detail="fixed_publisher_promotion_unverifiable") from exc
+        return {"receipt_id": str(result.receipt_id), "candidate_ref": result.candidate_ref,
+                "candidate_hash": result.candidate_hash,
+                "candidate_version": result.candidate_version,
+                "trusted_send": "disabled"}
+
+    return app
+
+
 def create_fixed_authorizer_app(*, authorizer) -> FastAPI:
     """以獨立 mTLS Authorizer 提供只接收 Receipt UUID4 的固定一次性授權 RPC。
 

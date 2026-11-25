@@ -71,6 +71,19 @@ Validator 將同步 PostgreSQL 查證放進受控執行緒池，不在 ASGI Even
 此接線**未建立** Verifier→Authorizer→Sender 的完整授權傳輸通路，
 不得視為 G4/G6 的 Client HTTP 發送驗收。
 
+G4 新增受信任 `PostgresVerifiedReceiptPublisher` 與固定
+`POST /internal/v1/publish-receipt` HTTP App：唯一 Caller 欄位是 UUID4 Receipt；
+Publisher 在已驗證的唯讀原生投影上重新計算完整 v1 Envelope，從不可變 Ingress
+Receipt／ReadAdmission 取 DB 期限，使用固定 `verified-native-{receipt_id.hex}`
+參照與**平台釘選**、已登錄且未撤銷的 `ProjectionEvidence`，先保存不可變
+Candidate，再透過獨立物理 Login 的 `PostgresCandidatePromoter` 鎖定 Receipt、
+比對真實來源及 Registry 並寫入 version=1 Promotion。回傳只含 Ref／Hash／版本，
+不含任何原生 bytes，無法由呼叫端選 Candidate／證據／期限。ACK 不明不自動
+重試，Candidate 已保存但 Promotion 失敗也不能冒充 Grant。此為可驗證的
+**接線 primitive／RPC App**；正式獨立 Publisher 角色 Secret、部署網路、
+Verifier 到 Publisher 的 mTLS 導流以及與 Authorizer/Sender 的整路徑整合，
+仍需分別取得實體 CI／正式驗收，不能因此解除既有 Sender Release Fuse。
+
 M-03 已知 Variant 的受保護 Executor Commit 已接線供隔離驗證：原始
 `POST /store/carts/{id}/line-items` 必須有與 JWS Fingerprint 完全一致的
 Publishable Key、JSON Body、Derived Cart Capability 和 Creator→Derived

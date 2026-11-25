@@ -14,7 +14,8 @@ import pytest
 from deception.world import (CartCreationSource, CommitSource, SnapshotSource,
                              PostgresCandidatePromoter, PostgresCandidateStore,
                              PostgresEventWorldStore, PostgresProtectedAuthorizer,
-                             PostgresProtectedWorldExecutor,
+                             PostgresProtectedWorldExecutor, PostgresVerifiedReceiptPublisher,
+                             ProjectionCompatibilityProfile, ProjectionEvidence,
                              PostgresProjectionRegistry, ProtectedGrantError, SecurityErrorSource)
 from deception.world.session import SessionBinding
 from deception.world.models import WorldScope
@@ -547,6 +548,159 @@ def test_inventory_get_receipt_admits_real_protected_read_without_native_http(
         assert json.loads(projected.body_bytes) == {"code": "operation_not_found"}
         with pytest.raises(ProtectedGrantError, match="read_source_missing"):
             projector.project_inventory_operation(uuid4())
+
+
+def test_native_receipt_publisher_promotes_with_distinct_real_scram_logins(isolated_test_dsn):
+    """真 PG 的唯讀 Validator→可信 Candidate→獨立 Promoter→Receipt-only Grant 全鏈。
+
+    僅在拋棄式 PostgreSQL Role Lab 執行，允許測試後移除專用角色；不送
+    Client HTTP，也不借用 MSDSS／正式部署的任何 DB、Role 或金鑰。
+    """
+    if os.environ.get("MIRAGE_WORLD_ROLE_TEST_ISOLATED") != "true":
+        pytest.skip("requires disposable PostgreSQL cluster for independent SCRAM logins")
+    import psycopg
+    from psycopg import sql
+    from psycopg.conninfo import conninfo_to_dict, make_conninfo
+
+    dsn, now = isolated_test_dsn, int(time.time())
+    binding = SessionBinding(environment_id="publisher-lab", deployment_id="isolated",
+                             session_id=uuid4().hex, session_epoch=1, access_mode="inventory")
+    store = SyntheticInventory(dsn)
+    snapshot = store.resolve(binding, {"inventory": {"sku-1": 8}, "reservations": {}},
+                             now=now, ttl=150)
+    request = replace(original_request(path="/synthetic/inventory/sku-1", method="GET"), body=b"")
+    proof = derive_verified_operation(request)
+    receipt, jti = uuid4(), uuid4().hex
+    with psycopg.connect(dsn) as connection:
+        connection.execute("INSERT INTO replay_entries VALUES ('gateway','mirage',%s,%s)",
+                           (jti, now + 150))
+        connection.execute(
+            """INSERT INTO ingress_receipts (
+                   receipt_id,issuer,audience,jti,key_id,environment_id,deployment_id,
+                   session_id,session_epoch,request_fingerprint,assessment_digest,
+                   claims_digest,verification_policy_version,token_issued_at,
+                   token_not_before,token_expires_at,access_mode)
+               VALUES (%s,'gateway','mirage',%s,'kid',%s,%s,%s,1,%s,%s,%s,
+                       'trusted-session-v1.1',%s,%s,%s,'inventory')""",
+            (receipt, jti, binding.environment_id, binding.deployment_id,
+             binding.session_id, proof.request_fingerprint, digest("b"), digest("c"),
+             now - 5, now - 5, now + 110),
+        )
+        connection.execute(
+            """INSERT INTO protected_http_operation_bindings (
+                   receipt_id,platform,operation_id,method,path_template,
+                   request_fingerprint,request_body_sha256,request_path,request_content_type)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+            (receipt, proof.platform, proof.operation_id, proof.method, proof.path_template,
+             proof.request_fingerprint, proof.request_body_sha256,
+             proof.request_path, proof.request_content_type),
+        )
+    executor = PostgresProtectedWorldExecutor(dsn, expected_login=_real_login(dsn),
+                                               world_store=store)
+    executor.read_verified_inventory_http(
+        receipt_id=receipt, binding=binding,
+        raw_path=request.raw_path, raw_body=b"", expires_at=now + 90,
+    )
+    profiles = {}
+    for platform in ("synthetic-inventory", "synthetic-carts", "medusa-native-cart"):
+        profiles[platform] = ProjectionEvidence(
+            source_spec_sha256=digest("publisher-source-" + platform),
+            compatibility_profile=ProjectionCompatibilityProfile(
+                profile_id="publisher-isolated", profile_version="1",
+                profile_sha256=digest("publisher-profile-" + platform),
+                platform_id=platform, platform_version="1",
+                source_spec_sha256=digest("publisher-source-" + platform),
+                world_schema_version="1", domain_adapter_version="1",
+            ),
+            projection_contract_hash=digest("publisher-contract-" + platform),
+            official_schema_valid=True, effective_projection_valid=True,
+        )
+    PostgresProjectionRegistry(dsn).ensure_registered_batch((profiles["synthetic-inventory"],))
+    schema = conninfo_to_dict(dsn)["options"].split("search_path=", 1)[1].split(" ", 1)[0]
+    users = {kind: ("mirage_pub_" + kind + "_" + uuid4().hex[:10], secrets.token_urlsafe(32))
+             for kind in ("validator", "promoter")}
+    with psycopg.connect(dsn, autocommit=True) as admin:
+        try:
+            for login, password in users.values():
+                admin.execute(sql.SQL(
+                    "CREATE ROLE {} LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE "
+                    "NOREPLICATION NOBYPASSRLS PASSWORD {}"
+                ).format(sql.Identifier(login), sql.Literal(password)))
+                admin.execute(sql.SQL("GRANT USAGE ON SCHEMA {} TO {}").format(
+                    sql.Identifier(schema), sql.Identifier(login)))
+            validator = sql.Identifier(users["validator"][0])
+            promoter = sql.Identifier(users["promoter"][0])
+            admin.execute(sql.SQL(
+                "GRANT SELECT ON ingress_receipts,protected_http_operation_bindings,"
+                "protected_world_read_sources,read_admissions,world_snapshots,"
+                "world_operations,world_commit_receipts,session_heads,session_world_bindings,"
+                "generation_controls,trusted_key_revocations,synthetic_resources,"
+                "protected_world_commit_sources,protected_world_rejection_sources,"
+                "protected_medusa_rejection_sources TO {}"
+            ).format(validator))
+            admin.execute(sql.SQL(
+                "GRANT SELECT ON candidate_records,read_admissions,world_operations,"
+                "protected_world_read_sources,protected_world_commit_sources,"
+                "projection_registry,projection_profile_revocations,ingress_receipts,"
+                "protected_http_operation_bindings TO {}"
+            ).format(promoter))
+            admin.execute(sql.SQL(
+                "GRANT INSERT,SELECT ON protected_candidate_promotions TO {}"
+            ).format(promoter))
+            admin.execute(sql.SQL(
+                "GRANT EXECUTE ON FUNCTION protected_lock_reference(text,jsonb) TO {}"
+            ).format(promoter))
+            val_dsn = make_conninfo(dsn, user=users["validator"][0],
+                                    password=users["validator"][1])
+            prom_dsn = make_conninfo(dsn, user=users["promoter"][0],
+                                     password=users["promoter"][1])
+            projector = PostgresProtectedNativeProjector(
+                val_dsn, expected_login=users["validator"][0],
+            )
+            publisher = PostgresVerifiedReceiptPublisher(
+                projector=projector, candidate_store=PostgresCandidateStore(dsn),
+                promoter=PostgresCandidatePromoter(prom_dsn,
+                                                   expected_login=users["promoter"][0]),
+                evidence_by_platform=profiles,
+            )
+            projected = projector.project_verified_receipt(receipt)
+            published = publisher.publish_receipt_once(receipt)
+            assert published.receipt_id == receipt
+            assert published.candidate_ref == "verified-native-" + receipt.hex
+            assert published.candidate_hash == projected.envelope_hash
+            assert published.candidate_version == 1 and published.expires_at == now + 90
+            assert PostgresCandidateStore(dsn).load(
+                snapshot.scope, published.candidate_ref,
+                expected_hash=published.candidate_hash, now=now,
+            ).record.body == response_envelope(
+                projected.status_code, projected.headers, projected.body_bytes,
+            )
+            with psycopg.connect(val_dsn) as readonly:
+                with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                    readonly.execute("INSERT INTO protected_candidate_promotions(candidate_ref) "
+                                     "VALUES ('forged')")
+            with psycopg.connect(prom_dsn) as limited:
+                with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                    limited.execute("UPDATE world_snapshots SET version=0 WHERE false")
+            admission, owner = PostgresProtectedAuthorizer(
+                dsn, expected_login=_real_login(dsn),
+            ).authorize_promoted_receipt_once(receipt)
+            assert admission.candidate_ref == published.candidate_ref
+            assert admission.candidate_hash == published.candidate_hash
+            assert owner == "protected-sender-" + receipt.hex
+            with pytest.raises(psycopg.errors.UniqueViolation):
+                publisher.publish_receipt_once(receipt)
+            with psycopg.connect(dsn) as connection:
+                assert connection.execute(
+                    "SELECT count(*) FROM protected_candidate_promotions WHERE ingress_receipt_id=%s",
+                    (receipt,),
+                ).fetchone() == (1,)
+                assert connection.execute("SELECT count(*) FROM protected_send_leases"
+                                          ).fetchone() == (0,)
+        finally:
+            for login, _ in users.values():
+                admin.execute(sql.SQL("DROP OWNED BY {}").format(sql.Identifier(login)))
+                admin.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(login)))
 
 
 def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolated_test_dsn, request, tmp_path):

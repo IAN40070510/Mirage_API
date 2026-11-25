@@ -16,7 +16,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from deception.security.protected_rpc import (
     FixedAuthorizerMTLSClient, FixedExecutorMTLSClient, FixedNativeValidatorMTLSClient,
     ProtectedRpcConfigurationError, create_fixed_authorizer_app,
-    create_fixed_sender_app, create_native_validator_app,
+    create_fixed_candidate_publisher_app, create_fixed_sender_app, create_native_validator_app,
 )
 from deception.security.protected_services import (
     _json_secret, _login_preflight, _verifier_key_registry, create_executor_service,
@@ -178,6 +178,100 @@ def test_g3b_service_bootstrap_rejects_missing_role_and_unsafe_sender(monkeypatc
     monkeypatch.setenv("MIRAGE_TRUSTED_SEND_ENABLE", "true")
     with pytest.raises(ProtectedRpcConfigurationError, match="unsafe_runtime_configuration"):
         from_environment()
+
+
+def test_fixed_publisher_https_rpc_accepts_only_receipt_and_never_sends_bytes(monkeypatch):
+    """可信 Publisher mTLS 只收 UUID4，不容 Runtime 提供 Body／Evidence／Profile。"""
+    from fastapi.testclient import TestClient
+    import psycopg
+
+    from deception.world.protected_grant import (
+        PostgresVerifiedReceiptPublisher, ProtectedPublishedCandidate,
+    )
+
+    receipt = uuid4()
+    seen = []
+
+    def publish_once(self, given_receipt):
+        """只記錄實際被 Publisher 接受的單一 Receipt，不做對外資料庫連線。"""
+        seen.append(given_receipt)
+        return ProtectedPublishedCandidate(
+            receipt_id=given_receipt, candidate_ref="verified-native-" + given_receipt.hex,
+            candidate_hash="a" * 64, candidate_version=1, expires_at=1900000000,
+        )
+
+    monkeypatch.setattr(PostgresVerifiedReceiptPublisher, "publish_receipt_once", publish_once)
+    publisher = object.__new__(PostgresVerifiedReceiptPublisher)
+    app = create_fixed_candidate_publisher_app(publisher=publisher)
+    with TestClient(app, base_url="http://publisher.test") as insecure:
+        assert insecure.post("/internal/v1/publish-receipt",
+                             json={"receipt_id": str(receipt)}).status_code == 503
+    with TestClient(app, base_url="https://publisher.test") as secure:
+        assert secure.get("/internal/ready").json()["trusted_send"] == "disabled"
+        for malicious in (
+            {}, {"receipt_id": str(receipt), "status_code": 200},
+            {"receipt_id": str(receipt), "candidate_ref": "forged"},
+            {"receipt_id": str(receipt), "body_b64": "e30="},
+            {"receipt_id": str(receipt), "evidence": {"official_schema_valid": True}},
+            {"receipt_id": "invalid"},
+        ):
+            assert secure.post("/internal/v1/publish-receipt", json=malicious).status_code == 400
+        assert secure.post("/internal/v1/publish-receipt",
+                           content=(b'{"receipt_id":"' + str(receipt).encode() + b'",'
+                                    + b'"receipt_id":"' + str(receipt).encode() + b'"}'),
+                           ).status_code == 400
+        assert secure.post("/internal/v1/publish-receipt",
+                           content=b"x" * 1025).status_code == 413
+        response = secure.post("/internal/v1/publish-receipt",
+                               json={"receipt_id": str(receipt)})
+        assert response.status_code == 200
+        assert response.json() == {
+            "receipt_id": str(receipt), "candidate_ref": "verified-native-" + receipt.hex,
+            "candidate_hash": "a" * 64, "candidate_version": 1,
+            "trusted_send": "disabled",
+        }
+    assert seen == [receipt]
+
+    def unknown_commit(self, given_receipt):
+        """模擬 Promotion COMMIT ACK 消失；服務回 503，不能暗中再寫一次。"""
+        seen.append(given_receipt)
+        raise psycopg.OperationalError("publisher_commit_ack_unknown")
+
+    monkeypatch.setattr(PostgresVerifiedReceiptPublisher, "publish_receipt_once", unknown_commit)
+    with TestClient(app, base_url="https://publisher.test") as secure:
+        assert secure.post("/internal/v1/publish-receipt",
+                           json={"receipt_id": str(receipt)}).status_code == 503
+    assert seen == [receipt, receipt]
+
+
+def test_candidate_publisher_rejects_shared_login_and_unpinned_profiles():
+    """受信任 Candidate Publisher 建構時禁止重用物理登入或錯配平台證據。"""
+    from deception.world import (PostgresCandidatePromoter, PostgresCandidateStore,
+                                 PostgresVerifiedReceiptPublisher)
+    from test_postgres_conformance import projection_evidence
+
+    projector = PostgresProtectedNativeProjector(
+        "postgresql://localhost/invalid-test", expected_login="validator",
+    )
+    store = PostgresCandidateStore("postgresql://localhost/invalid-test")
+    evidence = projection_evidence()
+    profiles = {platform: evidence for platform in (
+        "synthetic-inventory", "synthetic-carts", "medusa-native-cart"
+    )}
+    with pytest.raises(ProtectedGrantError, match="protected_publisher_boundary_invalid"):
+        PostgresVerifiedReceiptPublisher(
+            projector=projector, candidate_store=store,
+            promoter=PostgresCandidatePromoter(
+                "postgresql://localhost/invalid-test", expected_login="validator",
+            ), evidence_by_platform=profiles,
+        )
+    with pytest.raises(ProtectedGrantError, match="protected_publisher_profile_unapproved"):
+        PostgresVerifiedReceiptPublisher(
+            projector=projector, candidate_store=store,
+            promoter=PostgresCandidatePromoter(
+                "postgresql://localhost/invalid-test", expected_login="promoter",
+            ), evidence_by_platform=profiles,
+        )
 
 
 def test_fixed_authorizer_https_rpc_accepts_only_receipt_and_never_sends_bytes(monkeypatch):

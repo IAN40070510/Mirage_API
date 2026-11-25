@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from dataclasses import dataclass
+from typing import Mapping
 from uuid import UUID, uuid4
 
 from deception.security.key_revocation import PostgresTrustedKeyRevocations
@@ -317,6 +319,129 @@ class PostgresCandidatePromoter(_ProtectedConnection):
             return cursor.fetchone() is not None
         # 無受保護來源的安全錯誤模板不得借 Candidate Promotion 混入授權。
         return False
+
+
+@dataclass(frozen=True)
+class ProtectedPublishedCandidate:
+    """可信 Publisher 的不可變收據；只提供來源身分與 Hash，不暴露原生 bytes。"""
+
+    receipt_id: UUID
+    candidate_ref: str
+    candidate_hash: str
+    candidate_version: int
+    expires_at: int
+
+
+class PostgresVerifiedReceiptPublisher:
+    """以獨立唯讀 Validator 來源建立 Candidate 並交由專用 Promoter 綁定。
+
+    服務構造時固定三種平台的已審查 ProjectionEvidence；公開操作只有 Receipt。
+    不允許 Runtime 傳入 Body、候選參照、Scope、有效期限或授權政策。資料庫
+    寫入分別透過低信任 Candidate Store 與實體 Promoter Login 完成；無法證明
+    來源、Registry、期限或 COMMIT 結果時，不重試 Promotion、不核發 Grant。
+    """
+
+    def __init__(self, *, projector, candidate_store, promoter: PostgresCandidatePromoter,
+                 evidence_by_platform: Mapping[str, ProjectionEvidence]) -> None:
+        """固定三平台審查證據與三種獨立作業介面，拒絕任意假的服務物件。"""
+        from .postgres_candidate import PostgresCandidateStore
+        from .protected_native_http import PostgresProtectedNativeProjector
+
+        if (not isinstance(projector, PostgresProtectedNativeProjector)
+                or not isinstance(candidate_store, PostgresCandidateStore)
+                or not isinstance(promoter, PostgresCandidatePromoter)
+                or not isinstance(evidence_by_platform, Mapping)
+                or set(evidence_by_platform) != {
+                    "synthetic-inventory", "synthetic-carts", "medusa-native-cart"
+                } or projector._login == promoter._login):
+            raise ProtectedGrantError("protected_publisher_boundary_invalid")
+        checked = {}
+        for platform, evidence in evidence_by_platform.items():
+            if not isinstance(evidence, ProjectionEvidence):
+                raise ProtectedGrantError("protected_publisher_evidence_invalid")
+            pinned = ProjectionEvidence.model_validate(evidence.model_dump())
+            if (pinned.compatibility_profile.platform_id != platform
+                    or not pinned.official_schema_valid
+                    or not pinned.effective_projection_valid):
+                raise ProtectedGrantError("protected_publisher_profile_unapproved")
+            checked[platform] = pinned
+        self._projector = projector
+        self._candidate_store = candidate_store
+        self._promoter = promoter
+        self._evidence_by_platform = checked
+
+    def publish_receipt_once(self, receipt_id: UUID) -> ProtectedPublishedCandidate:
+        """重驗不可變來源並單次 Promotion；ACK 不明不得重送或返回可發送 bytes。
+
+        候選的 Ref 與有效期限取自固定 Receipt／DB，而非 HTTP Caller。
+        存候選成功但 Promotion 失敗可留下待 GC 的不可用候選，不會產生 Grant。
+        """
+        if not isinstance(receipt_id, UUID) or receipt_id.version != 4:
+            raise ProtectedGrantError("protected_publisher_receipt_invalid")
+        from .protected_native_http import ProtectedNativeProjection
+
+        projected = self._projector.project_verified_receipt(receipt_id)
+        if (not isinstance(projected, ProtectedNativeProjection)
+                or projected.receipt_id != receipt_id
+                or type(projected.status_code) is not int
+                or projected.status_code not in {200, 400, 404, 409}
+                or projected.headers != (("content-type", "application/json"),)
+                or not isinstance(projected.body_bytes, bytes)
+                or len(projected.body_bytes) > 1048576):
+            raise ProtectedGrantError("protected_publisher_native_envelope_invalid")
+        with self._projector._connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SET LOCAL statement_timeout='5s'")
+                cursor.execute(
+                    """SELECT r.token_expires_at,b.platform,b.operation_id
+                       FROM ingress_receipts r
+                       JOIN protected_http_operation_bindings b ON b.receipt_id=r.receipt_id
+                         AND b.request_fingerprint=r.request_fingerprint
+                       WHERE r.receipt_id=%s AND r.request_fingerprint=%s""",
+                    (receipt_id, projected.request_fingerprint),
+                )
+                proof = cursor.fetchone()
+                if (proof is None or proof[2] != projected.operation_id
+                        or proof[1] not in self._evidence_by_platform):
+                    raise ProtectedGrantError("protected_publisher_proof_unverifiable")
+                expiry = proof[0]
+                if projected.source.kind == "snapshot":
+                    cursor.execute(
+                        "SELECT expires_at FROM read_admissions WHERE read_admission_id=%s",
+                        (projected.source.read_admission_id,),
+                    )
+                    admitted = cursor.fetchone()
+                    if admitted is None:
+                        raise ProtectedGrantError("protected_publisher_read_expiry_missing")
+                    expiry = min(expiry, admitted[0])
+                cursor.execute("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
+                if type(expiry) is not int or expiry <= cursor.fetchone()[0] + 15:
+                    raise ProtectedGrantError("protected_publisher_deadline_too_short")
+        envelope = response_envelope(
+            projected.status_code, projected.headers, projected.body_bytes,
+        )
+        hashes = response_hashes(
+            projected.status_code, projected.headers, projected.body_bytes,
+        )
+        if hashes[0] != projected.envelope_hash:
+            raise ProtectedGrantError("protected_publisher_envelope_rebound")
+        candidate_ref = "verified-native-" + receipt_id.hex
+        saved = self._candidate_store.put(
+            projected.scope, candidate_ref, envelope, expires_at=expiry,
+        )
+        if (saved.candidate_ref != candidate_ref or saved.scope != projected.scope
+                or saved.candidate_hash != hashes[0] or saved.body != envelope
+                or saved.expires_at != expiry):
+            raise ProtectedGrantError("protected_publisher_candidate_rebound")
+        version = self._promoter.promote(
+            receipt_id=receipt_id, scope=projected.scope, candidate_ref=candidate_ref,
+            request_fingerprint=projected.request_fingerprint, envelope_hash=hashes[0],
+            immutable_body_hash=hashes[1], semantic_headers_hash=hashes[2],
+            evidence=self._evidence_by_platform[proof[1]], source=projected.source,
+        )
+        if version != 1:
+            raise ProtectedGrantError("protected_publisher_version_unapproved")
+        return ProtectedPublishedCandidate(receipt_id, candidate_ref, hashes[0], version, expiry)
 
 
 class PostgresProtectedAuthorizer(_ProtectedConnection):
