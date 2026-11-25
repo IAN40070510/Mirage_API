@@ -409,7 +409,7 @@ def create_verifier_service(config: Mapping[str, str]) -> FastAPI:
         "MIRAGE_G4_VERIFIER_PUBLISHER_KEY_FILE", "MIRAGE_G4_PUBLISHER_SERVER_CA_FILE",
     )
     publisher_client = None
-    if any(config.get(key) for key in publisher_keys):
+    if any(key in config for key in publisher_keys):
         if not all(config.get(key) for key in publisher_keys):
             raise ProtectedRpcConfigurationError("g4_publisher_mtls_configuration_incomplete")
         publisher_client = FixedCandidatePublisherMTLSClient(
@@ -423,7 +423,7 @@ def create_verifier_service(config: Mapping[str, str]) -> FastAPI:
         "MIRAGE_G4_VERIFIER_AUTHORIZER_KEY_FILE", "MIRAGE_G4_AUTHORIZER_SERVER_CA_FILE",
     )
     authorizer_client = None
-    if any(config.get(key) for key in authorizer_keys):
+    if any(key in config for key in authorizer_keys):
         if publisher_client is None or not all(config.get(key) for key in authorizer_keys):
             raise ProtectedRpcConfigurationError("g4_authorizer_mtls_chain_incomplete")
         # Authorizer 是另一個寫入 Grant 的信任角色，不能重用 Publisher Client

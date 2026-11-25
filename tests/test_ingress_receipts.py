@@ -943,6 +943,11 @@ def test_three_process_gateway_verifier_executor_distinct_mtls_roots(isolated_te
         "MIRAGE_G3B_WORLD_SCHEMA": verifier_config["MIRAGE_G3B_WORLD_SCHEMA"],
     }
     assert create_verifier_service(verifier_config).state is not None
+    # 空值仍是部署者明確指定了半套信任鏈，不能以 falsy 值靜默退回候選-only。
+    with pytest.raises(ProtectedRpcConfigurationError, match="publisher_mtls_configuration_incomplete"):
+        create_verifier_service({**verifier_config, "MIRAGE_G4_PUBLISHER_ORIGIN": ""})
+    with pytest.raises(ProtectedRpcConfigurationError, match="authorizer_mtls_chain_incomplete"):
+        create_verifier_service({**verifier_config, "MIRAGE_G4_AUTHORIZER_ORIGIN": ""})
     assert create_executor_service(executor_config).state is not None
     with pytest.raises(ProtectedRpcConfigurationError, match="physical_login_denied"):
         create_executor_service({**executor_config, "MIRAGE_G3B_EXECUTOR_LOGIN": logins["runtime"][1]})

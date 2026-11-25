@@ -35,7 +35,9 @@ Request Fingerprint、Candidate Hash 必須與本次受信任鏈全部相同；
 `MIRAGE_G4_VERIFIER_AUTHORIZER_KEY_FILE` 與
 `MIRAGE_G4_AUTHORIZER_SERVER_CA_FILE`；必須同時有完整 Publisher
 mTLS 配置，且 Authorizer 與 Publisher 的 Verifier Client Cert/Key 不可
-使用相同實體檔案。未提供這組設定不改變舊的內部 Candidate-only 流程。
+使用相同實體檔案或相同憑證公鑰。任何一項設定已出現卻為空值或不完整，
+都必須拒絕啟動，不能藉 falsy 空字串退回 Candidate-only。完全未提供這組
+設定才保留舊的內部 Candidate-only 流程。
 目前只有單元隔離鏈驗證，四服務部署尚未接這個選用 Caller、Sender 仍封閉；
 不能把內部 `receipt_authorization` JSON 當成原生 Client HTTP 或正式放行。
 
