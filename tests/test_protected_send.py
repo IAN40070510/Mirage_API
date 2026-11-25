@@ -104,6 +104,55 @@ def test_known_local_restore_blocks_future_send_lease_persistently(isolated_test
         assert connection.execute("SELECT count(*) FROM protected_send_leases").fetchone() == (0,)
 
 
+def test_known_restore_recorder_and_sender_use_distinct_real_scram_acl(isolated_test_dsn):
+    """真正隔離的 Recorder 僅可 INSERT，Sender 僅可 SELECT，不得切換對方角色。"""
+    if os.environ.get("MIRAGE_WORLD_ROLE_TEST_ISOLATED") != "true":
+        pytest.skip("requires disposable PostgreSQL cluster for login role creation")
+    import psycopg
+    from psycopg import sql
+    from psycopg.conninfo import conninfo_to_dict, make_conninfo
+
+    roles = {name: (f"mirage_restore_{name}_{uuid4().hex[:10]}", secrets.token_urlsafe(32))
+             for name in ("recorder", "sender")}
+    schema = conninfo_to_dict(isolated_test_dsn)["options"].split("search_path=", 1)[1].split(" ", 1)[0]
+    with psycopg.connect(isolated_test_dsn, autocommit=True) as admin:
+        try:
+            for role, password in roles.values():
+                admin.execute(sql.SQL("CREATE ROLE {} LOGIN NOINHERIT NOSUPERUSER "
+                                      "NOCREATEDB NOCREATEROLE NOBYPASSRLS PASSWORD {}").format(
+                                          sql.Identifier(role), sql.Literal(password)))
+                admin.execute(sql.SQL("GRANT USAGE ON SCHEMA {} TO {}").format(
+                    sql.Identifier(schema), sql.Identifier(role)))
+            admin.execute(sql.SQL("GRANT INSERT ON protected_local_restore_events TO {}").format(
+                sql.Identifier(roles["recorder"][0])))
+            admin.execute(sql.SQL("GRANT SELECT ON protected_local_restore_events TO {}").format(
+                sql.Identifier(roles["sender"][0])))
+            dsn = {name: make_conninfo(isolated_test_dsn, user=role, password=password)
+                   for name, (role, password) in roles.items()}
+            recorder = PostgresKnownRestoreRecorder(dsn["recorder"],
+                                                     expected_login=roles["recorder"][0])
+            event_id = uuid4()
+            assert recorder.mark_known_restore(event_id)
+            assert not recorder.mark_known_restore(event_id)
+            with psycopg.connect(dsn["recorder"]) as connection:
+                with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                    connection.execute("SELECT count(*) FROM protected_local_restore_events")
+            with psycopg.connect(dsn["sender"]) as connection:
+                assert connection.execute(
+                    "SELECT count(*) FROM protected_local_restore_events").fetchone() == (1,)
+                with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                    connection.execute("INSERT INTO protected_local_restore_events VALUES (%s)",
+                                       (uuid4(),))
+            with psycopg.connect(dsn["sender"]) as connection:
+                with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                    connection.execute(sql.SQL("SET ROLE {}").format(
+                        sql.Identifier(roles["recorder"][0])))
+        finally:
+            for role, _ in roles.values():
+                admin.execute(sql.SQL("DROP OWNED BY {}").format(sql.Identifier(role)))
+                admin.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(role)))
+
+
 def test_known_restore_lock_serializes_concurrent_sender_start(isolated_test_dsn):
     """Restore 排他交易鎖先取得時，並行 StartSend 必等事件提交並拒絕新 Lease。"""
     import psycopg

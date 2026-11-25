@@ -104,7 +104,9 @@ lock、檢查此表；Recorder 取得同一鎖的排他型態才能插入事件�
 的新 Lease 一律拒絕，已存在的原授權與 Snapshot 不更改。若表缺失、無 SELECT
 權或 Lock/DB 無法查證則 fail closed。Sender 角色的啟動前 ACL 明確需要
 `SELECT` 且禁止 `INSERT`／`UPDATE`／`DELETE`；Recorder 的獨立 Login
-正式部署 Secret/ACL 尚未驗收。
+只需 `INSERT`，同 ID 使用 `ON CONFLICT DO NOTHING` 查核結果，不需要
+`SELECT`／`UPDATE`／`DELETE`。新增真 PostgreSQL `NOINHERIT` SCRAM 兩角色
+最小權限與禁止 `SET ROLE` 的隔離測試；正式部署 Secret/ACL 尚未驗收。
 
 此方法**只能偵測由部署控制面明確告知、且事件在目前 World DB 中仍可見的
 已知 Restore**。部署流程須先停止受信任入口，完成還原後、任何 Sender

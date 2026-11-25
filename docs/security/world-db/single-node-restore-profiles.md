@@ -39,7 +39,9 @@ MIRAGE_RESTORE_PROFILE_VERSION=1
 append-only restore-event IDs in the World PostgreSQL. An advisory transaction lock
 serializes new Sender Lease creation against event insertion; once an event is
 committed, later new leases are denied. The schema/table must exist and the Sender
-must have SELECT or starting a lease fails closed. This is a narrowly scoped
+must have SELECT or starting a lease fails closed. The Recorder only needs
+INSERT, and an isolated PostgreSQL SCRAM role test denies its SELECT privilege,
+the Sender's INSERT privilege and cross-role SET ROLE. This is a narrowly scoped
 single-node mechanism, **not** an external Fence or whole-host rollback detector.
 The deployer must suspend ingress before restore and persist the marker **after**
 restoring the database, before reopening Sender; restoring an older DB image after
