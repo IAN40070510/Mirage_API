@@ -78,6 +78,7 @@ def apply_schema(dsn: str) -> None:
     migrations = Path(__file__).parents[1] / "migrations"
     with psycopg.connect(dsn) as connection:
         for migration in sorted(migrations.glob("[0-9]*.sql")):
+            # Consumer-owned original-assessment storage is not a Mirage World migration.
             connection.execute(migration.read_text(encoding="utf-8"))
 
 
@@ -242,6 +243,47 @@ def test_postgres_emergency_revocation_blocks_send_across_instances():
     assert second_instance.authorize_send(admission.admission_id, now=2, revoked=True) is AdmissionOperationResult.REJECTED
     assert first_instance.authorize_send(admission.admission_id, now=3) is AdmissionOperationResult.REJECTED
     assert second_instance.state(admission.admission_id) is AdmissionState.ABANDONED
+
+
+def test_strict_send_authorization_rejects_unbound_world(isolated_test_dsn):
+    """正式嚴格模式不允許缺少 Session↔Generation 對應的 prototype Grant。"""
+    dsn = isolated_test_dsn
+    control = PostgresAdmissionControl(dsn, require_session_binding=True)
+    registry = PostgresProjectionRegistry(dsn)
+    evidence = projection_evidence(uuid4().hex * 2)
+    registry.register(evidence, registry_revision=1)
+    admission = grant_registered(control, uuid4().hex, evidence, registry)
+    assert admission is not None
+    assert control.claim(admission.admission_id, owner="sender", now=100) is AdmissionOperationResult.SUCCESS
+    assert control.authorize_send(admission.admission_id, now=101) is AdmissionOperationResult.REJECTED
+    assert control.state(admission.admission_id) is AdmissionState.CLAIMED
+    assert control.start_send(admission.admission_id, owner="sender", now=102) is AdmissionOperationResult.REJECTED
+    with pytest.raises(ValueError, match="require_session_binding"):
+        PostgresAdmissionControl(dsn, require_session_binding="true")
+
+
+def test_send_authorization_rejects_orphaned_session_head(isolated_test_dsn):
+    """找得到舊 binding 卻找不到 Session Head 時必須拒絕，不能回退 prototype。"""
+    import psycopg
+    from deception.world.session import PostgresSessionWorlds, SessionBinding
+
+    dsn = isolated_test_dsn
+    binding = SessionBinding(environment_id="epoch-contract", deployment_id="isolated",
+                             session_id=uuid4().hex, session_epoch=1)
+    initial = PostgresSessionWorlds(dsn).resolve(binding, {"state": "present"}, now=100, ttl=600)
+    control = PostgresAdmissionControl(dsn, require_session_binding=True)
+    registry = PostgresProjectionRegistry(dsn)
+    evidence = projection_evidence(uuid4().hex * 2)
+    registry.register(evidence, registry_revision=1)
+    admission = grant_registered(control, initial.scope.world_generation_id, evidence, registry)
+    assert control.claim(admission.admission_id, owner="sender", now=100) is AdmissionOperationResult.SUCCESS
+    with psycopg.connect(dsn) as connection:
+        connection.execute(
+            "DELETE FROM session_heads WHERE environment_id=%s AND deployment_id=%s AND session_id=%s",
+            (binding.environment_id, binding.deployment_id, binding.session_id),
+        )
+    assert control.authorize_send(admission.admission_id, now=101) is AdmissionOperationResult.REJECTED
+    assert control.event_revision(admission.admission_id, "send_authorization") is None
 
 
 def test_postgres_unavailable_store_is_fail_closed():
@@ -609,6 +651,30 @@ def test_postgres_send_uses_transmission_deadline(isolated_test_dsn, at_deadline
     now = admission.transmission_deadline if at_deadline else admission.authorization_deadline
     assert control.authorize_send(admission.admission_id, now=now) is (
         AdmissionOperationResult.REJECTED if at_deadline else AdmissionOperationResult.SUCCESS)
+
+
+@pytest.mark.parametrize("at_deadline", [False, True])
+def test_postgres_post_auth_revoke_keeps_owner_deadline_and_one_shot(isolated_test_dsn, at_deadline):
+    """不同控制器看到相同已提交授權，撤銷不追回；期限相等仍拒絕。"""
+    first = PostgresAdmissionControl(isolated_test_dsn)
+    second = PostgresAdmissionControl(isolated_test_dsn)
+    registry = PostgresProjectionRegistry(isolated_test_dsn)
+    evidence = projection_evidence(uuid4().hex * 2)
+    registry.register(evidence, registry_revision=1)
+    admission = grant_registered(first, uuid4().hex, evidence, registry)
+    assert first.claim(admission.admission_id, owner="sender", now=1) is AdmissionOperationResult.SUCCESS
+    assert first.authorize_send(admission.admission_id, now=2) is AdmissionOperationResult.SUCCESS
+    send_revision = first.event_revision(admission.admission_id, "send_authorization")
+    emergency_revision = second.emergency_revoke(admission.world_generation_id)
+    assert send_revision is not None and send_revision < emergency_revision
+    assert second.start_send(admission.admission_id, owner="wrong", now=3) is AdmissionOperationResult.REJECTED
+    now = admission.transmission_deadline if at_deadline else admission.transmission_deadline - 1
+    result = second.start_send(admission.admission_id, owner="sender", now=now)
+    assert result is (AdmissionOperationResult.EXPIRED if at_deadline else AdmissionOperationResult.SUCCESS)
+    assert first.state(admission.admission_id) is (
+        AdmissionState.EXPIRED if at_deadline else AdmissionState.SEND_STARTED
+    )
+    assert second.start_send(admission.admission_id, owner="sender", now=now) is AdmissionOperationResult.REJECTED
 
 
 @pytest.mark.parametrize("fail", [False, True], ids=["completed", "interrupted"])

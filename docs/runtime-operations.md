@@ -51,3 +51,14 @@ python tools/check_documentation.py
 ## 授權與目前限制
 
 自有程式採 Apache-2.0。Python 標準庫與 psycopg／PostgreSQL 授權見[授權表](licensing.md)，未採用第三方封裝專案程式或模型。尚未包含秘密管理器、完整機密掃描、正式災難恢復與部署協調；封裝成功不代表已上傳、已部署或 Protocol v1.1 符合性通過。
+
+
+## 原始判定獨立 PostgreSQL 生命週期（opt-in）
+
+migrations/original_assessment/017_original_assessment_ledger.sql 不在一般 World
+migrations/*.sql 掃描目錄內，不隨 MIRAGE_AUTO_MIGRATE 自動套用。
+DBA 必須先確認專用原判定 DB，使用外部單一交易（例如
+psql -X -v ON_ERROR_STOP=1 --single-transaction -f 該檔）
+明確建立，接著將 ledger 和 SECURITY DEFINER 函式移交給 NOLOGIN Owner，
+並把兩個 EXECUTE 函式分別只授權 Gateway Publisher 和 Mirage Consumer。
+不應把服務的連線 DSN 設為超級使用者；正式 CA/TLS/ACL/備援/retention 尚須核准。

@@ -157,7 +157,7 @@ PostgresAdmissionControl 與 PostgresProjectionRegistry 須傳入相同 DSN 字�
 
 先依序套用 migrations 下 001、002、003 SQL。003 在 generation_controls 加入 emergency_revision。部署需完成 migration 才啟動新版本控制器。內部管理者可呼叫 emergency_revoke(generation_id)，重複呼叫回傳第一次撤銷的 revision。一般 Registry 撤銷與世代緊急撤銷各有獨立用途。
 
-PostgresAdmissionControl 在取得 Generation 鎖後讀取共享 emergency_revision。撤銷後拒絕新的 Grant；尚未 Claim 或尚未取得發送授權者在下次操作轉為 ABANDONED。已有 SEND_AUTHORIZED 的授權保留其狀態，表示跨過強一致性邊界；此結果不證明已送出任何 bytes，也不提供 HTTP 在途取消保證。呼叫端傳入 revoked=False 無法覆蓋資料庫撤銷。既有 revoked=True 仍可用於單一授權的拒絕。
+PostgresAdmissionControl 在取得 Generation 鎖後讀取共享 emergency_revision。撤銷後拒絕新的 Grant；尚未 Claim 或尚未取得發送授權者在下次操作轉為 ABANDONED。已有 SEND_AUTHORIZED 的授權保留其狀態，表示跨過強一致性邊界；start_send 不二次檢查世代／Profile 墓碑，只檢查 owner、唯一狀態與 transmission_deadline。此結果不證明已送出任何 bytes，也不提供 HTTP 在途取消保證。呼叫端傳入 revoked=False 無法覆蓋資料庫撤銷。既有 revoked=True 仍可用於單一授權的拒絕。
 
 本機設定 MIRAGE_POSTGRES_TEST_DSN 指向隔離資料庫，執行：
 
@@ -184,3 +184,17 @@ inspect_binding 是初始化結果未知時的唯讀恢復入口。admit_read �
 舊快照若沒有政策，`compatibility` 明確為 None；配置政策的服務會拒絕，不會補寫版本或建立替代世代。底層 Store 與未配置政策的 Session 物件保留原型／唯讀定位相容性，不能據此宣稱完整符合性。正式啟用前須由部署者安排舊世界停用或另行審查遷移；本功能沒有替部署者批准資料遷移。
 
 驗證使用 `python -m pytest tests/test_world_compatibility.py -q`；PostgreSQL 案例需專用 `MIRAGE_POSTGRES_TEST_DSN`。測試涵蓋政策摘要、契約切換、Profile 未登錄、舊世界拒絕、CAS 不可變與拒絕時不新增世界／收據。資料保存在既有 JSONB state 中，不需要新的 SQL migration；原有 migration checksum 不變。沿用既有 Pydantic、Python 及 PostgreSQL 授權，不加入模型或外部套件。
+
+
+## P2 Session epoch 與 Send Authorization 原子一致性
+
+原生可信 HTTP 以 PostgresAdmissionControl(require_session_binding=True) 啟動。
+authorize_send 以 Admission 已落盤的 Generation 查詢 Session 綁定，
+先對 session_heads FOR SHARE（和 resolve(epoch+1) 的 FOR UPDATE 互斥），
+再檢查 binding，接續 Admission → Generation → Profile guard。
+全部在同一個 PostgreSQL 交易提交 SEND_AUTHORIZED revision；
+epoch+1 先提交時，舊世代不能取得新授權；授權已提交後，epoch 切換不追溯取消。
+沒有 Session 映射／Head 消失時，正式可信 HTTP 拒絕，不降級為單機原型。
+
+原始判定 ledger 由外部消費者管理（參考 p2-original-assessment-store.md），
+不屬於 Mirage World migration；隔離證據不是正式部署核准。

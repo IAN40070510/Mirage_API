@@ -16,6 +16,7 @@ from deception.core.orchestrator import PipelineResult
 from deception.core.handoff import verify_candidate
 from deception.generation.models import digest as candidate_digest
 from deception.security.trusted_deployment import TrustedDeploymentSettings
+from deception.security.trusted_ingress import OriginalAssessmentLookup
 from deception.security.ingress_audit import PostgresIngressAudit
 from deception.world import (PostgresAdmissionControl, PostgresCandidateStore, PostgresProjectionRegistry,
                              ProjectionCompatibilityProfile, ProjectionEvidence)
@@ -40,7 +41,8 @@ def _digest(value) -> str:
 def create_app(*, settings: TrustedDeploymentSettings, postgres_dsn: str,
                config: DemoConfig, output_root=None, world_ttl: int = 3600, enable_business: bool = False,
                enable_medusa_store: bool = False, medusa_publishable_key: str | None = None,
-               medusa_source: Path | None = None):
+               medusa_source: Path | None = None,
+               original_lookup: OriginalAssessmentLookup | None = None):
     """建立共享 Session、假名化觀察與持久化 Admission 的合成 HTTP app。
 
     配置只核准本專案的 synthetic-store 契約，支援 GET getProduct 的 200／404。
@@ -55,9 +57,13 @@ def create_app(*, settings: TrustedDeploymentSettings, postgres_dsn: str,
     if enable_medusa_store and not medusa_publishable_key:
         raise ValueError("native store requires a fixed publishable key")
     settings = TrustedDeploymentSettings.model_validate(settings.model_dump())
-    provider = settings.build_provider(postgres_dsn=postgres_dsn)
+    provider = settings.build_provider(
+        postgres_dsn=postgres_dsn, original_lookup=original_lookup
+    )
     candidates = PostgresCandidateStore(postgres_dsn)
-    control = PostgresAdmissionControl(postgres_dsn)
+    # Production HTTP always binds final Send Authorization to the persisted
+    # current Session epoch. Standalone conformance controls may opt out explicitly.
+    control = PostgresAdmissionControl(postgres_dsn, require_session_binding=True)
     registry = PostgresProjectionRegistry(postgres_dsn)
     request_audit = PostgresRequestAudit(postgres_dsn)
     ingress_audit = PostgresIngressAudit(postgres_dsn, environment_id=settings.environment_id,

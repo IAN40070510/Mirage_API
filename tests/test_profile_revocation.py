@@ -116,7 +116,12 @@ def test_emergency_profile_revocation_stops_unsent_output(controls, stage):
     elif stage == "claimed":
         outcome = observer.authorize_send(identifier, now=100)
     elif stage == "authorized":
-        outcome = observer.start_send(identifier, owner="sender", now=100)
+        # Emergency after committed SEND_AUTHORIZED cannot retroactively cancel.
+        assert observer.start_send(identifier, owner="sender", now=100) is AdmissionOperationResult.SUCCESS
+        assert observer.state(identifier) is AdmissionState.SEND_STARTED
+        assert observer.start_send(identifier, owner="sender", now=100) is AdmissionOperationResult.REJECTED
+        assert observer.finish_send(identifier, owner="sender", outcome=AdmissionState.SEND_COMPLETED) is AdmissionOperationResult.SUCCESS
+        return
     else:
         assert observer.finish_send(identifier, owner="sender", outcome=AdmissionState.SEND_COMPLETED) is AdmissionOperationResult.SUCCESS
         assert observer.state(identifier) is AdmissionState.SEND_COMPLETED
@@ -187,10 +192,11 @@ def test_postgres_emergency_profile_revoke_orders_send_authorization(isolated_te
     if send_first:
         assert first is AdmissionOperationResult.SUCCESS
         assert control.state(admission.admission_id) is AdmissionState.SEND_AUTHORIZED
-        assert control.start_send(admission.admission_id, owner="sender", now=100) is AdmissionOperationResult.REJECTED
+        assert control.start_send(admission.admission_id, owner="sender", now=100) is AdmissionOperationResult.SUCCESS
+        assert control.state(admission.admission_id) is AdmissionState.SEND_STARTED
     else:
         assert second is AdmissionOperationResult.REJECTED
-    assert control.state(admission.admission_id) is AdmissionState.ABANDONED
+        assert control.state(admission.admission_id) is AdmissionState.ABANDONED
 
 
 def test_profile_revocation_is_queryable_after_real_commit_reply_loss(isolated_test_dsn):

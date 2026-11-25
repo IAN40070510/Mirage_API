@@ -32,3 +32,29 @@ def test_deployment_rejects_policy_outside_baseline(changes):
 def test_deployment_builds_provider_without_connecting_database():
     """有效設定可於啟動建立 provider，資料庫操作延至實際請求。"""
     assert callable(settings().build_provider(postgres_dsn="postgresql://test"))
+
+
+def test_original_assessment_strict_mode_requires_injected_lookup():
+    """嚴格接收端缺可信外部查回時必須在啟動階段拒絕，不降級為 claims-only。"""
+    with pytest.raises(ValueError, match="trusted lookup"):
+        settings(require_original_assessment=True).build_provider(
+            postgres_dsn="postgresql://world-only"
+        )
+    with pytest.raises(ValueError, match="requires strict mode"):
+        settings().build_provider(
+            postgres_dsn="postgresql://world",
+            original_lookup=lambda _id: None,
+        )
+
+
+def test_original_assessment_consumer_injects_trusted_lookup_without_connect():
+    """嚴格模式只持有部署者傳入的查回介面，SQL 與 DB 角色由外部持有。"""
+    def lookup(_assessment_id):
+        """此測試刻意不建立外部連線；回傳缺失由接收端嚴格拒絕。"""
+        return None
+    provider = settings(require_original_assessment=True).build_provider(
+        postgres_dsn="postgresql://world",
+        original_lookup=lookup,
+    )
+    assert provider._original_lookup is lookup
+    assert provider._require_original_assessment is True

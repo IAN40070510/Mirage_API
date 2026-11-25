@@ -1,3 +1,7 @@
+**P2 原始判定／最終發送授權原生安全增量（待正式簽收）：**
+[外部原判定查回介面與 Session epoch 安全邊界](docs/p2-original-assessment-store.md)。
+專用 PostgreSQL ledger 及其 migration／ACL 驗收已移交外部消費者；本分支僅保留原生驗章、嚴格拒絕與發送准入修補，不授予正式欺敵開關許可。
+
 # Mirage_API — 通用型 API 誘餌平台
 
 Mirage 為可獨立安裝、執行及測試的合成 API 服務；世界、Session、Grant、Replay、受保護傳輸與原生稽核均由 Mirage 管理。外部安全偵測、分類、客戶端簽章及其原判定持久化由獨立消費端負責，無須安裝其他專案。參見 [獨立運作與驗收](docs/standalone.md)。本次去耦不是 G3b～G6 發布簽核：正式傳輸仍須各 Gate 驗收核准。

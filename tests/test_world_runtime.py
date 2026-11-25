@@ -281,6 +281,26 @@ def test_memory_emergency_boundary(send_first):
         AdmissionState.SEND_AUTHORIZED if send_first else AdmissionState.ABANDONED)
     assert grant(control) is None
 
+@pytest.mark.parametrize("at_deadline", [False, True])
+def test_memory_post_authorization_revoke_preserves_owner_and_deadline(at_deadline):
+    """Auth 先提交後撤銷不可取消起送，但不延長期限或允許非原 Claim owner。"""
+    control = AdmissionControl()
+    admission = grant(control)
+    assert admission is not None
+    identifier = admission.admission_id
+    assert control.claim(identifier, owner="sender", now=1) is AdmissionOperationResult.SUCCESS
+    assert control.authorize_send(identifier, now=2) is AdmissionOperationResult.SUCCESS
+    control.emergency_revoke(admission.world_generation_id)
+    assert control.start_send(identifier, owner="other", now=3) is AdmissionOperationResult.REJECTED
+    now = admission.transmission_deadline if at_deadline else admission.transmission_deadline - 1
+    result = control.start_send(identifier, owner="sender", now=now)
+    assert result is (AdmissionOperationResult.EXPIRED if at_deadline else AdmissionOperationResult.SUCCESS)
+    assert control.state(identifier) is (
+        AdmissionState.EXPIRED if at_deadline else AdmissionState.SEND_STARTED
+    )
+    assert control.start_send(identifier, owner="sender", now=now) is AdmissionOperationResult.REJECTED
+
+
 def test_snapshot_nested_state_and_scope_are_immutable():
     """凍結巢狀 JSON 與 scope，明確 deepcopy 只產生可變提案，不改原快照。"""
     from copy import deepcopy
