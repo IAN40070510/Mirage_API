@@ -194,8 +194,9 @@ def test_inventory_http_proof_selects_handler_and_rejects_rpc_substitution(isola
                                   (snapshot.scope.world_generation_id,)).fetchone()[0] == "2"
 
     # I-01：可信 Executor 的 Commit 只由獨立唯讀 Validator 重新投影精確 200。
-    projected = PostgresProtectedNativeProjector(dsn, expected_login=_real_login(dsn)).project_synthetic_success(
-        receipt_id)
+    inventory_projector = PostgresProtectedNativeProjector(dsn, expected_login=_real_login(dsn))
+    projected = inventory_projector.project_synthetic_success(receipt_id)
+    assert inventory_projector.project_verified_receipt(receipt_id) == projected
     assert projected.operation_id == "reserveSyntheticInventory"
     assert projected.status_code == 200
     assert projected.source.operation_result_digest == outcome["result_digest"]
@@ -257,6 +258,7 @@ def test_inventory_http_proof_selects_handler_and_rejects_rpc_substitution(isola
     assert cancelled["status"] == "committed" and cancelled["state_version"] == 3
     cancel_projection = PostgresProtectedNativeProjector(
         dsn, expected_login=_real_login(dsn)).project_synthetic_success(cancel_receipt)
+    assert inventory_projector.project_verified_receipt(cancel_receipt) == cancel_projection
     assert cancel_projection.operation_id == "cancelSyntheticInventory"
     assert cancel_projection.status_code == 200
     cancel_payload = json.loads(cancel_projection.body_bytes)
@@ -268,6 +270,7 @@ def test_inventory_http_proof_selects_handler_and_rejects_rpc_substitution(isola
     assert repeated["status"] == "rejected" and repeated["state_version"] is None
     rejection = PostgresProtectedNativeProjector(
         dsn, expected_login=_real_login(dsn)).project_synthetic_rejection(rejected_receipt)
+    assert inventory_projector.project_verified_receipt(rejected_receipt) == rejection
     assert rejection.status_code == 409 and rejection.operation_id == "cancelSyntheticInventory"
     assert rejection.body_bytes == b'{"code":"reservation_not_active"}'
     with psycopg.connect(dsn) as connection:
@@ -371,7 +374,8 @@ def test_fixed_inventory_409_has_independent_validator_and_promotable_source(
             admin.execute(sql.SQL("GRANT USAGE ON SCHEMA {} TO {}").format(
                 sql.Identifier(schema), sql.Identifier(projector_login)))
             admin.execute(sql.SQL(
-                "GRANT SELECT ON protected_world_rejection_sources,world_operations,"
+                "GRANT SELECT ON protected_world_rejection_sources,protected_world_commit_sources,"
+                "protected_medusa_rejection_sources,world_operations,"
                 "ingress_receipts,protected_http_operation_bindings,protected_world_read_sources,"
                 "read_admissions,session_heads,session_world_bindings,generation_controls,"
                 "trusted_key_revocations,world_snapshots,world_commit_receipts TO {}"
@@ -393,6 +397,7 @@ def test_fixed_inventory_409_has_independent_validator_and_promotable_source(
                                     ).fetchone() == (False,)
     projector = PostgresProtectedNativeProjector(projector_dsn, expected_login=projector_login)
     projection = projector.project_synthetic_rejection(receipt)
+    assert projector.project_verified_receipt(receipt) == projection
     headers, expected_body = fixed_synthetic_rejection_bytes(
         "synthetic-inventory", "unknown_synthetic_sku",
     )
@@ -515,6 +520,7 @@ def test_inventory_get_receipt_admits_real_protected_read_without_native_http(
         projector = PostgresProtectedNativeProjector(dsn, expected_login=_real_login(dsn))
         if expected_available is not None:
             projected = projector.project_inventory_snapshot(receipt)
+            assert projector.project_verified_receipt(receipt) == projected
             assert projected.status_code == 200 and projected.source.kind == "snapshot"
             assert projected.source.state_hash == snapshot.state_hash
             assert json.loads(projected.body_bytes) == {
@@ -525,6 +531,7 @@ def test_inventory_get_receipt_admits_real_protected_read_without_native_http(
             # 由獨立 Snapshot 證實 SKU 不存在，現在可以投影固定的業務 409；
             # 外層仍沒有原生 Client HTTP Send 授權。
             projected = projector.project_inventory_snapshot(receipt)
+            assert projector.project_verified_receipt(receipt) == projected
             assert projected.status_code == 409 and projected.source.kind == "snapshot"
             assert projected.source.state_hash == snapshot.state_hash
             assert json.loads(projected.body_bytes) == {"code": "unknown_synthetic_sku"}
@@ -534,6 +541,7 @@ def test_inventory_get_receipt_admits_real_protected_read_without_native_http(
         # I-03：當前 World 的確不存在該歷史 UUID4，獨立讀取來源產生固定 409 候選。
         projector = PostgresProtectedNativeProjector(dsn, expected_login=_real_login(dsn))
         projected = projector.project_inventory_operation(receipt)
+        assert projector.project_verified_receipt(receipt) == projected
         assert projected.status_code == 409 and projected.source.kind == "snapshot"
         assert projected.source.state_hash == snapshot.state_hash
         assert json.loads(projected.body_bytes) == {"code": "operation_not_found"}
@@ -712,6 +720,7 @@ def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolat
             dsn, expected_login=_real_login(dsn), medusa_source=medusa_source,
         )
         projected_get = get_projector.project_medusa_read(get_receipt)
+        assert get_projector.project_verified_receipt(get_receipt) == projected_get
         assert (projected_get.status_code, projected_get.operation_id,
                 projected_get.request_fingerprint, projected_get.source.kind) == (
             200, "GetCartsId", get_proof.request_fingerprint, "snapshot",
@@ -752,6 +761,7 @@ def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolat
             dsn, expected_login=_real_login(dsn), medusa_source=medusa_source,
         )
         projected_add = add_projector.project_medusa_add_success(add_receipt)
+        assert add_projector.project_verified_receipt(add_receipt) == projected_add
         native_cart = json.loads(projected_add.body_bytes)["cart"]
         assert (projected_add.status_code, projected_add.operation_id,
                 projected_add.scope, projected_add.source.kind) == (
@@ -808,6 +818,7 @@ def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolat
             "medusa_mutation", "PostCartsIdLineItemsLine_id", "committed", 3,
         )
         projected_update = add_projector.project_medusa_add_success(update_receipt)
+        assert add_projector.project_verified_receipt(update_receipt) == projected_update
         updated_cart = json.loads(projected_update.body_bytes)["cart"]
         assert (projected_update.operation_id, projected_update.status_code,
                 projected_update.source.kind, updated_cart["total"]) == (
@@ -847,6 +858,7 @@ def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolat
             "medusa_mutation", "DeleteCartsIdLineItemsLine_id", "committed", 4,
         )
         projected_delete = add_projector.project_medusa_add_success(delete_receipt)
+        assert add_projector.project_verified_receipt(delete_receipt) == projected_delete
         deleted_payload = json.loads(projected_delete.body_bytes)
         assert set(deleted_payload) == {"id", "object", "deleted", "parent"}
         assert (deleted_payload["id"], deleted_payload["object"],
@@ -960,6 +972,7 @@ def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolat
              b'{"message":"The requested cart operation could not be completed.","type":"not_found"}',
              "native-cart-rejected")):
         projection = projector.project_medusa_rejection(receipt)
+        assert projector.project_verified_receipt(receipt) == projection
         assert (projection.status_code, projection.body_bytes, projection.scope,
                 projection.request_fingerprint, projection.operation_id) == (
             status, body, snapshot.scope, proof.request_fingerprint, "PostCartsIdLineItems",
@@ -1012,6 +1025,7 @@ def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolat
             "medusa_mutation", "PostCartsIdComplete", "committed", 6,
         )
         projected_complete = add_projector.project_medusa_add_success(complete_receipt)
+        assert add_projector.project_verified_receipt(complete_receipt) == projected_complete
         complete_body = json.loads(projected_complete.body_bytes)
         assert set(complete_body) == {"type", "order"}
         assert (complete_body["type"], complete_body["order"]["status"],
@@ -1057,6 +1071,7 @@ def test_medusa_400_404_rejections_require_full_http_proof_and_real_world(isolat
             "medusa_read_admitted", order_id, latest.version, latest.state_hash,
         )
         native_order = projector.project_medusa_read(order_receipt)
+        assert projector.project_verified_receipt(order_receipt) == native_order
         native_order_body = json.loads(native_order.body_bytes)
         assert (native_order.status_code, native_order.operation_id,
                 native_order.source.kind, native_order_body["order"]["id"],
@@ -1214,6 +1229,7 @@ def test_cart_http_verified_receipt_drives_real_fixed_world_handler(isolated_tes
     assert query.operation == "getCartOperation" and query.attempt_id == outcome.commit_attempt_id
     projector = PostgresProtectedNativeProjector(dsn, expected_login=_real_login(dsn))
     projected = projector.project_cart_read(operation_receipt)
+    assert projector.project_verified_receipt(operation_receipt) == projected
     payload = json.loads(projected.body_bytes)
     assert projected.status_code == 200 and projected.operation_id == "getCartOperation"
     assert projected.source.read_admission_id == read.source.read_admission_id
@@ -1275,6 +1291,7 @@ def test_cart_http_verified_receipt_drives_real_fixed_world_handler(isolated_tes
         assert rejected["operation"] == expected_operation
         assert rejected["status"] == "rejected" and rejected["state_version"] is None
         projection = projector.project_synthetic_rejection(rejection_receipt)
+        assert projector.project_verified_receipt(rejection_receipt) == projection
         assert projection.operation_id == expected_operation and projection.status_code == 409
         assert projection.body_bytes == json.dumps({"code": expected_code}, sort_keys=True,
                                                   separators=(",", ":")).encode()
@@ -1360,6 +1377,7 @@ def test_cart_http_verified_receipt_drives_real_fixed_world_handler(isolated_tes
         receipt_id=update_receipt, raw_path=update_path, raw_body=update_body,
     )["status"] == "already_committed"
     updated = projector.project_synthetic_success(update_receipt)
+    assert projector.project_verified_receipt(update_receipt) == updated
     updated_payload = json.loads(updated.body_bytes)
     assert updated.operation_id == "updateGuestCartItem" and updated.status_code == 200
     assert updated_payload["cart"]["items"][0]["id"] == item_id
@@ -1381,6 +1399,7 @@ def test_cart_http_verified_receipt_drives_real_fixed_world_handler(isolated_tes
     assert absent_result["operation"] == "updateGuestCartItem"
     assert absent_result["status"] == "rejected" and absent_result["state_version"] is None
     absent_projection = projector.project_synthetic_rejection(absent_receipt)
+    assert projector.project_verified_receipt(absent_receipt) == absent_projection
     assert absent_projection.operation_id == "updateGuestCartItem"
     assert absent_projection.status_code == 409
     assert absent_projection.body_bytes == b'{"code":"cart_item_not_found"}'
@@ -1408,6 +1427,7 @@ def test_cart_http_verified_receipt_drives_real_fixed_world_handler(isolated_tes
         receipt_id=remove_receipt, raw_path=remove_path, raw_body=remove_body,
     )["status"] == "already_committed"
     removed = projector.project_synthetic_success(remove_receipt)
+    assert projector.project_verified_receipt(remove_receipt) == removed
     removed_payload = json.loads(removed.body_bytes)
     assert removed.operation_id == "removeGuestCartItem" and removed.status_code == 200
     assert removed_payload["cart"]["items"] == [] and removed_payload["cart"]["total"] == 0
@@ -1425,6 +1445,7 @@ def test_cart_http_verified_receipt_drives_real_fixed_world_handler(isolated_tes
     assert removed_again_result["status"] == "rejected"
     assert removed_again_result["state_version"] is None
     removed_again_projection = projector.project_synthetic_rejection(removed_again_receipt)
+    assert projector.project_verified_receipt(removed_again_receipt) == removed_again_projection
     assert removed_again_projection.operation_id == "removeGuestCartItem"
     assert removed_again_projection.status_code == 409
     assert removed_again_projection.body_bytes == b'{"code":"cart_item_not_found"}'
@@ -1466,6 +1487,7 @@ def test_cart_http_verified_receipt_drives_real_fixed_world_handler(isolated_tes
     assert complete_result["operation"] == "completeGuestCart"
     assert complete_result["status"] == "committed" and complete_result["state_version"] == 6
     completed = projector.project_synthetic_success(complete_receipt)
+    assert projector.project_verified_receipt(complete_receipt) == completed
     complete_payload = json.loads(completed.body_bytes)
     assert completed.operation_id == "completeGuestCart" and completed.status_code == 200
     assert complete_payload["state_version"] == 6
@@ -1494,6 +1516,7 @@ def test_cart_http_verified_receipt_drives_real_fixed_world_handler(isolated_tes
     assert order_result["kind"] == "cart_read_admitted"
     assert order_result["operation"] == "getSyntheticOrder" and order_result["resource_id"] == order_id
     order_projection = projector.project_cart_read(order_receipt)
+    assert projector.project_verified_receipt(order_receipt) == order_projection
     order_payload = json.loads(order_projection.body_bytes)
     assert order_projection.operation_id == "getSyntheticOrder" and order_projection.status_code == 200
     assert order_projection.source.read_admission_id == order_result["read_admission_id"]
@@ -1510,6 +1533,7 @@ def test_cart_http_verified_receipt_drives_real_fixed_world_handler(isolated_tes
     )
     assert cancel_result["status"] == "committed" and cancel_result["state_version"] == 7
     cancelled = projector.project_synthetic_success(cancel_receipt)
+    assert projector.project_verified_receipt(cancel_receipt) == cancelled
     cancelled_payload = json.loads(cancelled.body_bytes)
     assert cancelled.operation_id == "cancelSyntheticOrder" and cancelled.status_code == 200
     assert cancelled_payload["order"]["id"] == order_id
@@ -1623,6 +1647,7 @@ def test_verified_cart_creator_http_mints_one_derived_world(isolated_test_dsn):
                                   (created.binding.resource_id,)).fetchone()[0] == 1
     projector = PostgresProtectedNativeProjector(dsn, expected_login=_real_login(dsn))
     projected = projector.project_cart_creation(receipt)
+    assert projector.project_verified_receipt(receipt) == projected
     creator_scope = service.inspect_binding(creator, now=now).scope
     derived_scope = service.inspect_binding(created.binding, now=now).scope
     payload = json.loads(projected.body_bytes)
@@ -1760,6 +1785,7 @@ def test_medusa_creator_empty_cart_is_independently_projected_and_promotable(iso
         dsn, expected_login=_real_login(dsn), medusa_source=source_path,
     )
     projected = projector.project_medusa_creation(receipt)
+    assert projector.project_verified_receipt(receipt) == projected
     payload = json.loads(projected.body_bytes)
     creator_scope = store.inspect_binding(creator, now=now).scope
     assert projected.scope == creator_scope and projected.operation_id == "PostCarts"

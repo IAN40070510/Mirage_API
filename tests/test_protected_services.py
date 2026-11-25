@@ -608,6 +608,64 @@ def test_g3b_native_validator_only_accepts_https_receipt_uuid4():
                            json={"receipt_id": receipt}).status_code == 503
 
 
+def test_g3b_validator_receipt_dispatch_never_trusts_caller_route_or_bytes(monkeypatch):
+    """單一 Receipt RPC 僅由資料庫 Proof 分派候選，禁用 Handler／Body／Status 自選。"""
+    from fastapi.testclient import TestClient
+
+    from deception.world.models import SecurityErrorSource, WorldScope
+    from deception.world.protected_native_http import ProtectedNativeProjection
+
+    receipt = uuid4()
+    headers, body = fixed_synthetic_rejection_bytes("synthetic-carts", "cart_item_not_found")
+    projected = ProtectedNativeProjection(
+        receipt_id=receipt,
+        scope=WorldScope(environment_id="isolated", deployment_id="test",
+                         session_id="session", world_generation_id="generation"),
+        operation_id="updateGuestCartItem", request_fingerprint="a" * 64,
+        status_code=409, headers=headers, body_bytes=body,
+        envelope_hash=response_hashes(409, headers, body)[0],
+        source=SecurityErrorSource(template_id="cart_item_not_found",
+                                   contract_revision="synthetic-carts-1"),
+    )
+    calls = []
+
+    def project_receipt(self, selected_receipt):
+        """記錄 Validator 實際收到的 Receipt，不接受外部操作參數。"""
+        calls.append(selected_receipt)
+        return projected
+
+    monkeypatch.setattr(PostgresProtectedNativeProjector,
+                        "project_verified_receipt", project_receipt)
+    projector = PostgresProtectedNativeProjector(
+        "postgresql://localhost/invalid-test", expected_login="validator",
+    )
+    app = create_native_validator_app(projector=projector)
+    with TestClient(app, base_url="http://validator.test") as insecure:
+        assert insecure.post("/internal/v1/project-receipt",
+                             json={"receipt_id": str(receipt)}).status_code == 503
+    with TestClient(app, base_url="https://validator.test") as secure:
+        for malicious in (
+            {"receipt_id": str(receipt), "operation_id": "GetOrdersId"},
+            {"receipt_id": str(receipt), "status_code": 200},
+            {"receipt_id": str(receipt), "body_b64": "e30="},
+            {"receipt_id": str(receipt), "source": {"kind": "snapshot"}},
+            {"receipt_id": str(receipt), "send_authorized": True},
+        ):
+            assert secure.post("/internal/v1/project-receipt", json=malicious).status_code == 400
+        assert secure.post("/internal/v1/project-receipt",
+                           content=(b'{"receipt_id":"' + str(receipt).encode() + b'",'
+                                    + b'"receipt_id":"' + str(receipt).encode() + b'"}'),
+                           ).status_code == 400
+        answer = secure.post("/internal/v1/project-receipt", json={"receipt_id": str(receipt)})
+        assert answer.status_code == 200
+        assert answer.json()["receipt_id"] == str(receipt)
+        assert answer.json()["operation_id"] == "updateGuestCartItem"
+        assert answer.json()["body_b64"] == base64.b64encode(body).decode("ascii")
+        assert answer.json()["trusted_send"] == "disabled"
+        assert "send_lease" not in answer.json() and "send_authorized" not in answer.json()
+    assert calls == [receipt]
+
+
 def test_g3b_cart_order_read_200_validator_rejects_forged_native_payloads(monkeypatch):
     """C-02／C-07 獨立 Validator 固定成功 JSON，不接受錯綁 Cart／Order 或任意 Header。"""
     from deception.security import protected_rpc

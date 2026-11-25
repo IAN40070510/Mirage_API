@@ -54,6 +54,18 @@ Session 逐欄比對，保留已驗證的 `native_projection.status_code`、
 由 Runtime 自選 Body、Status 或 Template。不得把 `body_b64` 直接交給 Gateway
 發送，須先建立合法 Promotion／Authorized Snapshot／獨立 Sender Lease 與 G5 Fence。
 
+新增 `POST /internal/v1/project-receipt` 作為獨立 Validator 的統一投影入口：
+外部請求只能提供單一 UUIDv4 `receipt_id`；專用唯讀 PostgreSQL Login
+從不可變 `protected_http_operation_bindings` 與 `ingress_receipts` 的 Fingerprint
+一致性，固定選擇 20 個 Synthetic／Medusa Operation 之一。寫入操作再查真
+`protected_world_commit_sources`、`protected_world_rejection_sources` 與
+`protected_medusa_rejection_sources` 的唯一互斥來源，分派已驗證的成功或拒絕
+投影；來源缺失、混雜、Operation／Receipt／Fingerprint 重綁皆 fail closed。
+此入口不接受 Caller 提供 Handler、成功／失敗狀態碼、Body、Scope、Template
+或核准旗標；返回的仍是**候選**，不建立 Promotion／Grant／Sender Lease。
+現有固定分型投影 RPC 保留相容性；統一入口尚非 Verifier→Authorizer→Sender
+完整通路，不得視為 G4/G6 的發送驗收。
+
 M-03 已知 Variant 的受保護 Executor Commit 已接線供隔離驗證：原始
 `POST /store/carts/{id}/line-items` 必須有與 JWS Fingerprint 完全一致的
 Publishable Key、JSON Body、Derived Cart Capability 和 Creator→Derived

@@ -1368,6 +1368,7 @@ def create_native_validator_app(*, projector) -> FastAPI:
         return {"control_plane": "native-validator-candidate-only", "trusted_send": "disabled"}
 
     @app.post("/internal/v1/project-inventory-snapshot")
+    @app.post("/internal/v1/project-receipt")
     @app.post("/internal/v1/project-inventory-operation")
     @app.post("/internal/v1/project-cart-read")
     @app.post("/internal/v1/project-medusa-creation")
@@ -1395,7 +1396,9 @@ def create_native_validator_app(*, projector) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="native_validator_request_invalid") from exc
         try:
-            if request.scope.get("path") == "/internal/v1/project-inventory-snapshot":
+            if request.scope.get("path") == "/internal/v1/project-receipt":
+                projected = projector.project_verified_receipt(UUID(str(call.receipt_id)))
+            elif request.scope.get("path") == "/internal/v1/project-inventory-snapshot":
                 projected = projector.project_inventory_snapshot(UUID(str(call.receipt_id)))
             elif request.scope.get("path") == "/internal/v1/project-inventory-operation":
                 projected = projector.project_inventory_operation(UUID(str(call.receipt_id)))
