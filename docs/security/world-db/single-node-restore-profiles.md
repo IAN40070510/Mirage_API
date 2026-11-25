@@ -69,6 +69,39 @@ Missing external DSN/secret must not prevent standard single-node **configuratio
 - **SINGLE-NODE-05:** Explicit external mode with wrong/missing credentials or broken network cannot automatically start as standard mode; a profile change needs an auditable authorized transition, no active send lease, and consistent state. **Partial code/test candidate:** fail-closed syntax, field and key checks; not yet durable pin, live Fence or controlled transitions.
 - **SINGLE-NODE-06:** G3b/G4/G6 full native regression, mixed binaries, rollback, concurrency, performance, release fuse and Owner acceptance for an exact SHA/environment. Optionality does not bypass any other security gate.
 
+### 2026-11-25 isolated standard-profile evidence — not a release signature
+
+On the dedicated ARM64 `161.33.154.211` **disposable test PostgreSQL**, exact
+SHA `7ada6fd539075c74ad4660919b0a2a5bc5852acc`, Gateway job
+`job_01M893DRJW00Z7GF0MPMZR6H75` executed
+`tests/test_protected_send.py`, `tests/test_restore_profile.py` and
+`tests/test_world_acl_preflight.py`: **53 passed, 0 failed**; JUnit:
+`/tmp/mirage-g3b-g6-20261125.AsFBoE/g5-standard-roles-exact-7ada6fd.xml`.
+Cases include actual PostgreSQL SCRAM privilege denial, known-restore
+quarantine and idempotence, older Sender SQL INSERT trigger protection,
+adversarial TEMP shadow, unknown COMMIT ACK, active Send Lease versus Purge,
+concurrent StartSend, pinned ASGI partial delivery, and explicit standard versus
+external-profile parse rejection. No external Fence service was installed.
+The exact same SHA's 7 TLS native gateway suite
+`job_01M8939FXM001KK15ZBTSGNCTK` passed **30 tests** covering at least
+one Client-native response per 20 registered routes across Inventory,
+Synthetic Cart/Order and Medusa; its JUnit is
+`/tmp/mirage-g3b-g6-20261125.AsFBoE/g3b-all20-exact-7ada6fd.xml`.
+
+| Gate | Isolated evidence status | Still required for formal acceptance |
+| --- | --- | --- |
+| SINGLE-NODE-01 | **PARTIAL PASS** — 20 routes have specified Client HTTP/PG subcases with no external Fence | Complete 2xx/4xx matrix and actual formal single-node startup/services without lab-only components |
+| SINGLE-NODE-02 | **PARTIAL PASS** — true SCRAM negative ACL, unique Send Lease, ASGI partial/unknown cases and four-service CI | All seven deployed services with independent physical logins, secret mounts, strict ingress network and client transport |
+| SINGLE-NODE-03 | **PARTIAL PASS** — local restore marker, immutable DB trigger, mixed legacy Sender SQL and Send/Purge serialization | Real restored-system bootstrap/DB rollback and snapshot reconciliation/GC under release policy; no blind rearming |
+| SINGLE-NODE-04 | **PARTIAL PASS** — profile parser accepts no-Fence mode and live isolated native paths function without it | Formal production-like all-service boot, full feature matrix and explicit `whole_host_rollback_guarantee=false` deployment report |
+| SINGLE-NODE-05 | **PARTIAL PASS** — invalid/missing external settings fail closed in syntax/identity tests | Durable external-mode pin, authorized transition, fresh live authority/quarantine and downgrade resistance |
+| SINGLE-NODE-06 | **PARTIAL PASS** — 30 true seven-TLS tests and separate G6 outage/ACK/timeout subcases | Full matrix: mixed binaries, true network loss, concurrency, performance, rollback recovery and Owner exact-SHA GO |
+
+**None of these six rows is an unconditional final PASS.** In particular,
+local PostgreSQL tests cannot prove an undetected whole-host snapshot rollback,
+and an accepted standard profile must explicitly disclose that limitation.
+The production release fuse, Trusted Send and DECEIVE remain OFF.
+
 ## Optional external Fence acceptance — mandatory only if enabled or claimed
 
 - **FENCE-OPTION-01:** Independent authority and storage/backup/restore domain; pin namespace, epoch, real SCRAM logins and Ed25519 identity. Same-host Docker lab is insufficient for whole-host rollback claim.
@@ -76,7 +109,7 @@ Missing external DSN/secret must not prevent standard single-node **configuratio
 - **FENCE-OPTION-03:** Durable World Intent, DB-first/Anchor-first ambiguity, both commit-ACK losses, publisher reconciliation, immutable evidence and exact coverage of revocation/replay/binding/sends/purge; unresolved state remains quarantined.
 - **FENCE-OPTION-04:** BD-05 atomic machine-verified Quarantine release bound to exact World snapshot and latest Fence Head, under concurrent Send/Purge/Restore; no human bypass and no new Send authorization created by release.
 
-Existing `RESTORE-ANCHOR-*`, `RESTORE-RELEASE-*` and external `WORLD-RESTORE-PUBLISH/FENCE-*` cases remain required for **the enabled external profile**. Their historical `NOT_RUN`, `OPEN` or partial CI results must not be relabeled PASS. Single-node tests are newly introduced and are also `NOT_RUN` until executed against native code.
+Existing `RESTORE-ANCHOR-*`, `RESTORE-RELEASE-*` and external `WORLD-RESTORE-PUBLISH/FENCE-*` cases remain required for **the enabled external profile**. Their historical `NOT_RUN`, `OPEN` or partial CI results must not be relabeled PASS. The 2026-11-25 isolated single-node subcases above are now executed, but the **full** SINGLE-NODE-01～06 acceptance remains OPEN.
 
 ## Release governance and migration
 

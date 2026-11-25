@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | G3b | ARM64 四個獨立 non-root mTLS 服務與專用 SCRAM、20/20 無簽章路徑拒絕；I-01～I-04 的 8 組、C-01～C-09 的 16 組、M-01～M-07 的 10 組原生 Client 200／指定 400／404／409，均由真 Ed25519 JWS→Verifier→Executor→Validator→Publisher→Authorizer 跨七 TLS Listener、唯一 PG Lease 與 Replay 拒絕隔離驗收；Cart 跨衍生 Scope／舊 CAS 與 Medusa 錯 Key／跨資源額外 fail-closed | **20 路由尚未完成全部指定錯誤／CAS／故障／URL 矩陣**，Medusa 非空初始品項、完整官方契約變體、正式七服務獨立最小權限 Login／憑證輪替及安全審核 |
 | G4 | Receipt-only Sender 綁定不可變 DB Pin，唯一 Lease；Gateway 原始 HTTP mTLS、授權 Envelope Hash 與 Client 原生 HTTP；隔離七 TLS／真 PG／JWS 重放測試已通過 | 正式服務仍封閉 503；正式 Sender／Gateway 部署、完整正式拓樸與 Client 端安全審核 |
-| G5 | 已知 Restore／Purge、不可逆 Lease、密碼學 Anchor 模擬與獨立 PostgreSQL Fence 的隔離回歸 | 正式 Restore 控制面／故障域啟動與可選外部 Fence Acceptance；單機不得宣稱防整機快照倒退 |
+| G5 | 已知 Restore／Purge、不可逆 Lease、密碼學 Anchor 模擬與獨立 PostgreSQL Fence 的隔離回歸；精確 `7ada6fd` ARM64 `53 passed` 額外覆蓋真 SCRAM、舊 Sender SQL DB Trigger、TEMP 偽裝、COMMIT ACK 不確定與標準單機 Profile fail-closed | 正式 Restore 控制面／故障域啟動、實際 DB Restore／GC／部署 Schema 和可選外部 Fence Acceptance；單機不得宣稱防整機快照倒退 |
 | G6 | 真 JWS 全鏈經七 TLS／PG Lease／原生 200，JWS 重放阻擋；Sender TCP 停機、復原新 Receipt、COMMIT 後未知 ACK、Known Restore 與實際 Sender mTLS Read Timeout 五類隔離案例均 fail-closed；Gateway Client 下游斷線不重送 | Client 實體掉線／網路封包遺失／跨節點重啟與延遲綜合矩陣、可追溯放行與 Owner 簽核 |
 
 隔離候選分支的 PR 為 [#32](https://github.com/IAN40070510/Mirage_API/pull/32)、[#33](https://github.com/IAN40070510/Mirage_API/pull/33)、[#34](https://github.com/IAN40070510/Mirage_API/pull/34)，全為 Draft／**NO-GO**，正式 `Trusted Send OFF`。#33 確切 SHA `5294d075` 的完整 Python CI **1541 passed／14 skipped**，ARM64 World／Role **258 passed／8 skipped**；#34 的確切 CI 應以該 PR 最新 SHA 與 Actions/JUnit 為準，不能沿用前一版的數字冒充。上述 ARM64 是獨立 `161.33.154.211` 測試區，未修改共用 Oracle 既有部署。
@@ -16,6 +16,8 @@
 較新提交 `1a9fe1f` 的 I-01～I-04 真 Client 七 TLS 完整回歸：ARM64 工作 `job_01M892PB7400PMHA4BNXD22W6A`、`28 passed`、JUnit `/tmp/mirage-g3b-g6-20261125.AsFBoE/g3b-i01-i04-exact-1a9fe1f.xml`；新 Cart／Order 測試 `tests/test_g6_cart_full_real_chain.py` 以 Creator→Derived Cart→Derived Order 的有效短期 JWS 經同樣七 Listener，逐筆精確核對 C-01～C-09 的 16 個指定 Client 原生 200／409 子案例及每張 Replay、Promotion、唯一 Lease，另對 Creator 跨 Scope、Cart 假冒 Order Capability 與舊版本 CAS 要求 503。這只是隔離 Sender 的證據，不是正式 production Sender 切換或 Owner 的 Gate 簽署。
 
 `a53893af` 的 C-01～C-09 確切 ARM64 工作 `job_01M8932BYQ005T61RAE9NE927E`：`29 passed`、JUnit `/tmp/mirage-g3b-g6-20261125.AsFBoE/g3b-cart-exact-a53893a.xml`、文件 2182 functions／69 guides PASS。續新增 `tests/test_g6_medusa_full_real_chain.py`：M-01～M-07 共 10 個 Client 原生 200／400／404、10 筆真 PG Promotion／唯一 Send Lease、10 次即時重放拒絕，錯 Publishable Key／Creator 跨 Scope／缺 Item／空 Cart complete／Cart 假冒 Order 503。Medusa Projector 從 repo 固定的 OpenAPI 來源獨立重建 Payload；不允許 Gateway 虛構 Medusa 4xx。全路由均仍需按完整錯誤／故障表逐項簽收後才可放行。
+
+`7ada6fd` 三平台固定 SHA ARM64 合併回歸：`job_01M8939FXM001KK15ZBTSGNCTK`、**30 passed**、JUnit `/tmp/mirage-g3b-g6-20261125.AsFBoE/g3b-all20-exact-7ada6fd.xml`；I/C/M 共 34 個指定原生回應、相互隔離的短期 JWS／PG Promotion／Send Lease 與逐筆 Replay 拒絕。G5 標準單機獨立回歸：`job_01M893DRJW00Z7GF0MPMZR6H75`、**53 passed**、JUnit `/tmp/mirage-g3b-g6-20261125.AsFBoE/g5-standard-roles-exact-7ada6fd.xml`。兩者均只在可拋棄 PostgreSQL／loopback TLS Lab 驗證，詳見[標準單機驗收表](security/world-db/single-node-restore-profiles.md)，所有全域 Release Gate 仍 NO-GO。
 
 ## 已實作範圍
 
