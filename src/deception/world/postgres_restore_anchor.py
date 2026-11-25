@@ -31,8 +31,8 @@ class PostgresAnchorPublisher:
         self._epoch = trusted_epoch
         self._key = Ed25519PublicKey.from_public_bytes(publisher_public_key)
 
-    def append(self, checkpoint: SignedAnchorCheckpoint) -> str:
-        """原子發布下一節 COMMITTED 證據；ACK 不明時由上游另查，絕不盲重送。"""
+    def _verified_digest(self, checkpoint: SignedAnchorCheckpoint) -> str:
+        """在任何資料庫 I/O 前釘住權威範圍並驗證 Publisher 的完整簽章。"""
         if not isinstance(checkpoint, SignedAnchorCheckpoint) or checkpoint.status != "COMMITTED":
             raise RestoreAnchorError("restore_anchor_not_committed")
         if (checkpoint.namespace != self._namespace or checkpoint.epoch != self._epoch):
@@ -41,7 +41,11 @@ class PostgresAnchorPublisher:
             self._key.verify(checkpoint.signature, checkpoint.payload())
         except (ValueError, InvalidSignature) as exc:
             raise RestoreAnchorError("restore_anchor_publisher_signature_invalid") from exc
-        digest = checkpoint.chain_digest()
+        return checkpoint.chain_digest()
+
+    def append(self, checkpoint: SignedAnchorCheckpoint) -> str:
+        """原子發布下一節 COMMITTED 證據；ACK 不明時由上游另查，絕不盲重送。"""
+        digest = self._verified_digest(checkpoint)
         try:
             with psycopg.connect(self._dsn, connect_timeout=5) as connection:
                 with connection.cursor() as cursor:
@@ -114,6 +118,65 @@ class PostgresAnchorPublisher:
             return digest
         except (psycopg.Error, OSError) as exc:
             raise RestoreAnchorError("restore_anchor_publish_unverifiable") from exc
+
+    def confirm_committed(self, checkpoint: SignedAnchorCheckpoint) -> str:
+        """唯讀對帳丟失的 Fence ACK；只證實既存鏈節，缺失或衝突均不准重送／解禁。"""
+        digest = self._verified_digest(checkpoint)
+        try:
+            with psycopg.connect(self._dsn, connect_timeout=5) as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute("SET LOCAL lock_timeout='3s'")
+                    cursor.execute("SET LOCAL transaction_read_only=on")
+                    cursor.execute("SELECT current_user")
+                    if cursor.fetchone()[0] != self._login:
+                        raise RestoreAnchorError("restore_anchor_publisher_login_mismatch")
+                    # 讀取時持有與 DBA 換代／Publisher 發布相同的權威鎖，
+                    # 避免在查詢舊 epoch 後被新的世代搶先提交。
+                    cursor.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                                   (f"mirage.fence.epoch:{self._namespace}",))
+                    cursor.execute(
+                        "SELECT epoch FROM mirage_restore_fence.authority_epochs "
+                        "WHERE namespace=%s ORDER BY generation DESC LIMIT 1",
+                        (self._namespace,),
+                    )
+                    current = cursor.fetchone()
+                    if current is None or current[0] != self._epoch:
+                        raise RestoreAnchorError("restore_anchor_publisher_epoch_retired")
+                    cursor.execute(
+                        """SELECT sequence,previous_digest,world_digest,events_digest,
+                                  first_event,last_event,publication_id,status,signature,
+                                  checkpoint_digest
+                           FROM mirage_restore_fence.checkpoints
+                           WHERE namespace=%s AND epoch=%s AND publication_id=%s""",
+                        (self._namespace, self._epoch, checkpoint.publication_id),
+                    )
+                    stored = cursor.fetchone()
+                    if stored is None:
+                        raise RestoreAnchorError("restore_anchor_publication_unresolved")
+                    actual = (*stored[:8], bytes(stored[8]), stored[9])
+                    expected = (checkpoint.sequence, checkpoint.previous_digest,
+                                checkpoint.world_digest, checkpoint.events_digest,
+                                checkpoint.first_event, checkpoint.last_event,
+                                checkpoint.publication_id, checkpoint.status,
+                                checkpoint.signature, digest)
+                    if actual != expected:
+                        raise RestoreAnchorError("restore_anchor_publication_conflict")
+                    cursor.execute(
+                        "SELECT sequence,checkpoint_digest FROM mirage_restore_fence.heads "
+                        "WHERE namespace=%s AND epoch=%s",
+                        (self._namespace, self._epoch),
+                    )
+                    head = cursor.fetchone()
+                    if head is None or head[0] < checkpoint.sequence:
+                        raise RestoreAnchorError("restore_anchor_publication_unresolved")
+                    if (head[0] == checkpoint.sequence
+                            and not hmac.compare_digest(head[1], digest)):
+                        raise RestoreAnchorError("restore_anchor_publication_conflict")
+            # Head 位於此節或其後，只證實 Fence 的儲存結果；不代表 World COMMIT，
+            # 更不能據此開啟 BD-05 Quarantine／G4 HTTP transport。
+            return digest
+        except (psycopg.Error, OSError) as exc:
+            raise RestoreAnchorError("restore_anchor_publication_unverifiable") from exc
 
 
 class PostgresAnchorHeadReader:

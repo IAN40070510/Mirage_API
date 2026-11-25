@@ -421,6 +421,36 @@ Host ↔ 外部 Fence Authority 的跨主機連線、獨立備份域不可回退
 也未涵蓋雙 DB Unknown ACK、BD-05 自動解禁及 Send/Purge 競態。
 **G5 仍 PARTIAL／NO-GO，Trusted Send OFF，非 Owner 簽核。**
 
+### 2026-11-25 Fence COMMIT ACK 遺失的唯讀確認 API — 待真 PG CI 驗證
+
+`PostgresAnchorPublisher.confirm_committed(checkpoint)` 對事先簽署的
+`COMMITTED` Checkpoint 進行**純查詢**；它不重送 `append()`、不修改 Head，
+也不把 Fence ACK 當成 World DB 已提交的證據。查詢前先用固定 Ed25519
+公鑰驗簽、檢查預設 Namespace／Epoch；Fence 交易設定唯讀與鎖逾時，
+確認實際 Publisher Login，並取得與獨立 DBA 世代追加共用的 Advisory Lock。
+接著檢查最新 Authority Epoch、Publication ID 唯一索引對應的所有
+Checkpoint 欄位／簽章／摘要，以及獨立 Head 已包含該鏈節。
+
+| 條件 | 唯讀對帳結果 | 放行與重送 |
+| --- | --- | --- |
+| 同一 Publication 的完整欄位、簽章與 Digest 一致，Head 已包含 | 傳回既存 Checkpoint Digest | 仍不可解禁或自動重送 |
+| 簽章錯誤、Namespace／Epoch 不符、舊世代 | 拒絕 | 均不可 |
+| Publication 不存在、孤兒 Checkpoint／Head 未包含 | `publication_unresolved` | 均不可 |
+| 同 Publication ID 的鏈節內容不同、Head Digest 衝突 | `publication_conflict` | 均不可 |
+| Fence 連線、鎖、ACL 或交易結果不可觀測 | `publication_unverifiable` | 均不可 |
+
+新增真 PostgreSQL 測試覆蓋「**資料庫實際 COMMIT、客戶端遺失 ACK**」後
+查詢成功、尚未寫入的下一節保持 Unknown、第二節前進後仍可確認第一節、
+Publication ID 衝突及孤兒 Checkpoint、Authority Epoch 退役的拒絕；
+不需資料庫的單元測試證明錯誤簽章在連線前被攔截，網路中斷保持 Unknown。
+此處是**程式及測試範圍**，尚不代表 CI 已執行通過；待真 PG workflow
+完成後另記錄 CI run／結果。
+
+**未完成的安全邊界不變：**World DB 持久化的發布 Intent／雙資料庫未知 ACK
+狀態機、World COMMIT 確認、BD-05 Release、正式跨復原域部署、
+G4 真 Send/Purge 競態及 G6 Owner 驗收皆尚未證明。G5 OPEN，
+Trusted Send OFF／DECEIVE OFF，PR 保持 Draft／NO-GO。
+
 **此項狀態仍是 G5 PARTIAL／NO-GO**：CI 與一次性隔離主機測試通過真實
 密碼學與 PostgreSQL 合約，但尚未完成正式憑證隔離、不可回退的最高
 Head Authority、

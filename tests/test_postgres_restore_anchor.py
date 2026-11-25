@@ -310,6 +310,8 @@ def test_fence_lab_independent_epoch_rollover_retires_old_signed_head(fence_lab)
                              prior=first.chain_digest(), first=4, last=5)
     with pytest.raises(RestoreAnchorError, match="publisher_epoch_retired"):
         old_publisher.append(second_old)
+    with pytest.raises(RestoreAnchorError, match="publisher_epoch_retired"):
+        old_publisher.confirm_committed(first)
     with pytest.raises(RestoreAnchorError, match="head_missing"):
         old_reader.observe_head(namespace, "epoch-test", b"b" * 32)
     with pytest.raises(RestoreAnchorError, match="checkpoint_missing_or_epoch_retired"):
@@ -408,9 +410,82 @@ def test_fence_lab_lost_commit_ack_fails_closed_and_does_not_republish(
             "SELECT count(*) FROM mirage_restore_fence.checkpoints WHERE namespace=%s",
             (namespace,),
         ).fetchone()[0] == 1
+    assert publisher.confirm_committed(first) == first.chain_digest()
+    with pytest.raises(RestoreAnchorError, match="publication_unresolved"):
+        publisher.confirm_committed(second)
     with pytest.raises(RestoreAnchorError, match="sequence_or_coverage"):
         publisher.append(first)
     assert publisher.append(second) == second.chain_digest()
+    assert publisher.confirm_committed(second) == second.chain_digest()
+    # 後續 Head 已前進，舊出版證據仍須能由不可改寫鏈節獨立確認。
+    assert publisher.confirm_committed(first) == first.chain_digest()
+
+
+def test_fence_lab_publication_reconcile_rejects_conflict_and_orphan(fence_lab):
+    """真 Fence DB 已存在同 Publication 的不同簽章內容或無 Head 時不能算 COMMIT。"""
+    dsns, roles = fence_lab
+    namespace = f"isolated-{uuid4().hex}"
+    _register_authority(dsns, namespace)
+    key = Ed25519PrivateKey.generate()
+    publisher = PostgresAnchorPublisher(
+        dsns["publisher"], expected_login=roles["publisher"],
+        trusted_namespace=namespace, trusted_epoch="epoch-test",
+        publisher_public_key=_public(key),
+    )
+    first = _checkpoint(key, namespace=namespace, sequence=1,
+                        prior="0" * 64, first=1, last=3)
+    assert publisher.append(first) == first.chain_digest()
+    changed_unsigned = replace(first, world_digest="f" * 64, signature=bytes(64))
+    conflicting = replace(changed_unsigned, signature=key.sign(changed_unsigned.payload()))
+    with pytest.raises(RestoreAnchorError, match="publication_conflict"):
+        publisher.confirm_committed(conflicting)
+
+    orphan_namespace = f"isolated-{uuid4().hex}"
+    _register_authority(dsns, orphan_namespace)
+    orphan_publisher = PostgresAnchorPublisher(
+        dsns["publisher"], expected_login=roles["publisher"],
+        trusted_namespace=orphan_namespace, trusted_epoch="epoch-test",
+        publisher_public_key=_public(key),
+    )
+    orphan = _checkpoint(key, namespace=orphan_namespace, sequence=1,
+                         prior="0" * 64, first=1, last=3)
+    with psycopg.connect(dsns["admin"], autocommit=True) as admin:
+        admin.execute(
+            "INSERT INTO mirage_restore_fence.checkpoints "
+            "(namespace,epoch,sequence,previous_digest,world_digest,events_digest,"
+            " first_event,last_event,publication_id,status,signature,checkpoint_digest) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (orphan.namespace, orphan.epoch, orphan.sequence, orphan.previous_digest,
+             orphan.world_digest, orphan.events_digest, orphan.first_event,
+             orphan.last_event, orphan.publication_id, orphan.status,
+             orphan.signature, orphan.chain_digest()),
+        )
+    with pytest.raises(RestoreAnchorError, match="publication_unresolved"):
+        orphan_publisher.confirm_committed(orphan)
+
+
+def test_fence_publication_confirmation_never_trusts_unverified_input_or_network(monkeypatch):
+    """錯簽章須在查庫前拒絕；合法簽章遇 Fence 網路故障只能維持 Unknown。"""
+    from deception.world import postgres_restore_anchor as anchor_module
+
+    key = Ed25519PrivateKey.generate()
+    publisher = PostgresAnchorPublisher(
+        "postgresql://unreachable.invalid/not-used", expected_login="fence_publisher",
+        trusted_namespace="isolated-test", trusted_epoch="epoch-test",
+        publisher_public_key=_public(key),
+    )
+    valid = _checkpoint(key, namespace="isolated-test", sequence=1,
+                        prior="0" * 64, first=1, last=3)
+
+    def reject_connection(*args, **kwargs):
+        """測試所有不被簽章前置檢查拒絕的情況，一律不能從網路讀取成功。"""
+        raise OSError("synthetic_fence_connection_lost")
+
+    monkeypatch.setattr(anchor_module.psycopg, "connect", reject_connection)
+    with pytest.raises(RestoreAnchorError, match="publisher_signature_invalid"):
+        publisher.confirm_committed(replace(valid, signature=bytes(64)))
+    with pytest.raises(RestoreAnchorError, match="publication_unverifiable"):
+        publisher.confirm_committed(valid)
 
 
 def test_fence_head_transport_oserror_is_fail_closed(monkeypatch):
