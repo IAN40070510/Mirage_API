@@ -19,6 +19,7 @@ GUIDES = {
     "protected_native_http_projection": ("src/deception/world/protected_native_http.py", "docs/protected-services.md"),
     "protected_send_lease": ("src/deception/world/protected_send.py", "docs/protected-send.md"),
     "g5_post_restore_bootstrap": ("src/deception/security/restore_bootstrap.py", "docs/protected-send.md"),
+    "g5_docker_controlled_restore": ("src/deception/security/controlled_restore.py", "docs/protected-send.md"),
     "httpx_fingerprint": ("src/deception/api/fingerprint.py", "docs/trusted-session.md"),
     "request_audit": ("src/deception/world/request_audit.py", "docs/request-audit.md"),
     "commit_result": ("src/deception/world/commit.py", "docs/commit-results.md"),

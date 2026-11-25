@@ -198,6 +198,18 @@ production restart orchestrator, persistent mode pin, GC/Purge reconciliation
 or approved release mechanism. Thus `SINGLE-NODE-03` remains PARTIAL and
 the release remains NO-GO.
 
+**Docker controlled-stop subcase (candidate, not formal G5 acceptance):**
+`controlled_restore.py` adds a sequence from machine-verified Docker stop of
+explicitly identified opt-in ingress/Sender containers, through a trusted
+World restore callback, to Marker INSERT and independent Sender readback. It
+rechecks each declared container's immutable ID, labels, `RestartPolicy=no`,
+running status and PID before and after restore and after the Marker. No code
+path restarts or releases a Sender. This helps validate the *listed Docker
+processes* and phase ordering, but cannot cover undeclared ingress, alternate
+processes, in-flight packets, concurrent Docker operators or whole-host
+rollback. It does not replace a deployment-wide authoritative quiescence lock;
+`SINGLE-NODE-03` remains PARTIAL and final G5/G6 release NO-GO.
+
 ## Optional external Fence acceptance — mandatory only if enabled or claimed
 
 - **FENCE-OPTION-01:** Independent authority and storage/backup/restore domain; pin namespace, epoch, real SCRAM logins and Ed25519 identity. Same-host Docker lab is insufficient for whole-host rollback claim.

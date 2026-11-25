@@ -18,6 +18,9 @@ from deception.world import (
 )
 from deception.world.protected_grant import ProtectedGrantError
 from deception.security.restore_bootstrap import main as restore_bootstrap_main
+from deception.security.controlled_restore import (
+    DockerRestoreIsolation, RestoreContainer, run_controlled_known_restore,
+)
 from test_postgres_conformance import isolated_test_dsn
 from test_protected_grant import _login
 from test_protected_send import _authorized_pin
@@ -296,3 +299,125 @@ def test_real_schema_dump_restore_quarantines_sender_before_any_new_lease(
                     "SELECT 1 FROM pg_roles WHERE rolname=%s", (role,),
                 ).fetchone():
                     admin.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(role)))
+
+
+def test_real_docker_stop_then_pg17_restore_then_independent_marker(
+        isolated_test_dsn):
+    """同一次拋棄式實驗內確實停兩個 Docker PID，再真還原 DB 並雙角色落盤。
+
+    只在 G5 明確 opt-in 時執行；嚴格限制原始 DB/容器，使用隨機名稱及
+    完整 Docker ID，絕不停止已有的 G3b 服務容器、重啟或解除 Marker。
+    """
+    if (os.environ.get("MIRAGE_G5_REAL_RESTORE_ISOLATED") != "true"
+            or os.environ.get("MIRAGE_G5_REAL_DOCKER_QUIESCE_ISOLATED") != "true"
+            or os.environ.get("MIRAGE_G5_RESTORE_PG_TOOL_CONTAINER") != "mirage-g3b-ci-db"):
+        pytest.skip("requires both disposable Docker and PG17 restore opt-ins")
+    source = conninfo_to_dict(isolated_test_dsn)
+    schema = source.get("options", "").split("search_path=", 1)[-1]
+    if (source.get("dbname") != "mirage_g3b_ci"
+            or source.get("user") != "mirage_ci_owner"
+            or re.fullmatch(r"replay_test_[0-9a-f]{32}", schema) is None):
+        pytest.skip("only named disposable DB and random migrated schema allowed")
+    admission, _, _, _ = _authorized_pin(isolated_test_dsn)
+    backup = _docker_pg17([
+        "pg_dump", "-Fc", "--no-owner", "--no-acl", "-U", "mirage_ci_owner",
+        "-d", "mirage_g3b_ci", "-n", schema,
+    ])
+    assert 0 < len(backup) <= 32 * 1024 * 1024
+    restored_name = "mirage_g5_restore_" + uuid4().hex[:14]
+    restored_dsn = make_conninfo(isolated_test_dsn, dbname=restored_name)
+    roles = {
+        role: ("mirage_g5_" + role + "_" + uuid4().hex[:10], secrets.token_urlsafe(32))
+        for role in ("recorder", "sender")
+    }
+    created_containers = []
+    database_created = False
+    roles_created = []
+    try:
+        with psycopg.connect(isolated_test_dsn, autocommit=True) as admin:
+            assert admin.execute(
+                "SELECT 1 FROM pg_database WHERE datname=%s", (restored_name,),
+            ).fetchone() is None
+            admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(restored_name)))
+            database_created = True
+            for role_name, password in roles.values():
+                admin.execute(sql.SQL(
+                    "CREATE ROLE {} LOGIN NOINHERIT NOSUPERUSER NOCREATEDB "
+                    "NOCREATEROLE NOBYPASSRLS PASSWORD {}"
+                ).format(sql.Identifier(role_name), sql.Literal(password)))
+                roles_created.append(role_name)
+
+        for role in ("ingress", "sender"):
+            name = "mirage-g5-pg-stop-" + role + "-" + uuid4().hex[:12]
+            result = subprocess.run([
+                "/usr/bin/docker", "--host", "unix:///var/run/docker.sock",
+                "container", "run", "--detach", "--network", "none", "--pull", "never",
+                "--restart", "no", "--name", name,
+                "--label", "mirage.restore.stop_eligible=true",
+                "--label", "mirage.restore.role=" + role,
+                "--entrypoint", "sleep", "postgres:17.6-alpine", "120",
+            ], capture_output=True, timeout=30, check=False)
+            assert result.returncode == 0, "isolated_container_start_failed"
+            container_id = result.stdout.decode("ascii").strip()
+            assert re.fullmatch(r"[0-9a-f]{64}", container_id)
+            created_containers.append(RestoreContainer(container_id, "/" + name, role))
+
+        def restore_world():
+            """只將隔離來源 Schema 的備份還原到本次新建的隨機資料庫。"""
+            _docker_pg17([
+                "pg_restore", "--exit-on-error", "--no-owner", "--no-acl",
+                "-U", "mirage_ci_owner", "-d", restored_name,
+            ], input_bytes=backup)
+            with psycopg.connect(restored_dsn, autocommit=True) as admin:
+                for role_name, _ in roles.values():
+                    admin.execute(sql.SQL("GRANT USAGE ON SCHEMA {} TO {}").format(
+                        sql.Identifier(schema), sql.Identifier(role_name),
+                    ))
+                admin.execute(sql.SQL(
+                    "GRANT INSERT ON protected_local_restore_events TO {}"
+                ).format(sql.Identifier(roles["recorder"][0])))
+                admin.execute(sql.SQL(
+                    "GRANT SELECT ON protected_local_restore_events TO {}"
+                ).format(sql.Identifier(roles["sender"][0])))
+
+        event = uuid4()
+        assert run_controlled_known_restore(
+            isolation=DockerRestoreIsolation(created_containers),
+            restore_world=restore_world, restore_event_id=event,
+            recorder_dsn=make_conninfo(restored_dsn, user=roles["recorder"][0],
+                                       password=roles["recorder"][1]),
+            recorder_login=roles["recorder"][0],
+            sender_dsn=make_conninfo(restored_dsn, user=roles["sender"][0],
+                                     password=roles["sender"][1]),
+            sender_login=roles["sender"][0], schema=schema,
+        ) is True
+        with psycopg.connect(restored_dsn) as verified:
+            assert verified.execute(
+                "SELECT restore_event_id FROM protected_local_restore_events",
+            ).fetchall() == [(event,)]
+            assert verified.execute(
+                "SELECT count(*) FROM protected_send_leases",
+            ).fetchone() == (0,)
+            assert verified.execute(
+                "SELECT state FROM response_admissions WHERE admission_id=%s",
+                (admission.admission_id,),
+            ).fetchone() == ("SEND_AUTHORIZED",)
+        PostgresProtectedSender(
+            make_conninfo(restored_dsn, user=roles["sender"][0],
+                          password=roles["sender"][1]),
+            expected_login=roles["sender"][0],
+        ).require_known_restore_event(event)
+        DockerRestoreIsolation(created_containers).require_quiescent()
+    finally:
+        for spec in created_containers:
+            subprocess.run([
+                "/usr/bin/docker", "--host", "unix:///var/run/docker.sock",
+                "container", "rm", "--force", spec.container_id,
+            ], capture_output=True, check=False, timeout=30)
+        with psycopg.connect(isolated_test_dsn, autocommit=True) as admin:
+            if database_created:
+                admin.execute(sql.SQL("DROP DATABASE {} WITH (FORCE)").format(
+                    sql.Identifier(restored_name),
+                ))
+            for role_name in roles_created:
+                admin.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(role_name)))

@@ -125,6 +125,36 @@ Marker 寫入後才允許原本**仍封閉 503** 的服務啟動。檔案缺失�
 更沒有自動 GC／Snapshot reconcile 或恢復開放流程。Caller 必須將失敗、
 未知結果或無法停流一律視為 **NO-GO**。`SINGLE-NODE-03` 正式 Gate 仍 OPEN。
 
+### G5 Docker 受控還原順序候選
+
+`src/deception/security/controlled_restore.py` 額外提供 `DockerRestoreIsolation`
+與 `run_controlled_known_restore` 程式庫入口，供具備獨立部署控制面的操作程式
+串接。這不是自動從既有部署發現所有入口、可直接在線上執行的 Restore CLI。
+
+1. 控制面必須明確提供 **完整 64 位十六進位容器 ID、Docker 原始容器名稱、
+   `ingress`／`sender` 角色**，兩類都不能缺。使用固定本機 Docker socket，
+   停機前先 `inspect`，確認每個 ID／名稱一致、
+   `mirage.restore.stop_eligible=true`、`mirage.restore.role` 符合、
+   `RestartPolicy=no` 且未設定 `AutoRemove`。兩份隔離 Compose 範本已預留
+   標籤；正式 Gateway 仍需額外盤點，不得直接套用。
+2. 只對已確認 opt-in 的精確 ID 執行 Docker stop；再次 `inspect` 每個容器
+   `Status=exited/created`、`Running=false`、`Restarting=false`、
+   `Dead=false`、`Pid=0`。任何身分換綁、daemon 失聯或程序仍在都拒絕還原。
+3. 由呼叫端提供受控的 `restore_world` 回呼。停流檢查通過後才允許執行；
+   還原完成後 **再次**機器查停流，才使用既有兩個獨立 SCRAM Login
+   寫入不可逆 UUIDv4 Marker 並讀回，最後再查停流。
+4. 所有路徑都**沒有** Sender start、Resume、Replay 或 Release 操作。
+   `restore_world` 錯誤、Marker 寫入未知或 Docker 狀態變更都失敗封閉，
+   操作員必須排查，不可自行略過階段或拿返回值自動解封。
+
+這解決「無機器證據卻直接相信人工停流旗標」的**已列出容器子案例**，
+但不是整機持久隔離證明：控制器尚未具備對**所有** Gateway、旁路程序、
+未列出的 Sender／在途 TCP 連線的完整盤點，Docker `inspect` 與實際
+`pg_restore` 並非不可競爭的原子操作；其他操作者能同時 `docker start`。
+正式部署還需具權威的入口網路封鎖、控制面鎖、原生啟動協調、GC bytes 清除
+及故障矩陣。即使實體 Docker 停機子測通過，**SINGLE-NODE-03 仍 OPEN**，
+**Trusted Send／DECEIVE 不會因本功能啟用**。
+
 ## 故障、驗證與限制
 
 `python -m pytest -q tests/test_protected_send.py` 包含正式
