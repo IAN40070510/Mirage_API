@@ -421,7 +421,7 @@ Host ↔ 外部 Fence Authority 的跨主機連線、獨立備份域不可回退
 也未涵蓋雙 DB Unknown ACK、BD-05 自動解禁及 Send/Purge 競態。
 **G5 仍 PARTIAL／NO-GO，Trusted Send OFF，非 Owner 簽核。**
 
-### 2026-11-25 Fence COMMIT ACK 遺失的唯讀確認 API — 待真 PG CI 驗證
+### 2026-11-25 Fence COMMIT ACK 遺失的唯讀確認 API — 真 PG CI PASS
 
 `PostgresAnchorPublisher.confirm_committed(checkpoint)` 對事先簽署的
 `COMMITTED` Checkpoint 進行**純查詢**；它不重送 `append()`、不修改 Head，
@@ -443,8 +443,17 @@ Checkpoint 欄位／簽章／摘要，以及獨立 Head 已包含該鏈節。
 查詢成功、尚未寫入的下一節保持 Unknown、第二節前進後仍可確認第一節、
 Publication ID 衝突及孤兒 Checkpoint、Authority Epoch 退役的拒絕；
 不需資料庫的單元測試證明錯誤簽章在連線前被攔截，網路中斷保持 Unknown。
-此處是**程式及測試範圍**，尚不代表 CI 已執行通過；待真 PG workflow
-完成後另記錄 CI run／結果。
+固定程式 SHA [`2276874`](https://github.com/IAN40070510/Mirage_API/commit/227687400d6f6e22425c09b3c046511beda35b14)
+的 [World PG17.6 CI #45525365753](https://github.com/IAN40070510/Mirage_API/actions/runs/45525365753)
+**success**：獨立實體 Fence PostgreSQL／SCRAM／Ed25519 `12 passed`、
+受保護 World DB `177 passed`、獨立 mTLS `5 passed`、G5 密碼學 `9 passed`；
+兩個 PG 實體服務分別使用 5432／5433 埠和不同 DB Login，全部是
+GitHub Actions 的可拋棄服務，不接入 MSDSS。相同 SHA 的
+[全量 Python CI #45525365730](https://github.com/IAN40070510/Mirage_API/actions/runs/45525365730)
+`success`：`1467 passed / 14 skipped / 2 warnings`（341.01 秒）；
+[容器 Push CI #45525365761](https://github.com/IAN40070510/Mirage_API/actions/runs/45525365761)
+及 [Draft PR CI #45525375489](https://github.com/IAN40070510/Mirage_API/actions/runs/45525375489)
+均 `success`。這些 PASS 是 Fence 只讀對帳**子項**，沒有證明 G5 完成。
 
 **未完成的安全邊界不變：**World DB 持久化的發布 Intent／雙資料庫未知 ACK
 狀態機、World COMMIT 確認、BD-05 Release、正式跨復原域部署、
