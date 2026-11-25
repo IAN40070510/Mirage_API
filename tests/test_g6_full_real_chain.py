@@ -4,9 +4,11 @@ import hashlib
 import json
 import multiprocessing
 import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import secrets
 import ssl
+from threading import Barrier
 import time
 from uuid import uuid4
 
@@ -328,7 +330,7 @@ def _g6_signed_client_request(client, signer_key, gateway_port, *,
 
 def test_g6_full_real_jws_seven_tls_hops_native_http_and_replay(
         tmp_path, request, isolated_test_dsn):
-    """I-01～I-04 八種真 Client 2xx／4xx 經七 TLS／PG Grant/Lease，JWS 重放禁止。"""
+    """I-01～I-04 真 Client 2xx／4xx／雙 JWS CAS 競態經七 TLS／PG 一次性 Lease。"""
     dsn = isolated_test_dsn
     now = int(time.time())
     binding = SessionBinding(
@@ -518,6 +520,54 @@ def test_g6_full_real_jws_seven_tls_hops_native_http_and_replay(
                 replay = client.send(used)
                 assert replay.status_code == 503
                 assert replay.json() == {"detail": "gateway_delivery_unverifiable"}
+            # G6 競態：兩個同版有效 Inventory Reservation 經真 TLS 同時提交，
+            # 只能有一個 World Commit/Promotion/Send Lease；另一個不允許
+            # 以 stale CAS 鑄造第二個原生 200，或重送其已消費的 JWS。
+            race_attempts = [str(uuid4()), str(uuid4())]
+            race_requests = [
+                _g6_signed_client_request(
+                    client, signer_key, gateway_port, method="POST",
+                    path="/synthetic/inventory/reservations",
+                    request_id="g6-inventory-concurrent-" + str(index),
+                    body={
+                        "sku": "sku-1", "quantity": 1, "expected_version": 3,
+                        "idempotency_key": "g6-inventory-race-" + str(index),
+                        "commit_attempt_id": attempt,
+                    },
+                )
+                for index, attempt in enumerate(race_attempts)
+            ]
+            barrier = Barrier(2)
+
+            def send_race(prepared):
+                """讓兩個不同 JWS 同時穿過 Client HTTPS 入口以觸發資料庫 CAS。"""
+                barrier.wait(timeout=10)
+                return client.send(prepared[0])
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                race_responses = list(pool.map(send_race, race_requests))
+            assert sorted(response.status_code for response in race_responses) == [200, 503], (
+                [(response.status_code, response.text) for response in race_responses],
+                _g6_stage_counts(dsn),
+            )
+            winner = next(response for response in race_responses if response.status_code == 200)
+            loser = next(response for response in race_responses if response.status_code == 503)
+            assert winner.json()["state_version"] == 4
+            assert winner.json()["reservation"]["sku"] == "sku-1"
+            assert loser.json() == {"detail": "gateway_delivery_unverifiable"}
+            for used, _ in race_requests:
+                replay = client.send(used)
+                assert replay.status_code == 503
+                assert replay.json() == {"detail": "gateway_delivery_unverifiable"}
+            observed, observed_jti = _g6_signed_client_request(
+                client, signer_key, gateway_port, method="GET",
+                path="/synthetic/inventory/sku-1",
+                request_id="g6-inventory-race-read-after-write",
+            )
+            after_race = client.send(observed)
+            assert after_race.status_code == 200, after_race.text
+            assert after_race.json() == {"sku": "sku-1", "available": 3, "state_version": 4}
+            assert client.send(observed).status_code == 503
         with psycopg.connect(dsn) as connection:
             all_jtis = (jti, missing_jti, reserve_jti, history_jti,
                         absent_operation_jti, cancel_jti, cancel_again_jti, unknown_sku_jti)
@@ -530,11 +580,24 @@ def test_g6_full_real_jws_seven_tls_hops_native_http_and_replay(
                 (list(all_jtis),),
             ).fetchone() == (8,)
             assert connection.execute(
+                "SELECT count(*) FROM replay_entries WHERE jti=ANY(%s)",
+                ([jti for _, jti in race_requests] + [observed_jti],),
+            ).fetchone() == (3,)
+            assert connection.execute(
+                "SELECT count(*) FROM world_operations WHERE commit_attempt_id=ANY(%s)",
+                (race_attempts,),
+            ).fetchone() == (1,)
+            assert connection.execute(
+                "SELECT count(*) FROM protected_world_commit_sources "
+                "WHERE commit_attempt_id=ANY(%s)",
+                (race_attempts,),
+            ).fetchone() == (1,)
+            assert connection.execute(
                 "SELECT count(*) FROM protected_candidate_promotions"
-            ).fetchone() == (8,)
+            ).fetchone() == (10,)
             assert connection.execute(
                 "SELECT count(*) FROM protected_send_leases"
-            ).fetchone() == (8,)
+            ).fetchone() == (10,)
     finally:
         for worker in workers:
             if worker.pid is not None:

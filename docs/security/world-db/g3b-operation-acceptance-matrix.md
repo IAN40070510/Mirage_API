@@ -502,6 +502,14 @@ JWS／JTI／Receipt／Commit Attempt 的有效加購請求。唯一合法勝者
 再使用均須拒絕，獨立 GET 重建的 Cart 必須等於唯一勝者；這是
 單一隔離競態子項，不代表其他 CAS／網路抖動／壓力矩陣結案。
 
+**I-01 真併行 CAS 候選**：`tests/test_g6_full_real_chain.py` 在
+Inventory 真實已提交版本 3，讓兩張有效而不同的 JWS 同時預留 SKU。
+唯一勝者才能產生原生 Client 200／世界版本 4；敗者固定 503，
+不得有第二筆 `world_operations`／`protected_world_commit_sources`
+或第二份 Send Lease。再由新 Receipt 的獨立 I-04 GET 證實庫存只扣
+一次，兩張舊 JWS 都不可重放；與 C-03 一同收集併發子項證據，
+不得外推成完整跨節點／斷線／DB 恢復測試。
+
 ## 安全簽收門檻
 
 1. **入口拓樸**：Gateway 以獨立 CA／Client Certificate 直連 Verifier，

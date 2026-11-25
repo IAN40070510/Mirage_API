@@ -21,6 +21,8 @@
 
 `1f8e62fe6667f566a40bcbe8c806429998377426` 七個獨立實體 SCRAM Login 的精確版本：ARM64 `job_01M8953AMR00TSERDB5NXY5VA7` **127 passed**、G5 `job_01M8955K0M00RTNRA0C2F9V3VW` **37 passed**，GitHub Python 全套 **1555 passed／14 skipped**，World DB／四服務／容器 CI 全部成功，參見 [#34 驗收索引](https://github.com/IAN40070510/Mirage_API/pull/34#issuecomment-7160311938)。本輪再新增 C-03 同版雙 JWS 並行寫入真七 TLS／PG 的候選負面試驗：只允許一筆 World Commit／Client 200，另一筆固定 503，並驗證沒有第二次可發送 Lease；正式矩陣的其他 CAS／斷線／復原案例仍 OPEN。
 
+G6 再新增 I-01 原生 Inventory 同版雙 JWS 真 HTTPS 併發 CAS：兩筆各自合法的 Reservation 對版本 3 同時競爭，一筆 Client 200／世界版本 4、另一筆固定 503；核對真 PostgreSQL 只有一筆 Commit Source／World Operation、兩個 JTI 重放都遭拒，且獨立 I-04 GET 重建唯一勝者的庫存。與 C-03 相同，這是單一隔離子案例而非完整壓力／跨故障域釋出證據。
+
 ## 已實作範圍
 
 | 階段 | 可使用能力 | 驗收邊界 |
