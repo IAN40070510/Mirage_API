@@ -113,8 +113,11 @@ ID，用不可變 Token/Promotion 到期時間確定授權期限及 Sender Owner
 Receipt→Promotion→Grant Binding→Authorized Snapshot→Send Lease→原生 ASGI
 200 和終態 Audit，並測重用 Receipt、兩份候選的負面情境。
 已新增獨立 Authorizer 物理 SCRAM 角色／Receipt-only mTLS RPC，
-但尚無完整 Validator→Candidate 提交、Verifier→Authorizer→Sender 最終
-Client HTTP 接線；不接受 Runtime 指定 Header/Body 作為授權證據。
+另有 `tests/test_g6_full_real_chain.py` 在拋棄式 PostgreSQL 與七 TLS
+Listener 上串起真 JWS→Verifier→Executor→Validator→Publisher→Authorizer→
+Sender→Client 原生 HTTP 200，並阻斷相同 JWS Replay。此僅為隔離候選，
+不代表正式最小權限拓樸已部署、G6 故障矩陣完成或解除 Sender Fuse；
+不接受 Runtime 指定 Header/Body 作為授權證據。
 
 ### Receipt-only Sender→Gateway 代理候選（未解封）
 

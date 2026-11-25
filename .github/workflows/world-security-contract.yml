@@ -30,6 +30,7 @@ on:
       - tests/test_protected_send.py
       - tests/test_receipt_proxy_sender.py
       - tests/test_protected_gateway_proxy.py
+      - tests/test_g6_full_real_chain.py
       - tests/test_restore_anchor.py
       - tests/test_postgres_restore_anchor.py
       - deploy/security-lab/g5-fence-schema.sql
@@ -84,7 +85,7 @@ jobs:
       - name: Validate documentation
         run: python tools/check_documentation.py
       - name: Run isolated Protected Grant / World Executor / Role tests
-        run: python -m pytest -q tests/test_protected_grant.py tests/test_protected_world_executor.py tests/test_ingress_receipts.py tests/test_operation_binding.py tests/test_protected_services.py tests/test_protected_send.py tests/test_receipt_proxy_sender.py tests/test_protected_gateway_proxy.py --junitxml=protected-grant-results.xml
+        run: python -m pytest -q tests/test_protected_grant.py tests/test_protected_world_executor.py tests/test_ingress_receipts.py tests/test_operation_binding.py tests/test_protected_services.py tests/test_protected_send.py tests/test_receipt_proxy_sender.py tests/test_protected_gateway_proxy.py tests/test_g6_full_real_chain.py --junitxml=protected-grant-results.xml
       - name: Verify independent mTLS sealed control plane
         run: python -m pytest -q tests/test_protected_rpc_mtls.py --junitxml=protected-rpc-results.xml
       - name: Verify G5 independent anchor cryptographic contract (simulation only)

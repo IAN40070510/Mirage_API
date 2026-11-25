@@ -51,9 +51,13 @@ Verifier／Sender RPC、Hash 錯誤、任何異常均返回固定 503；**不重
 `serve_gateway_native_proxy_loopback_tls()` 限 `127.0.0.1`／`::1`，供隔離真 TLS
 實驗使用；**無任何 production CLI 或環境旗標**能啟動這個對外候選。
 
-這段目前只完成候選 Client TLS→Gateway→Verifier mTLS→Sender mTLS 的
-傳輸測試；假 Verifier 仍須用真獨立 Verifier 完成 JWS、原始 Fingerprint、
-Executor、Native Validator、Publisher 與 Authorizer 的同一請求整合。Sender
+隔離驗收現在分兩層：`tests/test_protected_gateway_proxy.py` 使用固定 Verifier
+stub 專門驗三層 TLS、真 PG Lease、Hash、Sender 停機／復原與故障；另外
+`tests/test_g6_full_real_chain.py` 以**真正的 Ed25519 JWS、原始 Fingerprint、
+七個各自 loopback TLS Listener** 驗證同一 Client HTTP 經 Gateway→Verifier→
+Executor→Native Validator→Publisher→Authorizer→Sender 原生 200，接著重放
+相同 JWS 固定拒絕且僅有一把持久化 Lease。後者使用拋棄式 PG schema、
+短期獨立測試 CA；正式分別部署／最小權限實體 Login 與跨故障域尚未核准。Sender
 仍是 G4 未解封 App；Sender→Gateway ACK 不等於 Client 已收到，Gateway
 離線、Client 斷線及整機 Restore／跨復原域未知結果均無第二次送出權。
 G5 單機預設不強制外部 Fence，但不能保障整機快照回滾偵測。
@@ -75,7 +79,7 @@ mTLS 配置，且 Authorizer 與 Publisher 的 Verifier Client Cert/Key 不可
 使用相同實體檔案或相同憑證公鑰。任何一項設定已出現卻為空值或不完整，
 都必須拒絕啟動，不能藉 falsy 空字串退回 Candidate-only。完全未提供這組
 設定才保留舊的內部 Candidate-only 流程。
-目前只有單元隔離鏈驗證，四服務部署尚未接這個選用 Caller、Sender 仍封閉；
+目前另有完整 loopback 七 TLS 端到端隔離驗證，但四服務正式部署尚未接這個選用 Caller、Sender 仍封閉；
 不能把內部 `receipt_authorization` JSON 當成原生 Client HTTP 或正式放行。
 
 ### G3b Direct Verifier HTTP 入口（隔離增量）

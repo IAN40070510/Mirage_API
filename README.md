@@ -555,10 +555,10 @@ HTTP 驗證器執行 16 個一般及攻擊特徵請求，檢查 `200 → 404 →
 5. **Gateway→Client**：只可轉送與前述授權 Hash **完全相同**的原生 HTTP；Client 斷線或 ACK 未知不重新起送。
 
 實作拆在三個堆疊式 **Draft／NO-GO** PR：[Receipt 授權鏈 #32](https://github.com/IAN40070510/Mirage_API/pull/32)、[Receipt-only Sender #33](https://github.com/IAN40070510/Mirage_API/pull/33)、[原生 Gateway #34](https://github.com/IAN40070510/Mirage_API/pull/34)。
-`src/deception/security/protected_gateway.py` 為**僅能回環位址啟動**的隔離候選，正式 `create_sender_service()` 依然拒絕起送。獨立 ARM64 `161.33.154.211` 的三層真 TLS／一次性 PG Lease 測試及失敗案例具體見
+`src/deception/security/protected_gateway.py` 為**僅能回環位址啟動**的隔離候選，正式 `create_sender_service()` 依然拒絕起送。獨立 ARM64 `161.33.154.211` 的七 TLS Listener／真 Ed25519 JWS 全鏈／唯一 PG Lease／Sender 停機與復原測試具體見
 [RPC 模組文件](docs/protected-rpc.md)和[Send Lease 文件](docs/protected-send.md)。
 G5 標準單機完整功能**不強制**外部 Restore Fence，但不承諾整機快照回滾偵測。
-**仍缺同一 Client 請求的真 Verifier 全鏈整合、G6 公網 Client 故障矩陣、正式 TLS 身分及 Owner 放行；不要把隔離測試視作正式 G3b～G6 結案。**
+**隔離候選已有同一 Client 請求的真 Verifier 全鏈測試；仍缺跨故障域／公網 Client 故障矩陣、正式最小權限部署、TLS 身分及 Owner 放行；不可把此隔離測試視作正式 G3b～G6 結案。**
 
 ### Gateway 與完整商品回應的驗收
 
