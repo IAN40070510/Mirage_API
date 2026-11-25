@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import hashlib
 import hmac
+import re
 from typing import Callable
 from uuid import UUID, uuid4
 
@@ -28,6 +29,20 @@ class ProtectedSendLease:
     candidate_hash: str
     envelope_bytes: bytes
     transmission_deadline: int
+
+
+@dataclass(frozen=True)
+class ProtectedSendReconciliation:
+    """唯讀 Lease 對帳證據；沒有任何狀態可以用來核發新的傳輸權。"""
+
+    observation: str
+    state: AdmissionState | None
+    lease_id: UUID | None
+
+    @property
+    def retry_permitted(self) -> bool:
+        """即使資料庫看不到 Lease，也不能排除 ACK 遺失或已還原的舊狀態。"""
+        return False
 
 
 class PostgresProtectedSender(_ProtectedConnection):
@@ -129,6 +144,65 @@ class PostgresProtectedSender(_ProtectedConnection):
                     candidate_hash=row[6], envelope_bytes=pinned,
                     transmission_deadline=row[2],
                 )
+
+    def reconcile_send(self, *, admission_id: str, receipt_id: UUID,
+                       owner: str, request_fingerprint: str) -> ProtectedSendReconciliation:
+        """唯讀重查 StartSend／FinishSend 已提交狀態，不根據查核結果允許重送。
+
+        供同一 Sender 在 COMMIT ACK 遺失／程序重啟後調查，必須使用受保護的
+        原始 Receipt、Owner、Fingerprint；不接受來自 HTTP 客戶端的任意查詢。
+
+        `NO_LEASE_OBSERVED` 僅代表本次資料庫可見的快照沒有 Lease，**不**
+        證明先前起送未發生；真正的外部復原域一致性仍是 G5 的獨立責任。
+        """
+        if (not isinstance(admission_id, str) or not 1 <= len(admission_id) <= 128
+                or not isinstance(receipt_id, UUID) or receipt_id.version != 4
+                or not isinstance(owner, str) or not 1 <= len(owner) <= 128
+                or not isinstance(request_fingerprint, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", request_fingerprint)):
+            raise ProtectedGrantError("protected_send_reconciliation_request_invalid")
+        unknown = ProtectedSendReconciliation("UNVERIFIABLE", None, None)
+        with self._connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """SELECT a.state,a.claim_owner,a.transmission_deadline,
+                              s.receipt_id,s.send_owner,s.request_fingerprint,
+                              s.candidate_hash,s.transmission_deadline,
+                              l.lease_id,l.receipt_id,l.send_owner,
+                              l.request_fingerprint,l.candidate_hash,l.transmission_deadline
+                       FROM response_admissions a
+                       JOIN protected_authorized_http_snapshots s
+                         ON s.admission_id=a.admission_id
+                       LEFT JOIN protected_send_leases l
+                         ON l.admission_id=a.admission_id
+                       WHERE a.admission_id=%s""",
+                    (admission_id,),
+                )
+                row = cursor.fetchone()
+                if (row is None or row[1] != owner or row[3] != receipt_id
+                        or row[4] != owner or row[5] != request_fingerprint
+                        or row[2] != row[7]):
+                    return unknown
+                try:
+                    state = AdmissionState(row[0])
+                except ValueError:
+                    return unknown
+                if row[8] is None:
+                    if state is AdmissionState.SEND_AUTHORIZED:
+                        return ProtectedSendReconciliation("NO_LEASE_OBSERVED", state, None)
+                    return unknown
+                if (not isinstance(row[8], UUID) or row[8].version != 4
+                        or row[9] != receipt_id or row[10] != owner
+                        or row[11] != request_fingerprint or row[12] != row[6]
+                        or row[13] != row[2]):
+                    return unknown
+                if state is AdmissionState.SEND_STARTED:
+                    return ProtectedSendReconciliation("STARTED_DELIVERY_UNKNOWN", state, row[8])
+                if state in (AdmissionState.SEND_COMPLETED, AdmissionState.SEND_FAILED,
+                             AdmissionState.SEND_PARTIAL_FAILURE):
+                    # 這是 DB 終態，不代表遠端 Client 已收到所有 bytes。
+                    return ProtectedSendReconciliation("TERMINAL_RECORDED", state, row[8])
+                return unknown
 
     def finish_send(self, *, admission_id: str, owner: str, lease_id: UUID,
                     outcome: AdmissionState, attempted: bool) -> AdmissionOperationResult:

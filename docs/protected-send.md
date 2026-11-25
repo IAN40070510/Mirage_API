@@ -38,6 +38,13 @@ transmission_factory=...)` 接到既有 `ValidatedHTTPResponse`：在真正發�
 - 終態：`finish_send` 只接受同一次 Lease ID、Owner 與目前
   `SEND_STARTED`，可記錄 `SEND_COMPLETED`、`SEND_FAILED` 或
   `SEND_PARTIAL_FAILURE`；無權者與重覆呼叫固定拒絕。
+- 唯讀故障對帳：`reconcile_send(admission_id, receipt_id, owner,
+  request_fingerprint)` 用 Sender 專屬物理連線同時核對 Admission、
+  Authorized Snapshot 及 Lease 的不可變綁定。傳回 `NO_LEASE_OBSERVED`、
+  `STARTED_DELIVERY_UNKNOWN`、`TERMINAL_RECORDED` 或 `UNVERIFIABLE`，
+  終態另附實際 DB State。**所有結果的 `retry_permitted=False`**；
+  `NO_LEASE_OBSERVED` 不能證明其他復原域、失聯的 COMMIT 或實際網路
+  發送不存在，`TERMINAL_RECORDED` 也不能證明 Client 全部收到。
 
 ### 隔離測試用例（不得移植到 Runtime）
 
@@ -74,6 +81,13 @@ Snapshot 是同一 PostgreSQL 內的不可變 BYTEA，未證明任何外部
 Object Store 的 GC／共享 Blob Pin、跨資料庫 Restore quarantine 或
 網路 ACK 不明情境。真正的異步送出即使已寫入 `SEND_STARTED`，也不
 能保證客戶端收到全部 bytes；失敗必須保留不確定性，不能重送。
+
+**G4 未知 ACK 對帳增量（待隔離 CI 驗收）**：新增只用 Sender 既有 SELECT
+權限的 `reconcile_send()`，不新增 SQL Migration、寫入權限或 HTTP RPC。
+真 PostgreSQL 測試在同一 Admission 的尚無 Lease、已提交 Lease、已提交
+終態及終態 Audit 插入失敗回滾後逐一查核，還驗證錯 Owner／Receipt／
+Fingerprint 只得到 `UNVERIFIABLE`；即使觀察不到 Lease 也不可重起送。
+這只改善故障診斷，不處理跨庫權威、客戶端 ACK、正式服務接線與 Restore。
 
 套件與授權：僅使用專案既有 `psycopg`、Starlette／ASGI、Python 標準庫與
 PostgreSQL 17；未加入新模型／商用外部服務。依賴授權沿用專案既有清單。
