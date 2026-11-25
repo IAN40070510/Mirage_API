@@ -165,36 +165,47 @@ class PostgresProtectedSender(_ProtectedConnection):
         with self._connection() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
-                    """SELECT a.state,a.claim_owner,a.transmission_deadline,
+                    """SELECT a.state,a.claim_owner,a.transmission_deadline,a.admission,
                               s.receipt_id,s.send_owner,s.request_fingerprint,
                               s.candidate_hash,s.transmission_deadline,
+                              s.world_generation_id,s.candidate_ref,b.receipt_id,
                               l.lease_id,l.receipt_id,l.send_owner,
                               l.request_fingerprint,l.candidate_hash,l.transmission_deadline
                        FROM response_admissions a
                        JOIN protected_authorized_http_snapshots s
                          ON s.admission_id=a.admission_id
+                       JOIN protected_grant_bindings b
+                         ON b.admission_id=a.admission_id AND b.receipt_id=s.receipt_id
                        LEFT JOIN protected_send_leases l
                          ON l.admission_id=a.admission_id
                        WHERE a.admission_id=%s""",
                     (admission_id,),
                 )
                 row = cursor.fetchone()
-                if (row is None or row[1] != owner or row[3] != receipt_id
-                        or row[4] != owner or row[5] != request_fingerprint
-                        or row[2] != row[7]):
+                if (row is None or row[1] != owner or row[4] != receipt_id
+                        or row[5] != owner or row[6] != request_fingerprint
+                        or row[2] != row[8] or row[11] != receipt_id):
                     return unknown
                 try:
                     state = AdmissionState(row[0])
+                    admission = ResponseAdmission.model_validate(row[3])
                 except ValueError:
                     return unknown
-                if row[8] is None:
+                if (admission.admission_id != admission_id
+                        or admission.request_binding_digest != request_fingerprint
+                        or admission.candidate_hash != row[7]
+                        or admission.transmission_deadline != row[2]
+                        or admission.world_generation_id != row[9]
+                        or admission.candidate_ref != row[10]):
+                    return unknown
+                if row[12] is None:
                     if state is AdmissionState.SEND_AUTHORIZED:
                         return ProtectedSendReconciliation("NO_LEASE_OBSERVED", state, False)
                     return unknown
-                if (not isinstance(row[8], UUID) or row[8].version != 4
-                        or row[9] != receipt_id or row[10] != owner
-                        or row[11] != request_fingerprint or row[12] != row[6]
-                        or row[13] != row[2]):
+                if (not isinstance(row[12], UUID) or row[12].version != 4
+                        or row[13] != receipt_id or row[14] != owner
+                        or row[15] != request_fingerprint or row[16] != row[7]
+                        or row[17] != row[2]):
                     return unknown
                 if state is AdmissionState.SEND_STARTED:
                     return ProtectedSendReconciliation("STARTED_DELIVERY_UNKNOWN", state, True)

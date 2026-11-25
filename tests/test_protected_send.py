@@ -115,6 +115,49 @@ def test_sender_reconciliation_is_readonly_and_never_reauthorizes_send(isolated_
         ).fetchall() == [(0,), (1,), (2,)]
 
 
+@pytest.mark.parametrize("field", ["admission_id", "request_binding_digest", "candidate_hash",
+                                   "world_generation_id", "candidate_ref"])
+def test_sender_reconciliation_rejects_tampered_immutable_admission(isolated_test_dsn, field):
+    """即使狀態仍顯示已授權，Admission JSON 與受保護 Pin 不一致就只能回不明。"""
+    import psycopg
+
+    admission, owner, _, seeded = _authorized_pin(isolated_test_dsn)
+    sender = PostgresProtectedSender(isolated_test_dsn, expected_login=_login(isolated_test_dsn))
+    selectors = dict(admission_id=admission.admission_id, receipt_id=seeded[3],
+                     owner=owner, request_fingerprint=admission.request_binding_digest)
+    assert sender.reconcile_send(**selectors).observation == "NO_LEASE_OBSERVED"
+    wrong_value = "f" * 64 if field in {"candidate_hash", "request_binding_digest"} else "forged"
+    with psycopg.connect(isolated_test_dsn) as connection:
+        connection.execute(
+            "UPDATE response_admissions SET admission=jsonb_set(admission,ARRAY[%s],to_jsonb(%s::text)) "
+            "WHERE admission_id=%s", (field, wrong_value, admission.admission_id),
+        )
+    result = sender.reconcile_send(**selectors)
+    assert result == ProtectedSendReconciliation("UNVERIFIABLE", None, False)
+    assert not result.retry_permitted
+
+
+def test_sender_reconciliation_rejects_mismatched_deadline(isolated_test_dsn):
+    """不可變 Admission 期限遭竄改，唯讀對帳不可把可見的授權狀態當成安全證據。"""
+    import psycopg
+
+    admission, owner, _, seeded = _authorized_pin(isolated_test_dsn)
+    sender = PostgresProtectedSender(isolated_test_dsn, expected_login=_login(isolated_test_dsn))
+    with psycopg.connect(isolated_test_dsn) as connection:
+        connection.execute(
+            "UPDATE response_admissions "
+            "SET admission=jsonb_set(admission,'{transmission_deadline}',to_jsonb(%s::bigint)) "
+            "WHERE admission_id=%s",
+            (admission.transmission_deadline + 100, admission.admission_id),
+        )
+    result = sender.reconcile_send(
+        admission_id=admission.admission_id, receipt_id=seeded[3], owner=owner,
+        request_fingerprint=admission.request_binding_digest,
+    )
+    assert result == ProtectedSendReconciliation("UNVERIFIABLE", None, False)
+    assert not result.retry_permitted
+
+
 @pytest.mark.parametrize("outcome", [AdmissionState.SEND_FAILED,
                                      AdmissionState.SEND_PARTIAL_FAILURE])
 def test_sender_reconciliation_records_failed_and_partial_terminal_without_retry(isolated_test_dsn, outcome):
