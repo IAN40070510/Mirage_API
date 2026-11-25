@@ -155,7 +155,9 @@ def _g6_wait_ready(endpoint):
 
 
 def _g6_signed_client_request(client, signer_key, gateway_port, *,
-                              method, path, request_id, body=None):
+                              method, path, request_id, body=None,
+                              access_mode="inventory", session_id="session",
+                              resource_id=None):
     """在 Client 發送前依精確 HTTPX URL／Headers／Body 簽 Ed25519 JWS。"""
     headers = {"x-request-id": request_id}
     kwargs = {}
@@ -170,7 +172,7 @@ def _g6_signed_client_request(client, signer_key, gateway_port, *,
     outbound.headers["x-trusted-session"] = signed(
         signer_key, jti=jti,
         fingerprint=fingerprint_httpx_request(outbound, request_id),
-        access_mode="inventory",
+        access_mode=access_mode, session_id=session_id, resource_id=resource_id,
     )
     return outbound, jti
 
