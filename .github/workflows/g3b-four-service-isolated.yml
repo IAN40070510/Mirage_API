@@ -5,6 +5,7 @@ on:
     branches:
       - fix/mir-sec-world-001-resume-20261122
       - fix/g5-fence-authority-scope-pin-20261125
+      - fix/g4-pinned-asgi-lease-deadline-20261125
   pull_request:
     branches:
       - fix/mir-sec-world-001-resume-20261122

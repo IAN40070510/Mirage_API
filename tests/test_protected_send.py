@@ -1,6 +1,8 @@
 """G4 獨立 Sender 的精確 Payload Pin、一次性 Lease 與真 ASGI 發送前守衛。"""
 
 import asyncio
+from contextlib import nullcontext
+import hashlib
 import os
 import secrets
 import time
@@ -67,6 +69,87 @@ def _lose_commit_ack_after_database_commit(monkeypatch, actor):
     monkeypatch.setattr(actor, "_connection", LostCommitAcknowledgement)
 
 
+def test_pinned_asgi_rejects_invalid_lease_identity_and_deadline_before_any_bytes():
+    """已提交 Lease 回傳的 UUID4 與授權期限不一致時，首個 HTTP start 必須被阻擋。"""
+    receipt = uuid4()
+    envelope = response_envelope(200, [("content-type", "application/json")], b'{}')
+    expected_deadline = 1900000000
+    fingerprint = "a" * 64
+    expected_hash = hashlib.sha256(envelope).hexdigest()
+
+    class StubSender:
+        """模擬已提交 Lease，將錯誤欄位與實際傳輸隔離測試。"""
+
+        def __init__(self, *, lease_id, deadline):
+            """保存本輪欲注入的 Lease ID 與資料庫回傳期限。"""
+            self.lease_id = lease_id
+            self.deadline = deadline
+            self.starts = 0
+            self.finishes = 0
+
+        def start_send(self, *, admission_id, receipt_id, owner, request_fingerprint,
+                       expected_envelope):
+            """回傳精確相符的 Pin，只有指定兩個欄位可異常。"""
+            self.starts += 1
+            assert expected_envelope == envelope
+            return ProtectedSendLease(
+                lease_id=self.lease_id, admission_id=admission_id, receipt_id=receipt_id,
+                send_owner=owner, request_fingerprint=request_fingerprint,
+                candidate_hash=expected_hash, envelope_bytes=envelope,
+                transmission_deadline=self.deadline,
+            )
+
+        def known_restore_delivery_window(self):
+            """沒有 Restore 競態的正常傳輸窗口，僅用於正向控制案例。"""
+            return nullcontext()
+
+        def finish_send(self, **kwargs):
+            """模擬正向案例完成一次不可重複的 Audit 終態。"""
+            self.finishes += 1
+            return AdmissionOperationResult.SUCCESS
+
+    for lease_id, deadline in (
+        (UUID(int=0), expected_deadline),
+        (uuid4(), expected_deadline - 1),
+        (uuid4(), True),
+    ):
+        sender = StubSender(lease_id=lease_id, deadline=deadline)
+        response = ProtectedPinnedASGIResponse(
+            sender=sender, admission_id="f" * 32, receipt_id=receipt,
+            owner="sender-test", request_fingerprint=fingerprint,
+            expected_transmission_deadline=expected_deadline,
+            expected_envelope=envelope, clock=lambda: 1800000000,
+        )
+        messages = []
+
+        async def record(message):
+            """記錄是否有未授權 HTTP start/body 外洩。"""
+            messages.append(message)
+
+        with pytest.raises(TransmissionError, match="protected_pinned_asgi_lease_refused"):
+            asyncio.run(response({"type": "http", "scheme": "https"}, None, record))
+        assert messages == [] and sender.starts == 1 and sender.finishes == 0
+
+    sender = StubSender(lease_id=uuid4(), deadline=expected_deadline)
+    response = ProtectedPinnedASGIResponse(
+        sender=sender, admission_id="f" * 32, receipt_id=receipt,
+        owner="sender-test", request_fingerprint=fingerprint,
+        expected_transmission_deadline=expected_deadline,
+        expected_envelope=envelope, clock=lambda: 1800000000,
+    )
+    messages = []
+
+    async def record_success(message):
+        """確認正常 Lease 仍能傳送固定 HTTP start 與 body。"""
+        messages.append(message)
+
+    asyncio.run(response({"type": "http", "scheme": "https"}, None, record_success))
+    assert [message["type"] for message in messages] == [
+        "http.response.start", "http.response.body",
+    ]
+    assert sender.starts == 1 and sender.finishes == 1
+
+
 def test_single_send_lease_claims_exact_snapshot_and_never_rearms(isolated_test_dsn):
     """只有完整 Receipt／owner／fingerprint／bytes 相符可起送，完成後不可重拿 Lease。"""
     import psycopg
@@ -114,6 +197,7 @@ def test_pinned_sender_emits_original_native_asgi_only_after_committed_lease(iso
     response = ProtectedPinnedASGIResponse(
         sender=sender, admission_id=admission.admission_id, receipt_id=seeded[3],
         owner=owner, request_fingerprint=admission.request_binding_digest,
+        expected_transmission_deadline=admission.transmission_deadline,
         expected_envelope=envelope,
     )
     messages = []
@@ -158,7 +242,8 @@ def test_pinned_sender_partial_asgi_failure_keeps_lease_nonretryable(isolated_te
     selectors = dict(admission_id=admission.admission_id, receipt_id=seeded[3],
                      owner=owner, request_fingerprint=admission.request_binding_digest)
     response = ProtectedPinnedASGIResponse(
-        sender=sender, expected_envelope=envelope, **selectors,
+        sender=sender, expected_envelope=envelope,
+        expected_transmission_deadline=admission.transmission_deadline, **selectors,
     )
     messages = []
 
@@ -203,7 +288,8 @@ def test_pinned_sender_denies_untrusted_transport_and_restore_before_first_asgi(
         messages.append(message)
 
     untrusted = ProtectedPinnedASGIResponse(
-        sender=sender, expected_envelope=envelope, **selectors,
+        sender=sender, expected_envelope=envelope,
+        expected_transmission_deadline=admission.transmission_deadline, **selectors,
     )
     with pytest.raises(TransmissionError, match="protected_pinned_asgi_tls_required"):
         asyncio.run(untrusted({"type": "http", "scheme": "http"}, None, record))
@@ -212,7 +298,8 @@ def test_pinned_sender_denies_untrusted_transport_and_restore_before_first_asgi(
     recorder = PostgresKnownRestoreRecorder(isolated_test_dsn, expected_login=login)
     assert recorder.mark_known_restore(uuid4())
     quarantined = ProtectedPinnedASGIResponse(
-        sender=sender, expected_envelope=envelope, **selectors,
+        sender=sender, expected_envelope=envelope,
+        expected_transmission_deadline=admission.transmission_deadline, **selectors,
     )
     with pytest.raises(TransmissionError, match="protected_pinned_asgi_lease_refused"):
         asyncio.run(quarantined({"type": "http", "scheme": "https"}, None, record))
@@ -247,6 +334,7 @@ def test_restore_committed_between_lease_and_asgi_window_denies_all_bytes(isolat
     response = ProtectedPinnedASGIResponse(
         sender=sender, admission_id=admission.admission_id, receipt_id=seeded[3],
         owner=owner, request_fingerprint=admission.request_binding_digest,
+        expected_transmission_deadline=admission.transmission_deadline,
         expected_envelope=envelope,
     )
     messages = []
@@ -277,6 +365,7 @@ def test_restore_recorder_waits_for_actual_asgi_delivery_window(isolated_test_ds
     response = ProtectedPinnedASGIResponse(
         sender=sender, admission_id=admission.admission_id, receipt_id=seeded[3],
         owner=owner, request_fingerprint=admission.request_binding_digest,
+        expected_transmission_deadline=admission.transmission_deadline,
         expected_envelope=envelope,
     )
     observed = []
