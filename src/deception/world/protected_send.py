@@ -116,12 +116,14 @@ class PostgresProtectedSender(_ProtectedConnection):
                               s.candidate_hash,s.envelope_bytes,s.transmission_deadline,
                               s.world_generation_id,s.candidate_ref,
                               b.receipt_id,b.candidate_ref,b.candidate_version,
-                              r.request_fingerprint,b.operation_id
+                              s.operation_id,b.operation_id,
+                              b.environment_id,b.deployment_id,b.session_id,
+                              b.world_generation_id,
+                              s.environment_id,s.deployment_id,s.session_id
                        FROM protected_authorized_http_snapshots s
                        JOIN response_admissions a ON a.admission_id=s.admission_id
                        JOIN protected_grant_bindings b
                          ON b.admission_id=a.admission_id AND b.receipt_id=s.receipt_id
-                       JOIN ingress_receipts r ON r.receipt_id=s.receipt_id
                        WHERE s.receipt_id=%s""", (receipt_id,),
                 )
                 row = cursor.fetchone()
@@ -137,7 +139,6 @@ class PostgresProtectedSender(_ProtectedConnection):
         if (admission.admission_id != row[0]
                 or admission.authorization_revision != "protected-receipt-v1"
                 or admission.request_binding_digest != row[8]
-                or admission.request_binding_digest != row[17]
                 or admission.candidate_hash != row[9]
                 or admission.candidate_hash != hashes[0]
                 or (admission.immutable_body_hash, admission.semantic_headers_hash)
@@ -150,7 +151,9 @@ class PostgresProtectedSender(_ProtectedConnection):
                 or admission.transmission_deadline != row[11]
                 or row[3] != owner or row[7] != owner
                 or row[14] != receipt_id or row[15] != row[13]
-                or row[16] != 1 or row[18] != receipt_id):
+                or row[16] != 1 or row[17] != receipt_id or row[18] != receipt_id
+                or row[19:22] != row[23:26]
+                or row[22] != admission.world_generation_id):
             raise ProtectedGrantError("protected_sender_receipt_binding_mismatch")
         return ProtectedReceiptSendPin(
             admission_id=row[0], receipt_id=receipt_id, send_owner=owner,

@@ -118,9 +118,10 @@ Client HTTP 接線；不接受 Runtime 指定 Header/Body 作為授權證據。
 
 ### Receipt-only Sender→Gateway 代理候選（未解封）
 
-獨立 Sender 新增唯讀 `resolve_authorized_receipt(receipt_id)`：從受保護的
-`ingress_receipts`、`protected_grant_bindings`、`response_admissions` 與
-`protected_authorized_http_snapshots` 交叉比對，要求 Receipt UUID4、原
+獨立 Sender 新增唯讀 `resolve_authorized_receipt(receipt_id)`：只從
+`protected_grant_bindings`、`response_admissions` 與
+`protected_authorized_http_snapshots` 交叉比對；不增加 Sender 對原始
+`ingress_receipts` 全表的 SELECT 權限。要求 Receipt UUID4、原
 `protected-receipt-v1` 授權版本、固定 Send Owner、Fingerprint、Candidate
 Ref/Hash、三份 Envelope Hash、Generation、Deadline 及 `operation_id=receipt_id`。
 查 Pin 不會生成 Lease；真正傳送仍須 `start_send()` 的獨立原子交易再次驗證

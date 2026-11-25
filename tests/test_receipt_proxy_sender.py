@@ -5,7 +5,9 @@ from contextlib import nullcontext
 import hashlib
 import json
 import multiprocessing
+import os
 from pathlib import Path
+import secrets
 import ssl
 import time
 from uuid import UUID, uuid4
@@ -253,3 +255,48 @@ def test_receipt_only_proxy_resolves_real_pg_authorized_pin_without_creating_lea
         assert connection.execute("SELECT count(*) FROM protected_send_leases").fetchone() == (1,)
         assert connection.execute("SELECT state FROM response_admissions WHERE admission_id=%s",
                                   (admission.admission_id,)).fetchone() == ("SEND_COMPLETED",)
+
+
+def test_receipt_pin_lookup_requires_no_ingress_receipts_privilege(isolated_test_dsn):
+    """獨立 SCRAM SELECT-only Sender 不需讀原始 Ingress 資料，且不能更改 Grant。"""
+    if os.environ.get("MIRAGE_WORLD_ROLE_TEST_ISOLATED") != "true":
+        pytest.skip("requires disposable PostgreSQL cluster for SCRAM role creation")
+    import psycopg
+    from psycopg import sql
+    from psycopg.conninfo import conninfo_to_dict, make_conninfo
+
+    seeded = _seed(isolated_test_dsn)
+    assert _promote(isolated_test_dsn, seeded) == 1
+    authorizer = PostgresProtectedAuthorizer(isolated_test_dsn, expected_login=_login(isolated_test_dsn))
+    admission, owner = authorizer.authorize_promoted_receipt_once(seeded[3])
+    schema = conninfo_to_dict(isolated_test_dsn)["options"].split("search_path=", 1)[1].split(" ", 1)[0]
+    role = "mirage_sender_lookup_" + uuid4().hex[:12]
+    password = secrets.token_urlsafe(32)
+    with psycopg.connect(isolated_test_dsn, autocommit=True) as admin:
+        admin.execute(sql.SQL(
+            "CREATE ROLE {} LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE "
+            "NOREPLICATION NOBYPASSRLS PASSWORD {}"
+        ).format(sql.Identifier(role), sql.Literal(password)))
+        try:
+            admin.execute(sql.SQL("GRANT USAGE ON SCHEMA {} TO {}").format(
+                sql.Identifier(schema), sql.Identifier(role)))
+            admin.execute(sql.SQL(
+                "GRANT SELECT ON response_admissions,protected_grant_bindings,"
+                "protected_authorized_http_snapshots TO {}"
+            ).format(sql.Identifier(role)))
+            readonly_dsn = make_conninfo(isolated_test_dsn, user=role, password=password)
+            sender = PostgresProtectedSender(readonly_dsn, expected_login=role)
+            pin = sender.resolve_authorized_receipt(seeded[3])
+            assert pin is not None
+            assert (pin.admission_id, pin.receipt_id, pin.send_owner) == (
+                admission.admission_id, seeded[3], owner)
+            with psycopg.connect(readonly_dsn) as connection:
+                with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                    connection.execute("SELECT 1 FROM ingress_receipts LIMIT 1")
+                connection.rollback()
+                with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                    connection.execute("UPDATE response_admissions SET state='SEND_STARTED' "
+                                       "WHERE admission_id=%s", (admission.admission_id,))
+        finally:
+            admin.execute(sql.SQL("DROP OWNED BY {}").format(sql.Identifier(role)))
+            admin.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(role)))
