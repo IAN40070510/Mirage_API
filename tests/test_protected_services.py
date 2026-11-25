@@ -207,6 +207,12 @@ def test_fixed_authorizer_https_rpc_accepts_only_receipt_and_never_sends_bytes(m
                         {"receipt_id": str(receipt), "force": True},
                         {"receipt_id": "not-a-uuid"}):
             assert secure.post("/internal/v1/authorize-receipt", json=payload).status_code == 400
+        assert secure.post("/internal/v1/authorize-receipt",
+                           content=b" " * 2049).status_code == 413
+        assert secure.post("/internal/v1/authorize-receipt",
+                           content=(b'{"receipt_id":"' + str(receipt).encode() + b'",'
+                                    + b'"receipt_id":"' + str(receipt).encode() + b'"}'),
+                           headers={"content-type": "application/json"}).status_code == 400
         result = secure.post("/internal/v1/authorize-receipt",
                              json={"receipt_id": str(receipt)})
     assert result.status_code == 200
@@ -217,6 +223,20 @@ def test_fixed_authorizer_https_rpc_accepts_only_receipt_and_never_sends_bytes(m
         "trusted_send": "disabled",
     }
     assert calls == [receipt]
+
+    def unknown_commit(self, receipt_id):
+        """模擬 Authorizer 資料庫 COMMIT ACK 遺失，不允許自動重送副作用。"""
+        import psycopg
+
+        calls.append(receipt_id)
+        raise psycopg.OperationalError("simulated_authorizer_commit_ack_lost")
+
+    monkeypatch.setattr(PostgresProtectedAuthorizer,
+                        "authorize_promoted_receipt_once", unknown_commit)
+    with TestClient(app, base_url="https://authorizer.test") as secure:
+        assert secure.post("/internal/v1/authorize-receipt",
+                           json={"receipt_id": str(receipt)}).status_code == 503
+    assert calls == [receipt, receipt]
 
 
 def test_fixed_authorizer_mtls_client_rejects_rebound_response(monkeypatch):
@@ -1843,7 +1863,10 @@ def test_g3b_real_container_ci_has_explicit_isolation_and_no_sender():
     assert "--profile g3b-isolated up --detach" in code
     assert "Wait for all four protected TLS listeners" in code
     assert "native-validator:8445" in code and "listener_ready" in code
-    assert "staging" not in code and "production" not in code
+    # GitHub PR 的 base branch 名可能含 staging 字樣；真正執行的 jobs 區段
+    # 才是必須沒有 staging／production Secret 或部署動作的信任邊界。
+    job_steps = code.partition("\njobs:")[2]
+    assert job_steps and "staging" not in job_steps and "production" not in job_steps
     compose = yaml.safe_load((root / "deploy/security-lab/g3b-compose.yaml").read_text(
         encoding="utf-8"))
     assert all(service["healthcheck"]["disable"] is True

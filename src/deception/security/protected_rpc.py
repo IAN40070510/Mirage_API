@@ -1440,6 +1440,7 @@ def create_fixed_authorizer_app(*, authorizer) -> FastAPI:
     本入口只產生已授權的 Snapshot，不向 Client／Gateway 發送業務 bytes。
     """
     from deception.world.protected_grant import PostgresProtectedAuthorizer, ProtectedGrantError
+    from starlette.concurrency import run_in_threadpool
     import psycopg
 
     if not isinstance(authorizer, PostgresProtectedAuthorizer):
@@ -1456,9 +1457,12 @@ def create_fixed_authorizer_app(*, authorizer) -> FastAPI:
         """嚴格解析單一 Receipt，COMMIT／ACL 不明一律 503 且不自行重試。"""
         if request.scope.get("scheme") != "https":
             raise HTTPException(status_code=503, detail="fixed_authorizer_tls_required")
-        body = await request.body()
-        if len(body) > 2048:
-            raise HTTPException(status_code=413, detail="fixed_authorizer_rpc_too_large")
+        received = bytearray()
+        async for chunk in request.stream():
+            if len(received) + len(chunk) > 2048:
+                raise HTTPException(status_code=413, detail="fixed_authorizer_rpc_too_large")
+            received.extend(chunk)
+        body = bytes(received)
         try:
             data = json.loads(body, object_pairs_hook=unique_object,
                               parse_constant=reject_constant)
@@ -1470,7 +1474,9 @@ def create_fixed_authorizer_app(*, authorizer) -> FastAPI:
         except (ValueError, TypeError) as exc:
             raise HTTPException(status_code=400, detail="fixed_authorizer_rpc_invalid") from exc
         try:
-            admission, owner = authorizer.authorize_promoted_receipt_once(call.receipt_id)
+            # 同步 PostgreSQL 鎖等待不得卡住 mTLS Event Loop 的其他請求。
+            admission, owner = await run_in_threadpool(
+                authorizer.authorize_promoted_receipt_once, call.receipt_id)
         except (ProtectedGrantError, psycopg.Error, ValueError) as exc:
             raise HTTPException(status_code=503,
                                 detail="fixed_authorizer_result_unverifiable") from exc
