@@ -125,6 +125,9 @@ Trigger 缺表時一樣拒絕，不能以 runtime flags 解除。後續追加
 的 SELECT 權，**無 Restore 時仍能通過原本的 Lease INSERT**；已標記
 之後仍由 DB 拒絕，且舊程序建立的同名 TEMP 表不能遮蔽真正的隔離事件。
 新增真 SCRAM 舊版 SQL 正負與 TEMP Shadow 測試，**待確切 SHA CI 驗收**。
+首次混版擴充 CI 在建立第二個 Admission 時，因測試 Helper 重複登記同一
+Contract 的 revision=1 而正確報 `registry_revision_not_monotonic`；已讓
+連續案例使用不同正式 Contract Hash，沒有放寬 Registry 單調性規則。
 此項只涵蓋同一資料庫的**新 Lease**，不攔截先前已起送的網路 bytes、
 已知事件遭 DB 還原覆寫、舊程序直接使用未受保護的外部發送通道，
 亦不等於 G6 全部混版／正式網路部署已驗收。

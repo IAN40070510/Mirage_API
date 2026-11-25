@@ -214,7 +214,14 @@ def test_known_restore_trigger_allows_legacy_login_until_marker_and_ignores_temp
     from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
     first, owner, _, seeded_first = _authorized_pin(isolated_test_dsn)
-    second, _, _, seeded_second = _authorized_pin(isolated_test_dsn)
+    # 第二次使用不同的正式 Registry Contract，不能重複註冊 revision=1。
+    seeded_second = _seed(isolated_test_dsn, contract_hash=uuid4().hex * 2)
+    _promote(isolated_test_dsn, seeded_second)
+    second = _grant(isolated_test_dsn, seeded_second)
+    authorizer = PostgresProtectedAuthorizer(isolated_test_dsn,
+                                            expected_login=_login(isolated_test_dsn))
+    assert authorizer.claim(second.admission_id, owner=owner) is AdmissionOperationResult.SUCCESS
+    assert authorizer.authorize_send(second.admission_id, owner=owner) is AdmissionOperationResult.SUCCESS
     admin_login = _login(isolated_test_dsn)
     role = "mirage_legacy_sender_" + uuid4().hex[:12]
     password = secrets.token_urlsafe(32)

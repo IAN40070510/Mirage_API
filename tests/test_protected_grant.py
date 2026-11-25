@@ -25,14 +25,14 @@ def _login(dsn):
         return connection.execute("SELECT session_user").fetchone()[0]
 
 
-def _seed(dsn, *, fingerprint=None, candidate_scope=None):
-    """在獨立 schema 佈建受保護 Receipt 與可驗證的 Snapshot 測試來源。"""
+def _seed(dsn, *, fingerprint=None, candidate_scope=None, contract_hash=None):
+    """在獨立 schema 佈建 Receipt/快照，允許連續案例選不同的契約雜湊。"""
     import psycopg
 
     selected = candidate_scope or scope(uuid4().hex)
     fingerprint = fingerprint or digest("a")
     now = int(time.time())
-    evidence = projection_evidence()
+    evidence = projection_evidence(contract_hash)
     registry = PostgresProjectionRegistry(dsn)
     registry.register(evidence, registry_revision=1)
     source = SnapshotSource(read_admission_id=uuid4().hex,
