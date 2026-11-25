@@ -105,6 +105,9 @@ def _login_preflight(dsn: str, login: str, *, role: str, schema: str,
         required = (("response_admissions", "SELECT"),
                     ("protected_authorized_http_snapshots", "SELECT"),
                     ("protected_grant_bindings", "SELECT"),
+                    # StartSend 在同一個 Admission FOR UPDATE 後另讀不可逆
+                    # Purge Fence；缺 SELECT 不能只在首個合法送出時才爆 503。
+                    ("protected_authorized_snapshot_purge_fences", "SELECT"),
                     ("protected_local_restore_events", "SELECT"),
                     ("protected_send_leases", "INSERT"),
                     ("protected_send_leases", "SELECT"),
@@ -128,6 +131,11 @@ def _login_preflight(dsn: str, login: str, *, role: str, schema: str,
             "session_heads", "session_world_bindings", "generation_controls",
             "trusted_key_revocations", "projection_profile_revocations",
             "response_admissions", "protected_grant_bindings",
+            # C-01／M-01 Creator→Derived 跨 Scope Source 必須由 Authorizer
+            # 在 Grant 前重新核對；缺任何一張表不得等到業務送出才 503。
+            "protected_http_operation_bindings", "protected_cart_creations",
+            "guest_cart_creations", "synthetic_resources", "world_snapshots",
+            "world_commit_receipts",
         )) + (("response_admissions", "INSERT"),
               ("protected_grant_bindings", "INSERT"),
               ("protected_authorized_http_snapshots", "INSERT"))

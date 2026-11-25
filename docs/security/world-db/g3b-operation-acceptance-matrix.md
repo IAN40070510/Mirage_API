@@ -480,6 +480,18 @@ Rejection Source 合計 4。**僅這組 I-01→I-02 正向／重複取消候選�
 | M-06 | POST `/store/carts/{id}/complete` | 隔離 PASS | 固定 Commit [`bf5fea9`](https://github.com/IAN40070510/Mirage_API/commit/bf5fea92ef2571b05b5cf808e410e76ef35bf7e9) [真四服務 #45487762116](https://github.com/IAN40070510/Mirage_API/actions/runs/45487762116) `success`：M-05 刪空 Cart 503→受保護重新加 Item 版本 5→M-06 真 `cart.complete` Commit 版本 6，獨立 Validator 官方 oneOf `type=order` 200 候選，未付款／未履約；相同 Receipt 重放 403、不同 Receipt 重複完成 503，四角色／mTLS／ACL 驗收；[PG17.6 #45487762125](https://github.com/IAN40070510/Mirage_API/actions/runs/45487762125) `172 passed`、mTLS `5 passed`、G5 模擬 `9 passed`、隔離 Fence `7 passed`；容器 [#45487762135](https://github.com/IAN40070510/Mirage_API/actions/runs/45487762135) `success`；七 TLS Client 空 Cart 503、補品項後原生 Order 200／Replay 503 | **Client 200／空 Cart fail-closed 隔離子項 PASS**；原生 400／409、CAS／ACK／競態 OPEN
 | M-07 | GET `/store/orders/{id}` | 隔離 PASS | 原生 GET→Receipt／Key／Capability→ReadAdmission，`eb2c6ce` 真 PG／四服務隔離 PASS；唯讀 Validator 固定契約 Order 200 候選（匿名 `customer_id=null`）`3230ffa`、真四服務 #94／PG17.6 隔離 PASS；七 TLS Client 原生 Order GET 200、Cart 假冒 Order 能力 503／Replay 503 | **Client 200／跨資源拒絕隔離子項 PASS**；其餘 400／404／409 OPEN
 
+**七 TLS × 七個實體 SCRAM Role 隔離增量**：I-01～I-04／C-01～C-09／
+M-01～M-07 的三套實機測試保留各自受信 HTTP／mTLS Listener，但將
+Verifier、Executor、唯讀 Validator、Candidate Writer、Promoter、
+Authorizer、Sender 分別綁定獨立 NOINHERIT／SCRAM PostgreSQL Login。
+建置時禁止繼承角色及超級使用者身份，依表／欄位授最小必要權限，
+在 Startup Preflight 先核對物理 Login 與跨角色 DML 拒絕。另以真
+`REVOKE` 驗證 Sender 缺 Purge Fence `SELECT`、Authorizer 缺
+Creator→Derived Creation Source `SELECT` 都必須在啟動前拒絕；
+恢復窄 `GRANT` 後才允許跑完整指定 2xx／4xx／Replay／Lease。
+這是**單主機拋棄式 PG Schema 的隔離角色驗收**，不是正式 Docker
+Secret Mount／網路來源／正式 Release Fuse PASS。
+
 ## 安全簽收門檻
 
 1. **入口拓樸**：Gateway 以獨立 CA／Client Certificate 直連 Verifier，

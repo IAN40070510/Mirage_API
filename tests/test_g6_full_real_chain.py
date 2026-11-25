@@ -26,6 +26,7 @@ from deception.security.protected_gateway import (
 from deception.security.protected_rpc import (
     FixedAuthorizerMTLSClient, FixedCandidatePublisherMTLSClient,
     FixedExecutorMTLSClient, FixedNativeValidatorMTLSClient,
+    ProtectedRpcConfigurationError,
     create_direct_verifier_app, create_fixed_authorizer_app,
     create_fixed_candidate_publisher_app, create_fixed_executor_app,
     create_native_validator_app, create_receipt_proxy_sender_candidate_app,
@@ -33,6 +34,7 @@ from deception.security.protected_rpc import (
     serve_fixed_candidate_publisher_mtls, serve_fixed_executor_mtls,
     serve_fixed_sender_mtls, serve_native_validator_mtls,
 )
+from deception.security.protected_services import _login_preflight
 from deception.world import (
     PostgresCandidatePromoter, PostgresCandidateStore, PostgresProjectionRegistry,
     PostgresProtectedAuthorizer, PostgresProtectedSender, PostgresProtectedWorldExecutor,
@@ -111,6 +113,151 @@ def _g6_create_promoter_login(dsn, request):
     return make_conninfo(dsn, user=name, password=password), name
 
 
+def _g6_create_service_logins(dsn, request, *, platform):
+    """僅為拋棄式 Schema 建立六個不可繼承實體 SCRAM Login、窄 ACL 與逆向清理。
+
+    Verifier／Executor／Validator／Candidate Writer／Authorizer／Sender
+    的 DSN 與實際身分不可共享；Promoter 由另一個既有 helper 獨立建立。
+    不對正式資料庫、其他 Schema 或既存角色執行任何變更。
+    """
+    if os.environ.get("MIRAGE_WORLD_ROLE_TEST_ISOLATED") != "true":
+        pytest.skip("requires explicitly disposable isolated PostgreSQL role lab")
+    if platform not in {"synthetic-inventory", "synthetic-carts"}:
+        raise ValueError("unsupported isolated world executor platform")
+    schema = conninfo_to_dict(dsn)["options"].split("search_path=", 1)[1].split(" ", 1)[0]
+    roles = ("verifier", "executor", "validator", "candidate_writer", "authorizer", "sender")
+    users = {role: ("mirage_g6_" + role + "_" + uuid4().hex[:12],
+                    secrets.token_urlsafe(32)) for role in roles}
+    with psycopg.connect(dsn, autocommit=True) as admin:
+        for name, password in users.values():
+            admin.execute(sql.SQL(
+                "CREATE ROLE {} LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE "
+                "NOREPLICATION NOBYPASSRLS PASSWORD {}"
+            ).format(sql.Identifier(name), sql.Literal(password)))
+            admin.execute(sql.SQL("GRANT USAGE ON SCHEMA {} TO {}").format(
+                sql.Identifier(schema), sql.Identifier(name)))
+
+    def cleanup_roles():
+        """撤銷並移除這六筆測試產生的角色，不碰既有環境身份。"""
+        with psycopg.connect(dsn, autocommit=True) as admin:
+            for name, _ in users.values():
+                admin.execute(sql.SQL("DROP OWNED BY {}").format(sql.Identifier(name)))
+                admin.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(name)))
+
+    request.addfinalizer(cleanup_roles)
+    grants = (
+        ("verifier", "SELECT", "trusted_key_revocations,ingress_receipts,replay_entries,"
+         "protected_http_operation_bindings"),
+        ("verifier", "INSERT", "replay_entries,ingress_receipts,protected_http_operation_bindings"),
+        ("executor", "SELECT", "ingress_receipts,protected_http_operation_bindings,"
+         "session_heads,session_world_bindings,generation_controls,trusted_key_revocations,"
+         "world_snapshots,world_operations,read_admissions,protected_world_read_sources,"
+         "protected_world_commit_sources,protected_world_rejection_sources"),
+        ("executor", "INSERT", "read_admissions,protected_world_read_sources,"
+         "protected_world_rejection_sources,world_events,world_operations,"
+         "world_commit_receipts,protected_world_commit_sources"),
+        ("executor", "UPDATE", "session_heads,session_world_bindings,"
+         "generation_controls,world_snapshots"),
+        ("validator", "SELECT", "ingress_receipts,protected_http_operation_bindings,"
+         "protected_medusa_rejection_sources,protected_world_rejection_sources,"
+         "world_operations,world_commit_receipts,protected_world_commit_sources,"
+         "synthetic_resources,world_snapshots,protected_world_read_sources,"
+         "read_admissions,session_heads,session_world_bindings,generation_controls,"
+         "trusted_key_revocations,protected_cart_creations,guest_cart_creations,"
+         "native_response_contexts,projection_registry,projection_profile_revocations"),
+        ("candidate_writer", "SELECT,INSERT", "candidate_records"),
+        ("authorizer", "SELECT", "protected_candidate_promotions,ingress_receipts,"
+         "projection_registry,session_heads,session_world_bindings,generation_controls,"
+         "trusted_key_revocations,projection_profile_revocations,response_admissions,"
+         "protected_grant_bindings,protected_http_operation_bindings,"
+         "protected_cart_creations,guest_cart_creations,synthetic_resources,"
+         "world_snapshots,world_commit_receipts"),
+        ("authorizer", "INSERT", "response_admissions,protected_grant_bindings,"
+         "protected_authorized_http_snapshots"),
+        ("sender", "SELECT", "response_admissions,protected_authorized_http_snapshots,"
+         "protected_grant_bindings,protected_local_restore_events,protected_send_leases,"
+         "protected_authorized_snapshot_purge_fences"),
+        ("sender", "INSERT", "protected_send_leases,response_audit"),
+    )
+    if platform == "synthetic-carts":
+        grants += (
+            ("executor", "SELECT", "protected_cart_creations,synthetic_resources,"
+             "guest_cart_creations,protected_medusa_rejection_sources"),
+            ("executor", "INSERT", "protected_cart_creations,synthetic_resources,"
+             "guest_cart_creations,native_response_contexts,world_initializations,"
+             "protected_medusa_rejection_sources,session_heads,session_world_bindings,"
+             "generation_controls,world_snapshots"),
+        )
+    with psycopg.connect(dsn, autocommit=True) as admin:
+        for role, privilege, names in grants:
+            admin.execute(sql.SQL("GRANT {} ON {} TO {}").format(
+                sql.SQL(privilege),
+                sql.SQL(",").join(sql.Identifier(name) for name in names.split(",")),
+                sql.Identifier(users[role][0]),
+            ))
+        admin.execute(sql.SQL(
+            "GRANT UPDATE (control_revision) ON generation_controls TO {}"
+        ).format(sql.Identifier(users["authorizer"][0])))
+        admin.execute(sql.SQL(
+            "GRANT UPDATE (state,claim_owner,claim_revision,send_authorization_revision) "
+            "ON response_admissions TO {}"
+        ).format(sql.Identifier(users["authorizer"][0])))
+        admin.execute(sql.SQL(
+            "GRANT UPDATE (state) ON response_admissions TO {}"
+        ).format(sql.Identifier(users["sender"][0])))
+        if platform == "synthetic-carts":
+            admin.execute(sql.SQL(
+                "GRANT UPDATE (resource_kind) ON synthetic_resources TO {}"
+            ).format(sql.Identifier(users["executor"][0])))
+        for role in ("executor", "authorizer"):
+            admin.execute(sql.SQL(
+                "GRANT EXECUTE ON FUNCTION protected_lock_reference(text,jsonb) TO {}"
+            ).format(sql.Identifier(users[role][0])))
+        for name, _ in users.values():
+            assert admin.execute(
+                "SELECT rolpassword LIKE %s FROM pg_authid WHERE rolname=%s",
+                ("SCRAM-SHA-256$%", name),
+            ).fetchone() == (True,)
+    identities = {role: (make_conninfo(dsn, user=name, password=password), name)
+                  for role, (name, password) in users.items()}
+    # 使用真正 PostgreSQL REVOKE 驗證兩個曾漏列的啟動 Gate：
+    # Sender 首次 StartSend 的 Purge 查詢，以及 Cart Creator 的 Grant 來源核對。
+    negative_grants = [("sender", "protected_authorized_snapshot_purge_fences")]
+    if platform == "synthetic-carts":
+        negative_grants.append(("authorizer", "protected_cart_creations"))
+    for role, table in negative_grants:
+        role_dsn, role_login = identities[role]
+        with psycopg.connect(dsn, autocommit=True) as admin:
+            admin.execute(sql.SQL("REVOKE SELECT ON {} FROM {}").format(
+                sql.Identifier(table), sql.Identifier(role_login),
+            ))
+        try:
+            with pytest.raises(ProtectedRpcConfigurationError,
+                               match="g3b_service_required_acl_missing"):
+                _login_preflight(role_dsn, role_login, role=role, schema=schema)
+        finally:
+            with psycopg.connect(dsn, autocommit=True) as admin:
+                admin.execute(sql.SQL("GRANT SELECT ON {} TO {}").format(
+                    sql.Identifier(table), sql.Identifier(role_login),
+                ))
+    for role, (role_dsn, login) in identities.items():
+        _login_preflight(role_dsn, login, role=role, schema=schema,
+                         platform=platform if role == "executor" else None)
+    return identities
+
+
+def _g6_stage_counts(dsn):
+    """唯讀採樣各信任階段的提交列數，定位失敗而不輸出任何 Token／密碼。"""
+    with psycopg.connect(dsn) as connection:
+        return {name: connection.execute("SELECT count(*) FROM " + name).fetchone()[0]
+                for name in (
+                    "replay_entries", "ingress_receipts", "read_admissions",
+                    "protected_cart_creations", "protected_world_commit_sources",
+                    "protected_world_rejection_sources", "protected_candidate_promotions",
+                    "response_admissions", "protected_send_leases",
+                )}
+
+
 def _g6_tls_endpoint(tmp_path: Path, name: str, app, serve, client_ca_arg):
     """建立用途分離的 CA，固定一個 loopback mTLS Listener 與握手客戶端。"""
     root = tmp_path / name
@@ -183,7 +330,6 @@ def test_g6_full_real_jws_seven_tls_hops_native_http_and_replay(
         tmp_path, request, isolated_test_dsn):
     """I-01～I-04 八種真 Client 2xx／4xx 經七 TLS／PG Grant/Lease，JWS 重放禁止。"""
     dsn = isolated_test_dsn
-    login = _login(dsn)
     now = int(time.time())
     binding = SessionBinding(
         environment_id="env", deployment_id="deploy", session_id="session",
@@ -194,17 +340,21 @@ def test_g6_full_real_jws_seven_tls_hops_native_http_and_replay(
                   now=now, ttl=150)
     profiles = _g6_projection_profiles()
     PostgresProjectionRegistry(dsn).ensure_registered_batch((profiles["synthetic-inventory"],))
+    logins = _g6_create_service_logins(dsn, request, platform="synthetic-inventory")
     promoter_dsn, promoter_login = _g6_create_promoter_login(dsn, request)
-    projector = PostgresProtectedNativeProjector(dsn, expected_login=login)
+    projector = PostgresProtectedNativeProjector(
+        logins["validator"][0], expected_login=logins["validator"][1],
+    )
     publisher = PostgresVerifiedReceiptPublisher(
-        projector=projector, candidate_store=PostgresCandidateStore(dsn),
+        projector=projector, candidate_store=PostgresCandidateStore(logins["candidate_writer"][0]),
         promoter=PostgresCandidatePromoter(promoter_dsn, expected_login=promoter_login),
         evidence_by_platform=profiles,
     )
     signer_key = Ed25519PrivateKey.generate()
     endpoint_specs = (
         ("executor", create_fixed_executor_app(executor=PostgresProtectedWorldExecutor(
-            dsn, expected_login=login, world_store=world,
+            logins["executor"][0], expected_login=logins["executor"][1],
+            world_store=SyntheticInventory(logins["executor"][0]),
             rejection_templates={
                 "unknown_synthetic_sku": "synthetic-inventory-1",
                 "reservation_not_active": "synthetic-inventory-1",
@@ -215,17 +365,18 @@ def test_g6_full_real_jws_seven_tls_hops_native_http_and_replay(
         ("publisher", create_fixed_candidate_publisher_app(publisher=publisher),
          serve_fixed_candidate_publisher_mtls, "verifier_client_ca"),
         ("authorizer", create_fixed_authorizer_app(authorizer=PostgresProtectedAuthorizer(
-            dsn, expected_login=login)),
+            logins["authorizer"][0], expected_login=logins["authorizer"][1])),
          serve_fixed_authorizer_mtls, "verifier_client_ca"),
         ("sender", create_receipt_proxy_sender_candidate_app(sender=PostgresProtectedSender(
-            dsn, expected_login=login)),
+            logins["sender"][0], expected_login=logins["sender"][1])),
          serve_fixed_sender_mtls, "sender_client_ca"),
     )
     endpoints = {name: _g6_tls_endpoint(tmp_path, name, app, serve, ca_arg)
                  for name, app, serve, ca_arg in endpoint_specs}
     # 真 Verifier 必須先接上固定五個內部 Client，才有資格核發 Receipt 授權鏈。
     verifier_app = create_direct_verifier_app(
-        verifier=trusted_verifier(dsn, {"old": signer_key}), postgres_dsn=dsn,
+        verifier=trusted_verifier(logins["verifier"][0], {"old": signer_key}),
+        postgres_dsn=logins["verifier"][0],
         environment_id="env", deployment_id="deploy",
         expected_issuer="gateway", expected_audience="mirage",
         executor_client=_g6_client(endpoints["executor"], FixedExecutorMTLSClient),

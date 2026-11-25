@@ -30,8 +30,8 @@ Mirage release 自己的驗收另有必要簽核，仍須各自遵守，不能�
 
 | Gate | 必須獲得的實證 | 目前狀態 |
 | --- | --- | --- |
-| G3b | 20 條原生 Client HTTP 成功／拒絕／重試、獨立來源與角色 ACL、精確 Payload／Header／Status | **OPEN；20 路由各有指定 Client 原生隔離 PASS**（`7ada6fd`、34 子案例），完整 2xx／4xx、CAS／URL／正式 ACL 未結 |
-| G4 | 不可變 Authorized Snapshot、Pin、一次性 Send Lease、真正 ASGI 首 bytes 與失敗恢復 | **OPEN；真 PG 34 筆唯一 Lease 與 G6 ASGI／故障隔離子項 PASS**，正式 Sender Fuse 未啟 |
+| G3b | 20 條原生 Client HTTP 成功／拒絕／重試、獨立來源與角色 ACL、精確 Payload／Header／Status | **OPEN；20 路由各有指定 Client 原生隔離 PASS**（`7ada6fd`、34 子案例）；另增七個不同實體 SCRAM／mTLS／最低 ACL 的整鏈隔離 PASS，完整 2xx／4xx、CAS／URL／正式部署 ACL 未結 |
+| G4 | 不可變 Authorized Snapshot、Pin、一次性 Send Lease、真正 ASGI 首 bytes 與失敗恢復 | **OPEN；真 PG 34 筆唯一 Lease、獨立 Sender SCRAM、Purge Fence 權限預檢與 G6 ASGI／故障隔離子項 PASS**，正式 Sender Fuse 未啟 |
 | G5 — 標準單機 | 無外部 Fence 的完整業務與可信發送功能、受保護本機 ACL／StartSend／Purge／已知 Restore／Unknown、正確宣告整機回滾保證缺失 | **PARTIAL_IMPLEMENTED／ISOLATED_SUBCASES_PASS，整體 OPEN**；ARM64 `7ada6fd`、53 tests；正式啟動／Restore 控制面／完整安全矩陣未結 |
 | G5 — 選配外部 Fence | 僅於啟用／宣稱外部強化保護時，必驗 World DB 域外最高 Head、BD-05 原子自動解禁、雙向 COMMIT/ACK、跨復原域 Restore 與競態 | **NOT_COMPLETE／NOT_RUN** |
 | G6 | PostgreSQL 真實權限、競態／故障注入、混合版本回退、端到端效能、既有功能回歸與發布前清單 | **OPEN；隔離真七 TLS 30 tests、G5／Role 53 tests PASS**；端到端效能／完整網路故障／正式回退／Owner 清單未結 |

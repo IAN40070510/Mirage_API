@@ -316,3 +316,31 @@ Fence INSERT 當作 Object GC 完成或 G4／G5 Release PASS。
 - 固定修補 Commit [`f626f45`](https://github.com/IAN40070510/Mirage_API/commit/f626f45f7c191026a7088c2319ff3027c8ae845f)、[PG17.6 #45488811957](https://github.com/IAN40070510/Mirage_API/actions/runs/45488811957) `success`：真 PG `172 passed`，包含先 Fence 阻止 Start、Active/Unknown Lease 禁止清理、終態後保留 Lease 可 Fence、兩方並行只能一方提交、不可改寫 Fence；獨立 mTLS `5 passed`、G5 模擬 `9 passed`、隔離 Fence `7 passed`。
 - [容器示範 #45488812056](https://github.com/IAN40070510/Mirage_API/actions/runs/45488812056) `success`；文件檢查 `1961 functions／69 guides` PASS。
 - 以上只簽收**同一 PostgreSQL 的 Purge Fence／StartSend 競態指定子項**；正式 Role／GC／Object Pin／Restore／混版未通過，Trusted Send 繼續 **OFF**。
+
+### 七 TLS／七個獨立 SCRAM Login 的啟動 ACL 修補（隔離候選）
+
+在 `tests/test_g6_full_real_chain.py`、`tests/test_g6_cart_full_real_chain.py`
+與 `tests/test_g6_medusa_full_real_chain.py` 的真 Client→Gateway→
+Verifier→Executor→Validator→Publisher→Authorizer→Sender 測試中，資料庫
+不再讓全部服務共用 Schema Owner：Verifier、Executor、Validator、
+Candidate Writer、Promoter、Authorizer、Sender 均使用不同的、不可繼承
+且受限的短期 SCRAM Login。各自只在拋棄式測試 Schema 取得固定所需表
+與欄位權限。Sender 原生回應仍須真實不可逆 PG Lease，無權建立世界事件
+或改寫授權來源。
+
+實體負面試驗找出兩個啟動檢查缺口並修正：
+
+1. Sender 的 StartSend 在鎖定 Admission 後須讀
+   `protected_authorized_snapshot_purge_fences`，但原本 `_login_preflight`
+   未要求此表 `SELECT`，導致角色可啟動、首次合法發送才 503。
+2. C-01／M-01 的 Authorizer 在 Grant 之前重驗 Creator→Derived 世界，
+   需要 `protected_http_operation_bindings`、`protected_cart_creations`、
+   `guest_cart_creations`、`synthetic_resources`、`world_snapshots`、
+   `world_commit_receipts` 的 `SELECT`，原啟動角色清單漏列，導致
+   Candidate Promotion 成功但 Grant 交易失敗。
+
+現在這些權限是啟動必要條件；測試以真 PG `REVOKE` 證明缺權限時
+Preflight 拒絕，再精確恢復最小 `GRANT` 執行完整 Client 原生 2xx／4xx。
+不採用 Owner 資格或 `GRANT ALL` 繞過。這些仍是隔離同主機測試，
+**未**證明正式容器 Secret Mount／跨網路 ACL／生產 Sender Release Fuse
+均已核准，正式 Trusted Send 繼續 OFF。

@@ -34,12 +34,12 @@ from deception.world import (
 from deception.world.protected_native_http import PostgresProtectedNativeProjector
 from deception.world.session import SessionBinding
 from test_g6_full_real_chain import (
-    _g6_client, _g6_create_promoter_login, _g6_projection_profiles,
-    _g6_signed_client_request, _g6_tls_endpoint, _g6_wait_ready,
+    _g6_client, _g6_create_promoter_login, _g6_create_service_logins,
+    _g6_projection_profiles,
+    _g6_signed_client_request, _g6_stage_counts, _g6_tls_endpoint, _g6_wait_ready,
 )
 from test_key_revocation import verifier as trusted_verifier
 from test_postgres_conformance import isolated_test_dsn
-from test_protected_grant import _login
 from test_protected_rpc_mtls import _issue_mtls_certificates, _unused_local_port
 
 
@@ -48,7 +48,6 @@ def test_g6_cart_order_nine_native_routes_seven_tls_and_replay(
     """C-01～C-09 真 Client 200／業務 409、逐筆 Replay 拒絕及不可重複 Lease。"""
     dsn = isolated_test_dsn
     now = int(time.time())
-    login = _login(dsn)
     initial = {
         "catalog": {"v1": {"sku": "sku-1", "unit_price": 100}},
         "inventory": {"sku-1": 5},
@@ -61,16 +60,20 @@ def test_g6_cart_order_nine_native_routes_seven_tls_and_replay(
     world.resolve(creator, {**initial, "reservations": {}}, now=now, ttl=240)
     profiles = _g6_projection_profiles()
     PostgresProjectionRegistry(dsn).ensure_registered_batch((profiles["synthetic-carts"],))
+    logins = _g6_create_service_logins(dsn, request, platform="synthetic-carts")
     promoter_dsn, promoter_login = _g6_create_promoter_login(dsn, request)
-    projector = PostgresProtectedNativeProjector(dsn, expected_login=login)
+    projector = PostgresProtectedNativeProjector(
+        logins["validator"][0], expected_login=logins["validator"][1],
+    )
     publisher = PostgresVerifiedReceiptPublisher(
-        projector=projector, candidate_store=PostgresCandidateStore(dsn),
+        projector=projector, candidate_store=PostgresCandidateStore(logins["candidate_writer"][0]),
         promoter=PostgresCandidatePromoter(promoter_dsn, expected_login=promoter_login),
         evidence_by_platform=profiles,
     )
     signer = Ed25519PrivateKey.generate()
     executor = PostgresProtectedWorldExecutor(
-        dsn, expected_login=login, world_store=world, cart_initial_state=initial,
+        logins["executor"][0], expected_login=logins["executor"][1],
+        world_store=SyntheticCarts(logins["executor"][0]), cart_initial_state=initial,
         rejection_templates={code: "synthetic-carts-1" for code in (
             "cart_item_not_found", "unknown_synthetic_variant",
             "insufficient_synthetic_inventory", "empty_synthetic_cart",
@@ -85,16 +88,19 @@ def test_g6_cart_order_nine_native_routes_seven_tls_and_replay(
         ("publisher", create_fixed_candidate_publisher_app(publisher=publisher),
          serve_fixed_candidate_publisher_mtls, "verifier_client_ca"),
         ("authorizer", create_fixed_authorizer_app(
-            authorizer=PostgresProtectedAuthorizer(dsn, expected_login=login)),
+            authorizer=PostgresProtectedAuthorizer(
+                logins["authorizer"][0], expected_login=logins["authorizer"][1])),
          serve_fixed_authorizer_mtls, "verifier_client_ca"),
         ("sender", create_receipt_proxy_sender_candidate_app(
-            sender=PostgresProtectedSender(dsn, expected_login=login)),
+            sender=PostgresProtectedSender(
+                logins["sender"][0], expected_login=logins["sender"][1])),
          serve_fixed_sender_mtls, "sender_client_ca"),
     )
     endpoints = {name: _g6_tls_endpoint(tmp_path, name, app, serve, ca_arg)
                  for name, app, serve, ca_arg in endpoint_specs}
     verifier_app = create_direct_verifier_app(
-        verifier=trusted_verifier(dsn, {"old": signer}), postgres_dsn=dsn,
+        verifier=trusted_verifier(logins["verifier"][0], {"old": signer}),
+        postgres_dsn=logins["verifier"][0],
         environment_id="env", deployment_id="deploy",
         expected_issuer="gateway", expected_audience="mirage",
         executor_client=_g6_client(endpoints["executor"], FixedExecutorMTLSClient),
@@ -151,7 +157,8 @@ def test_g6_cart_order_nine_native_routes_seven_tls_and_replay(
                 response = client.send(original)
                 assert response.status_code == expected, (
                     f"{method} {path}: expected {expected}, got "
-                    f"{response.status_code}: {response.text}"
+                    f"{response.status_code}: {response.text}; "
+                    f"stages={_g6_stage_counts(dsn)}"
                 )
                 if code:
                     assert response.content == json.dumps(
