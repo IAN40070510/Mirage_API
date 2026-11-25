@@ -4,6 +4,8 @@
 
 **狀態：IMPLEMENTATION IN PROGRESS／World DB 權限修補尚未完成／正式發送不得開啟**。此文件供獨立修補分支追蹤，不是 PostgreSQL ACL、原生符合性或正式部署的 PASS 證據。
 
+> **D-74 2026-11-25 更新：**Mirage 必須支援單主機、未安裝外部 Fence 的完整正常功能；G5 分成標準單機和選配外部強化兩個不同驗收集。歷史 G5 的域外 Head／BD-05 要求不再是一般安裝依賴，仍是 external_fence 的不可免除條件；詳見 [雙 Profile 規範](single-node-restore-profiles.md)。程式尚未接線，兩組均不得簽 PASS，Trusted Send OFF。
+
 ## 固定起點及證據
 
 - Mirage 原生基準：`88dc2008fd35a2d3873949a769653dc9f18e8980`；ADR 文件前置：`ff2afb6a2bde45e79093d54004f036a8df0ce3a6`。
@@ -22,7 +24,8 @@
 | G2 | 受保護 IngressTx：可信 Verifier 驗章、Key Revocation、Replay Tombstone、Ingress Receipt **同一 PostgreSQL DB／Connection／Tx** | 偽造來源／重放／Rollback／COMMIT ACK unknown；已消費 JTI 不得跨 Scope/Receipt 重綁 | NOT_RUN |
 | G3 | 受保護 Candidate Promotion、Grant Binding、Admission／Generation／Session／Replay GC 轉移；撤銷 Runtime 直接受保護 DML | 原三個 SQL 越權被 DB 拒絕，正向 Grant／Claim／Authorize／Cutover／Revocation／Replay GC 保持正常；完整 Lock DAG | NOT_RUN |
 | G4 | Snapshot 真實物件身分／immutable version、physical Pin／Key lifetime、兩種 Purge Fence、StartSend／Purge 競態 | 真實 bytes/Hash、Owner/Deadline/Single-use、異步 Object GC／Pin／Shared Blob 及未知 send 結果；不得偷偷二次授權 | NOT_RUN |
-| G5 | Restore Quarantine、外部 Anchor 連續涵蓋、雙方向發布未知、**BD-05 證據全 PASS 自動解禁**（人工不得繞過證據門檻） | 舊備份及事件缺口無法復活 Tombstone／JTI／Snapshot；未知涵蓋不得解禁；並行 Send/Purge 使舊 PASS 失效 | NOT_RUN |
+| G5 standard_single_node | 無外部 Fence 仍有完整 World/Grant/StartSend/HTTP、已知 Restore／Unknown Fail-Closed；不宣稱整機靜默回滾偵測 | 無外部 DSN/Key 的真單機 2xx/4xx、GC/Send/Purge/Crash、Profile 防降級與權限證據 | NOT_RUN |
+| G5 external_fence（選配） | Restore Quarantine、域外 Anchor 連續涵蓋、雙向未知發布、**BD-05 證據全 PASS 自動解禁** | 真跨復原域舊備份、Head 單調、防 Tombstone 復活；未知 ACK、並行 Send/Purge、外部服務故障拒絕降級 | NOT_RUN |
 | G6 | 混合版本／Rollback／CI／正式簽核 | 非特權 PG Integration、失敗注入、既有 Mirage 全套回歸；按 [Solo Developer Security Acceptance v1](solo-developer-security-acceptance-v1.md) 保存證據並由 Owner 最終核准，外部人工審查非強制 | NOT_RUN |
 
 **G1 子切面（待獨立驗證）**：獨立分支新增 `deception.security.world_acl`，以正式 Runtime 實體 DSN 唯讀檢查 Session Login、有效權限、特權 Role Membership 與關鍵表。現有 `trusted_http.from_environment()` 在服務／權限重構未完成前有不可由環境開關跳過的 **Release Fuse**：即使 ACL 檢查通過仍拒絕正式 Trusted Send 啟動。`create_app()` 仍供隔離 Python 正向測試使用，**不能以此推論正式入口可啟用**。新增 `WORLD-ACL-06` 子案例在一次性 PostgreSQL CI service 建立真實 SCRAM LOGIN，驗證無法改寫 Admission、Session epoch、Replay 或 `SET ROLE`；一般開發環境未設 `MIRAGE_WORLD_ROLE_TEST_ISOLATED=true` 不准修改 PostgreSQL cluster roles。這只驗證**隔離 ACL fixture**，並非正式 Oracle 部署角色、Secret、來源或 IPC 的證據，G1 保持 `NOT_RUN`。

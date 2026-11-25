@@ -25,14 +25,14 @@ def _login(dsn):
         return connection.execute("SELECT session_user").fetchone()[0]
 
 
-def _seed(dsn, *, fingerprint=None, candidate_scope=None):
-    """在獨立 schema 佈建受保護 Receipt 與可驗證的 Snapshot 測試來源。"""
+def _seed(dsn, *, fingerprint=None, candidate_scope=None, contract_hash=None):
+    """在獨立 schema 佈建 Receipt/快照，允許連續案例選不同的契約雜湊。"""
     import psycopg
 
     selected = candidate_scope or scope(uuid4().hex)
     fingerprint = fingerprint or digest("a")
     now = int(time.time())
-    evidence = projection_evidence()
+    evidence = projection_evidence(contract_hash)
     registry = PostgresProjectionRegistry(dsn)
     registry.register(evidence, registry_revision=1)
     source = SnapshotSource(read_admission_id=uuid4().hex,
@@ -133,6 +133,117 @@ def test_protected_grant_binds_receipt_promotion_and_admission_atomically(isolat
                                   (seeded[3],)).fetchone()[0] == 1
         assert connection.execute("SELECT control_revision FROM generation_controls WHERE world_generation_id=%s",
                                   (seeded[0].world_generation_id,)).fetchone()[0] == 1
+
+
+def test_receipt_only_authorizer_pins_snapshot_and_sends_native_asgi(isolated_test_dsn):
+    """只提供已驗證 Receipt，從原始可信 Promotion 建立授權並實際輸出真 DB Pin HTTP。"""
+    import asyncio
+    import psycopg
+    from deception.world import PostgresProtectedSender, ProtectedPinnedASGIResponse
+
+    seeded = _seed(isolated_test_dsn)
+    assert _promote(isolated_test_dsn, seeded) == 1
+    authorizer = PostgresProtectedAuthorizer(isolated_test_dsn, expected_login=_login(isolated_test_dsn))
+    admission, owner = authorizer.authorize_promoted_receipt_once(seeded[3])
+    assert owner == "protected-sender-" + seeded[3].hex
+    expected = response_envelope(200, [("content-type", "application/json")], b'{"synthetic":true}')
+    sender = PostgresProtectedSender(isolated_test_dsn, expected_login=_login(isolated_test_dsn))
+    response = ProtectedPinnedASGIResponse(
+        sender=sender, admission_id=admission.admission_id,
+        receipt_id=seeded[3], owner=owner,
+        request_fingerprint=admission.request_binding_digest, expected_envelope=expected,
+    )
+    messages = []
+
+    async def record(message):
+        """保留 Sender 真正發出的 ASGI 訊息以驗證狀態、標頭與精確內容。"""
+        messages.append(message)
+
+    asyncio.run(response({"type": "http", "scheme": "https"}, None, record))
+    assert messages == [
+        {"type": "http.response.start", "status": 200,
+         "headers": [(b"content-type", b"application/json")]},
+        {"type": "http.response.body", "body": b'{"synthetic":true}'},
+    ]
+    with psycopg.connect(isolated_test_dsn) as connection:
+        assert connection.execute("SELECT count(*) FROM protected_grant_bindings").fetchone() == (1,)
+        assert connection.execute("SELECT count(*) FROM protected_authorized_http_snapshots").fetchone() == (1,)
+        assert connection.execute("SELECT count(*) FROM protected_send_leases").fetchone() == (1,)
+        assert connection.execute(
+            "SELECT state FROM response_admissions WHERE admission_id=%s",
+            (admission.admission_id,),
+        ).fetchone() == ("SEND_COMPLETED",)
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        authorizer.authorize_promoted_receipt_once(seeded[3])
+
+
+def test_receipt_only_authorizer_rejects_ambiguous_promotions(isolated_test_dsn):
+    """合法多候選可留存，但 Receipt-only 授權不能任選其中一份。"""
+    import psycopg
+
+    seeded = _seed(isolated_test_dsn)
+    assert _promote(isolated_test_dsn, seeded) == 1
+    selected, source, evidence, receipt_id, _, hashes, now = seeded
+    other_ref = uuid4().hex
+    PostgresCandidateStore(isolated_test_dsn).put(
+        selected, other_ref,
+        response_envelope(200, [("content-type", "application/json")], b'{"synthetic":true}'),
+        expires_at=now + 120,
+    )
+    promoter = PostgresCandidatePromoter(isolated_test_dsn, expected_login=_login(isolated_test_dsn))
+    assert promoter.promote(
+        receipt_id=receipt_id, scope=selected, candidate_ref=other_ref,
+        request_fingerprint=digest("a"), envelope_hash=hashes[0],
+        immutable_body_hash=hashes[1], semantic_headers_hash=hashes[2],
+        evidence=evidence, source=source,
+    ) == 1
+    authorizer = PostgresProtectedAuthorizer(isolated_test_dsn, expected_login=_login(isolated_test_dsn))
+    with pytest.raises(ProtectedGrantError, match="protected_receipt_promotion_not_unique"):
+        authorizer.authorize_promoted_receipt_once(receipt_id)
+    with psycopg.connect(isolated_test_dsn) as connection:
+        assert connection.execute("SELECT count(*) FROM protected_grant_bindings").fetchone() == (0,)
+        assert connection.execute("SELECT count(*) FROM response_admissions").fetchone() == (0,)
+
+
+def test_receipt_only_authorizer_rechecks_phantom_promotion_under_receipt_lock(
+        isolated_test_dsn, monkeypatch):
+    """模擬查唯一候選後又插入另一份：鎖後 Grant 必重查，絕不能留下 Admission。"""
+    import psycopg
+
+    seeded = _seed(isolated_test_dsn)
+    assert _promote(isolated_test_dsn, seeded) == 1
+    selected, source, evidence, receipt_id, _, hashes, now = seeded
+    other_ref = uuid4().hex
+    PostgresCandidateStore(isolated_test_dsn).put(
+        selected, other_ref,
+        response_envelope(200, [("content-type", "application/json")], b'{"synthetic":true}'),
+        expires_at=now + 120,
+    )
+    original_grant = PostgresProtectedAuthorizer.grant
+    calls = []
+
+    def grant_after_concurrent_promotion(self, **kwargs):
+        """模擬 Receipt-only 首次 SELECT 已返回後、真正 Grant 開始前的另一筆提交。"""
+        calls.append(kwargs["receipt_id"])
+        promoter = PostgresCandidatePromoter(
+            isolated_test_dsn, expected_login=_login(isolated_test_dsn))
+        assert promoter.promote(
+            receipt_id=receipt_id, scope=selected, candidate_ref=other_ref,
+            request_fingerprint=digest("a"), envelope_hash=hashes[0],
+            immutable_body_hash=hashes[1], semantic_headers_hash=hashes[2],
+            evidence=evidence, source=source,
+        ) == 1
+        return original_grant(self, **kwargs)
+
+    monkeypatch.setattr(PostgresProtectedAuthorizer, "grant", grant_after_concurrent_promotion)
+    authorizer = PostgresProtectedAuthorizer(isolated_test_dsn, expected_login=_login(isolated_test_dsn))
+    with pytest.raises(ProtectedGrantError, match="protected_receipt_promotion_not_unique"):
+        authorizer.authorize_promoted_receipt_once(receipt_id)
+    assert calls == [receipt_id]
+    with psycopg.connect(isolated_test_dsn) as connection:
+        assert connection.execute("SELECT count(*) FROM protected_candidate_promotions").fetchone() == (2,)
+        assert connection.execute("SELECT count(*) FROM protected_grant_bindings").fetchone() == (0,)
+        assert connection.execute("SELECT count(*) FROM response_admissions").fetchone() == (0,)
 
 
 def test_send_authorization_pins_immutable_http_envelope(isolated_test_dsn):
@@ -432,3 +543,68 @@ def test_protected_grant_real_role_acl_and_authorizer(isolated_test_dsn):
             for login, _ in users.values():
                 admin.execute(sql.SQL("DROP OWNED BY {}").format(sql.Identifier(login)))
                 admin.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(login)))
+
+
+def test_receipt_only_authorizer_real_scram_least_privilege(isolated_test_dsn):
+    """真實隔離 PG Login 以欄位級 UPDATE 運行 Receipt 授權，且不得讀 Snapshot bytes。"""
+    if os.environ.get("MIRAGE_WORLD_ROLE_TEST_ISOLATED") != "true":
+        pytest.skip("requires disposable PostgreSQL cluster for login role creation")
+    import psycopg
+    from psycopg import sql
+    from psycopg.conninfo import conninfo_to_dict, make_conninfo
+    from deception.security.protected_services import _login_preflight
+
+    seeded = _seed(isolated_test_dsn)
+    assert _promote(isolated_test_dsn, seeded) == 1
+    login = "mirage_auth_" + uuid4().hex[:12]
+    password = secrets.token_urlsafe(32)
+    options = conninfo_to_dict(isolated_test_dsn).get("options", "")
+    schema = options.split("search_path=", 1)[1].split(" ", 1)[0]
+    identity = sql.Identifier(login)
+    with psycopg.connect(isolated_test_dsn, autocommit=True) as admin:
+        try:
+            admin.execute(sql.SQL("CREATE ROLE {} LOGIN NOINHERIT NOSUPERUSER NOCREATEDB "
+                                  "NOCREATEROLE NOBYPASSRLS PASSWORD {}").format(
+                                      identity, sql.Literal(password)))
+            admin.execute(sql.SQL("GRANT USAGE ON SCHEMA {} TO {}").format(
+                sql.Identifier(schema), identity))
+            admin.execute(sql.SQL(
+                "GRANT SELECT ON protected_candidate_promotions,ingress_receipts,"
+                "projection_registry,session_heads,session_world_bindings,"
+                "generation_controls,trusted_key_revocations,projection_profile_revocations,"
+                "response_admissions,protected_grant_bindings TO {}"
+            ).format(identity))
+            admin.execute(sql.SQL(
+                "GRANT INSERT ON response_admissions,protected_grant_bindings,"
+                "protected_authorized_http_snapshots TO {}"
+            ).format(identity))
+            admin.execute(sql.SQL(
+                "GRANT UPDATE (control_revision) ON generation_controls TO {}"
+            ).format(identity))
+            admin.execute(sql.SQL(
+                "GRANT UPDATE (state,claim_owner,claim_revision,send_authorization_revision) "
+                "ON response_admissions TO {}"
+            ).format(identity))
+            admin.execute(sql.SQL(
+                "GRANT EXECUTE ON FUNCTION protected_lock_reference(text,jsonb) TO {}"
+            ).format(identity))
+
+            dsn = make_conninfo(isolated_test_dsn, user=login, password=password)
+            _login_preflight(dsn, login, role="authorizer", schema=schema)
+            authorizer = PostgresProtectedAuthorizer(dsn, expected_login=login)
+            admission, owner = authorizer.authorize_promoted_receipt_once(seeded[3])
+            assert owner == "protected-sender-" + seeded[3].hex
+            with psycopg.connect(dsn) as least:
+                assert least.execute(
+                    "SELECT state FROM response_admissions WHERE admission_id=%s",
+                    (admission.admission_id,),
+                ).fetchone() == ("SEND_AUTHORIZED",)
+                with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                    least.execute("SELECT envelope_bytes FROM protected_authorized_http_snapshots")
+            with psycopg.connect(isolated_test_dsn) as privileged:
+                assert privileged.execute(
+                    "SELECT count(*) FROM protected_authorized_http_snapshots"
+                ).fetchone() == (1,)
+        finally:
+            admin.execute(sql.SQL("DROP OWNED BY {}").format(identity))
+            admin.execute(sql.SQL("DROP ROLE {}").format(identity))

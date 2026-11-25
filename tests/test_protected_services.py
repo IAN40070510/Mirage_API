@@ -5,6 +5,7 @@ import base64
 from copy import deepcopy
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import httpx
@@ -13,11 +14,14 @@ import yaml
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from deception.security.protected_rpc import (
+    FixedAuthorizerMTLSClient, FixedCandidatePublisherMTLSClient,
     FixedExecutorMTLSClient, FixedNativeValidatorMTLSClient,
-    ProtectedRpcConfigurationError, create_fixed_sender_app, create_native_validator_app,
+    ProtectedRpcConfigurationError, create_fixed_authorizer_app,
+    create_fixed_candidate_publisher_app, create_fixed_sender_app, create_native_validator_app,
 )
 from deception.security.protected_services import (
     _json_secret, _login_preflight, _verifier_key_registry, create_executor_service,
+    create_authorizer_service, create_candidate_publisher_service,
     create_native_validator_service, create_sender_service,
     create_verifier_service, from_environment,
 )
@@ -54,7 +58,7 @@ def test_g3b_cart_creation_validator_rejects_cross_scope_and_forged_projection(m
 
         async def post(self, url, *, json):
             """Caller 不得選擇 Response Body 或源 Scope。"""
-            assert url == "https://validator.invalid:8445/internal/v1/project-cart-creation"
+            assert url == "https://validator.invalid:8445/internal/v1/project-receipt"
             assert json == {"receipt_id": str(receipt)}
             return httpx.Response(200, json=projection)
 
@@ -178,6 +182,291 @@ def test_g3b_service_bootstrap_rejects_missing_role_and_unsafe_sender(monkeypatc
         from_environment()
 
 
+def test_fixed_publisher_https_rpc_accepts_only_receipt_and_never_sends_bytes(monkeypatch):
+    """可信 Publisher mTLS 只收 UUID4，不容 Runtime 提供 Body／Evidence／Profile。"""
+    from fastapi.testclient import TestClient
+    import psycopg
+
+    from deception.world.protected_grant import (
+        PostgresVerifiedReceiptPublisher, ProtectedPublishedCandidate,
+    )
+
+    receipt = uuid4()
+    seen = []
+
+    def publish_once(self, given_receipt):
+        """只記錄實際被 Publisher 接受的單一 Receipt，不做對外資料庫連線。"""
+        seen.append(given_receipt)
+        return ProtectedPublishedCandidate(
+            receipt_id=given_receipt, candidate_ref="verified-native-" + given_receipt.hex,
+            candidate_hash="a" * 64, candidate_version=1, expires_at=1900000000,
+        )
+
+    monkeypatch.setattr(PostgresVerifiedReceiptPublisher, "publish_receipt_once", publish_once)
+    publisher = object.__new__(PostgresVerifiedReceiptPublisher)
+    app = create_fixed_candidate_publisher_app(publisher=publisher)
+    with TestClient(app, base_url="http://publisher.test") as insecure:
+        assert insecure.post("/internal/v1/publish-receipt",
+                             json={"receipt_id": str(receipt)}).status_code == 503
+    with TestClient(app, base_url="https://publisher.test") as secure:
+        assert secure.get("/internal/ready").json()["trusted_send"] == "disabled"
+        for malicious in (
+            {}, {"receipt_id": str(receipt), "status_code": 200},
+            {"receipt_id": str(receipt), "candidate_ref": "forged"},
+            {"receipt_id": str(receipt), "body_b64": "e30="},
+            {"receipt_id": str(receipt), "evidence": {"official_schema_valid": True}},
+            {"receipt_id": "invalid"},
+        ):
+            assert secure.post("/internal/v1/publish-receipt", json=malicious).status_code == 400
+        assert secure.post("/internal/v1/publish-receipt",
+                           content=(b'{"receipt_id":"' + str(receipt).encode() + b'",'
+                                    + b'"receipt_id":"' + str(receipt).encode() + b'"}'),
+                           ).status_code == 400
+        assert secure.post("/internal/v1/publish-receipt",
+                           content=b"x" * 1025).status_code == 413
+        response = secure.post("/internal/v1/publish-receipt",
+                               json={"receipt_id": str(receipt)})
+        assert response.status_code == 200
+        assert response.json() == {
+            "receipt_id": str(receipt), "candidate_ref": "verified-native-" + receipt.hex,
+            "candidate_hash": "a" * 64, "candidate_version": 1,
+            "trusted_send": "disabled",
+        }
+    assert seen == [receipt]
+
+    def unknown_commit(self, given_receipt):
+        """模擬 Promotion COMMIT ACK 消失；服務回 503，不能暗中再寫一次。"""
+        seen.append(given_receipt)
+        raise psycopg.OperationalError("publisher_commit_ack_unknown")
+
+    monkeypatch.setattr(PostgresVerifiedReceiptPublisher, "publish_receipt_once", unknown_commit)
+    with TestClient(app, base_url="https://publisher.test") as secure:
+        assert secure.post("/internal/v1/publish-receipt",
+                           json={"receipt_id": str(receipt)}).status_code == 503
+    assert seen == [receipt, receipt]
+
+
+def test_candidate_publisher_rejects_shared_login_and_unpinned_profiles():
+    """受信任 Candidate Publisher 建構時禁止重用物理登入或錯配平台證據。"""
+    from deception.world import (PostgresCandidatePromoter, PostgresCandidateStore,
+                                 PostgresVerifiedReceiptPublisher)
+    from test_postgres_conformance import projection_evidence
+
+    projector = PostgresProtectedNativeProjector(
+        "postgresql://localhost/invalid-test", expected_login="validator",
+    )
+    store = PostgresCandidateStore("postgresql://localhost/invalid-test")
+    evidence = projection_evidence()
+    profiles = {platform: evidence for platform in (
+        "synthetic-inventory", "synthetic-carts", "medusa-native-cart"
+    )}
+    with pytest.raises(ProtectedGrantError, match="protected_publisher_boundary_invalid"):
+        PostgresVerifiedReceiptPublisher(
+            projector=projector, candidate_store=store,
+            promoter=PostgresCandidatePromoter(
+                "postgresql://localhost/invalid-test", expected_login="validator",
+            ), evidence_by_platform=profiles,
+        )
+    with pytest.raises(ProtectedGrantError, match="protected_publisher_profile_unapproved"):
+        PostgresVerifiedReceiptPublisher(
+            projector=projector, candidate_store=store,
+            promoter=PostgresCandidatePromoter(
+                "postgresql://localhost/invalid-test", expected_login="promoter",
+            ), evidence_by_platform=profiles,
+        )
+
+
+def test_fixed_candidate_publisher_mtls_client_rejects_rebound_receipt(monkeypatch):
+    """Publisher mTLS Client 僅一次送 Receipt，拒絕假 Hash、參照與發送許可。"""
+    from deception.security import protected_rpc
+
+    receipt = uuid4()
+    valid = {"receipt_id": str(receipt), "candidate_ref": "verified-native-" + receipt.hex,
+             "candidate_hash": "a" * 64, "candidate_version": 1, "trusted_send": "disabled"}
+    payload = dict(valid)
+    sent = []
+
+    class StubAsyncClient:
+        """將 mTLS 網路改為可控的單次回應，檢查固定 URL 與送出欄位。"""
+
+        def __init__(self, **kwargs):
+            """驗證 TLS 設定不讀取 ambient proxy／外部 Credentials。"""
+            assert kwargs["trust_env"] is False
+
+        async def __aenter__(self):
+            """模擬 mTLS HTTPX 進入獨立連線生命週期。"""
+            return self
+
+        async def __aexit__(self, *_):
+            """模擬 HTTPX 清理，禁止暗中重試第二次連線。"""
+            return False
+
+        async def post(self, url, *, json):
+            """僅允許 Publisher Receipt-only URL 及唯一 JSON 身分。"""
+            assert url == "https://publisher.invalid:8446/internal/v1/publish-receipt"
+            assert json == {"receipt_id": str(receipt)}
+            sent.append(json)
+            return httpx.Response(200, json=payload)
+
+    monkeypatch.setattr(protected_rpc.httpx, "AsyncClient", StubAsyncClient)
+    client = object.__new__(FixedCandidatePublisherMTLSClient)
+    client._origin, client._tls = "https://publisher.invalid:8446", object()
+    assert asyncio.run(client.publish_receipt(receipt, expected_candidate_hash="a" * 64)) == valid
+    for forged in (
+        {**valid, "receipt_id": str(uuid4())},
+        {**valid, "candidate_ref": "other"},
+        {**valid, "candidate_hash": "not-a-sha256"},
+        {**valid, "candidate_hash": "b" * 64},
+        {**valid, "candidate_version": True},
+        {**valid, "trusted_send": "enabled"},
+        {**valid, "body_b64": "e30="},
+    ):
+        payload = forged
+        with pytest.raises(ProtectedRpcConfigurationError,
+                           match="fixed_publisher_result_binding_mismatch"):
+            asyncio.run(client.publish_receipt(receipt, expected_candidate_hash="a" * 64))
+    with pytest.raises(ProtectedRpcConfigurationError, match="fixed_publisher_receipt_invalid"):
+        asyncio.run(client.publish_receipt(receipt, expected_candidate_hash="caller-forged"))
+    assert len(sent) == 8
+
+
+def test_fixed_authorizer_https_rpc_accepts_only_receipt_and_never_sends_bytes(monkeypatch):
+    """獨立 Authorizer HTTP 只收 UUID4 Receipt，拒絕可偽造的 Candidate、Scope 與期限。"""
+    from fastapi.testclient import TestClient
+    from deception.world.protected_grant import PostgresProtectedAuthorizer
+
+    receipt = uuid4()
+    calls = []
+
+    def authorize_once(self, receipt_id):
+        """只保存 Authorizer 真正收到的 Receipt，不接受額外上游授權欄位。"""
+        calls.append(receipt_id)
+        return SimpleNamespace(admission_id="a" * 32,
+                               request_binding_digest="b" * 64,
+                               candidate_hash="c" * 64), "protected-sender-" + receipt_id.hex
+
+    monkeypatch.setattr(PostgresProtectedAuthorizer, "authorize_promoted_receipt_once", authorize_once)
+    authorizer = PostgresProtectedAuthorizer("postgresql://test.invalid/db", expected_login="auth_test")
+    app = create_fixed_authorizer_app(authorizer=authorizer)
+    with TestClient(app, base_url="http://authorizer.test") as insecure:
+        assert insecure.post("/internal/v1/authorize-receipt",
+                             json={"receipt_id": str(receipt)}).status_code == 503
+    with TestClient(app, base_url="https://authorizer.test") as secure:
+        assert secure.get("/internal/ready").json()["trusted_send"] == "disabled"
+        for payload in ({}, {"receipt_id": str(receipt), "candidate_ref": "forged"},
+                        {"receipt_id": str(receipt), "force": True},
+                        {"receipt_id": "not-a-uuid"}):
+            assert secure.post("/internal/v1/authorize-receipt", json=payload).status_code == 400
+        assert secure.post("/internal/v1/authorize-receipt",
+                           content=b" " * 2049).status_code == 413
+        assert secure.post("/internal/v1/authorize-receipt",
+                           content=(b'{"receipt_id":"' + str(receipt).encode() + b'",'
+                                    + b'"receipt_id":"' + str(receipt).encode() + b'"}'),
+                           headers={"content-type": "application/json"}).status_code == 400
+        result = secure.post("/internal/v1/authorize-receipt",
+                             json={"receipt_id": str(receipt)})
+    assert result.status_code == 200
+    assert result.json() == {
+        "receipt_id": str(receipt), "admission_id": "a" * 32,
+        "send_owner": "protected-sender-" + receipt.hex,
+        "request_fingerprint": "b" * 64, "candidate_hash": "c" * 64,
+        "trusted_send": "disabled",
+    }
+    assert calls == [receipt]
+
+    def unknown_commit(self, receipt_id):
+        """模擬 Authorizer 資料庫 COMMIT ACK 遺失，不允許自動重送副作用。"""
+        import psycopg
+
+        calls.append(receipt_id)
+        raise psycopg.OperationalError("simulated_authorizer_commit_ack_lost")
+
+    monkeypatch.setattr(PostgresProtectedAuthorizer,
+                        "authorize_promoted_receipt_once", unknown_commit)
+    with TestClient(app, base_url="https://authorizer.test") as secure:
+        assert secure.post("/internal/v1/authorize-receipt",
+                           json={"receipt_id": str(receipt)}).status_code == 503
+    assert calls == [receipt, receipt]
+
+
+def test_fixed_authorizer_mtls_client_rejects_rebound_response(monkeypatch):
+    """獨立 Client 單次送 Receipt，錯 Owner／Hash／Receipt 或補發旗標一律拒絕。"""
+    from deception.security import protected_rpc
+
+    receipt = uuid4()
+    observed = []
+    payload = {
+        "receipt_id": str(receipt), "admission_id": "a" * 32,
+        "send_owner": "protected-sender-" + receipt.hex,
+        "request_fingerprint": "b" * 64, "candidate_hash": "c" * 64,
+        "trusted_send": "disabled",
+    }
+
+    class FakeAuthorizerTransport:
+        """攔截 HTTPS Client 只檢查固定 URL／JSON，不執行網路傳送。"""
+
+        def __init__(self, **kwargs):
+            """確認 HTTPX 不會信任外部環境代理設定。"""
+            assert kwargs["trust_env"] is False
+
+        async def __aenter__(self):
+            """回傳固定的模擬 mTLS HTTP transport。"""
+            return self
+
+        async def __aexit__(self, *_):
+            """不隱藏任何授權結果驗證失敗。"""
+            return False
+
+        async def post(self, url, *, json):
+            """只准以 Receipt UUID 查固定 Authorizer RPC，不能給上游選 Payload。"""
+            observed.append((url, json))
+            return httpx.Response(200, json=payload)
+
+    monkeypatch.setattr(protected_rpc.httpx, "AsyncClient", FakeAuthorizerTransport)
+    client = object.__new__(FixedAuthorizerMTLSClient)
+    client._origin, client._tls = "https://authorizer.invalid:8446", object()
+    assert asyncio.run(client.authorize_receipt(receipt)) == payload
+    assert observed == [("https://authorizer.invalid:8446/internal/v1/authorize-receipt",
+                         {"receipt_id": str(receipt)})]
+    for change in ({"receipt_id": str(uuid4())}, {"send_owner": "forged"},
+                   {"candidate_hash": "Z" * 64}, {"trusted_send": "enabled"},
+                   {"extra": "forged"}):
+        original = payload.copy()
+        payload.update(change)
+        with pytest.raises(ProtectedRpcConfigurationError, match="result_binding_mismatch"):
+            asyncio.run(client.authorize_receipt(receipt))
+        payload.clear()
+        payload.update(original)
+
+
+def test_g4_authorizer_bootstrap_uses_independent_secret_and_seals_send(tmp_path, monkeypatch):
+    """Authorizer 啟動只能取得自身 SCRAM Secret，必須先檢查獨立 Login 與 ACL。"""
+    from fastapi.testclient import TestClient
+
+    dsn = tmp_path / "authorizer.dsn"
+    dsn.write_text("postgresql://auth-only.invalid/g4", encoding="ascii")
+    seen = []
+
+    def preflight(*args, **kwargs):
+        """證明 Authorizer 僅以自己的實體 Login 與正確角色做安全預檢。"""
+        seen.append((args, kwargs))
+
+    monkeypatch.setattr("deception.security.protected_services._login_preflight", preflight)
+    config = {"MIRAGE_G4_AUTHORIZER_DSN_FILE": str(dsn),
+              "MIRAGE_G4_AUTHORIZER_LOGIN": "auth_only",
+              "MIRAGE_G3B_WORLD_SCHEMA": "public"}
+    app = create_authorizer_service(config)
+    assert seen == [(("postgresql://auth-only.invalid/g4", "auth_only"),
+                     {"role": "authorizer", "schema": "public"})]
+    with TestClient(app, base_url="https://auth.test") as client:
+        assert client.get("/internal/ready").json() == {
+            "control_plane": "authorizer-receipt-only", "trusted_send": "disabled"}
+    with pytest.raises(ProtectedRpcConfigurationError, match="cross_role_secret_denied"):
+        create_authorizer_service({**config, "MIRAGE_G4_SENDER_DSN_FILE": "forbidden"})
+    with pytest.raises(ProtectedRpcConfigurationError, match="unsafe_runtime_configuration"):
+        create_authorizer_service({**config, "MIRAGE_TRUSTED_SEND_ENABLE": "true"})
+
+
 def test_g4_sender_dedicated_secret_and_lease_are_sealed(tmp_path, monkeypatch):
     """G4 專用 Sender 即使有 DB 身分也不能透過 HTTP 申請 Lease 或起送。"""
     from fastapi.testclient import TestClient
@@ -194,7 +483,9 @@ def test_g4_sender_dedicated_secret_and_lease_are_sealed(tmp_path, monkeypatch):
     monkeypatch.setattr("deception.security.protected_services._login_preflight", preflight)
     config = {"MIRAGE_G4_SENDER_DSN_FILE": str(dsn),
               "MIRAGE_G4_SENDER_LOGIN": "sender_only",
-              "MIRAGE_G3B_WORLD_SCHEMA": "public"}
+              "MIRAGE_G3B_WORLD_SCHEMA": "public",
+              "MIRAGE_RESTORE_PROFILE": "standard_single_node",
+              "MIRAGE_RESTORE_PROFILE_VERSION": "1"}
     app = create_sender_service(config)
     assert seen == [(('postgresql://sender-only.invalid/g4', 'sender_only'),
                      {'role': 'sender', 'schema': 'public'})]
@@ -207,13 +498,13 @@ def test_g4_sender_dedicated_secret_and_lease_are_sealed(tmp_path, monkeypatch):
     monkeypatch.setattr(PostgresProtectedSender, "start_send", forbidden_send)
     with TestClient(app, base_url="https://sender.test") as caller:
         assert caller.get("/internal/ready").json() == {
-            "control_plane": "sender-sealed-until-restore-fence",
+            "control_plane": "sender-sealed-pending-security-acceptance",
             "trusted_send": "disabled"}
         for payload in ({}, {"trusted_send": "enabled", "force": True},
                         {"receipt_id": str(uuid4()), "payload": "forged"}):
             reply = caller.post("/internal/v1/send", json=payload)
             assert reply.status_code == 503
-            assert reply.json() == {"detail": "fixed_sender_restore_fence_required"}
+            assert reply.json() == {"detail": "fixed_sender_release_gates_not_met"}
         assert caller.post("/internal/v1/execute", json={}).status_code == 404
     with pytest.raises(ProtectedRpcConfigurationError, match="requires_protected_sender"):
         create_fixed_sender_app(sender=object())
@@ -224,6 +515,12 @@ def test_g4_sender_dedicated_secret_and_lease_are_sealed(tmp_path, monkeypatch):
             create_sender_service({**config, key: "not-a-sender-secret"})
     with pytest.raises(ProtectedRpcConfigurationError, match="unsafe_runtime_configuration"):
         create_sender_service({**config, "MIRAGE_TRUSTED_SEND_ENABLE": "true"})
+    from deception.security.restore_profile import RestoreProfileConfigurationError
+
+    with pytest.raises(RestoreProfileConfigurationError, match="downgrade_refused"):
+        create_sender_service({**config, "MIRAGE_FENCE_AUTHORITY_DSN": "postgresql://fence.invalid/test"})
+    with pytest.raises(RestoreProfileConfigurationError, match="configuration_incomplete"):
+        create_sender_service({**config, "MIRAGE_RESTORE_PROFILE": "external_fence"})
 
 
 def test_g4_sender_preflight_requires_column_only_state_update(monkeypatch):
@@ -257,6 +554,7 @@ def test_g4_sender_preflight_requires_column_only_state_update(monkeypatch):
                 allowed = {("response_admissions", "SELECT"),
                            ("protected_authorized_http_snapshots", "SELECT"),
                            ("protected_grant_bindings", "SELECT"),
+                           ("protected_local_restore_events", "SELECT"),
                            ("protected_send_leases", "INSERT"),
                            ("protected_send_leases", "SELECT"),
                            ("response_audit", "INSERT")}
@@ -323,6 +621,34 @@ def test_g3b_cross_role_secret_is_denied_before_db_connection():
                 continue
             with pytest.raises(ProtectedRpcConfigurationError, match="cross_role_secret_denied"):
                 maker({key: "postgresql://leaked.invalid/db"})
+
+
+def test_g4_publisher_cross_role_secret_denied_and_compose_is_sealed():
+    """Publisher 不繼承 Runtime DSN；專用網路、三個 Secret 且零主機對外埠。"""
+    for key in ("MIRAGE_POSTGRES_DSN", "MIRAGE_G3B_VERIFIER_DSN_FILE",
+                "MIRAGE_G3B_EXECUTOR_DSN_FILE", "MIRAGE_G3B_VALIDATOR_DSN_FILE",
+                "MIRAGE_G4_AUTHORIZER_DSN_FILE", "MIRAGE_G4_SENDER_DSN_FILE"):
+        with pytest.raises(ProtectedRpcConfigurationError, match="cross_role_secret_denied"):
+            create_candidate_publisher_service({key: "postgresql://not-allowed.invalid/db"})
+    with pytest.raises(ProtectedRpcConfigurationError, match="cross_role_secret_denied"):
+        create_candidate_publisher_service({"MIRAGE_TRUSTED_SEND_ENABLE": "true"})
+    root = Path(__file__).resolve().parents[1]
+    compose = yaml.safe_load((root / "deploy/security-lab/g4-publisher-compose.yaml")
+                             .read_text(encoding="utf-8"))
+    assert set(compose["services"]) == {"candidate-publisher"}
+    publisher = compose["services"]["candidate-publisher"]
+    assert "ports" not in publisher and publisher["read_only"] is True
+    assert "ALL" in publisher["cap_drop"]
+    assert publisher["profiles"] == ["g4-publisher-isolated"]
+    assert publisher["networks"] == ["g3b_execution", "g3b_database"]
+    assert publisher["environment"]["MIRAGE_TRUSTED_SEND_ENABLE"] == "false"
+    assert "MIRAGE_POSTGRES_DSN" not in publisher["environment"]
+    assert set(publisher["secrets"]) == {
+        "g4_publisher_reader_dsn", "g4_publisher_writer_dsn",
+        "g4_publisher_promoter_dsn", "g4_publisher_evidence",
+        "g4_publisher_server_cert", "g4_publisher_server_key",
+        "g4_publisher_verifier_ca",
+    }
 
 
 def test_g3b_isolated_compose_does_not_publish_executor_or_share_dsn():
@@ -460,6 +786,76 @@ def test_g3b_native_validator_only_accepts_https_receipt_uuid4():
                            json={"receipt_id": receipt}).status_code == 503
 
 
+def test_g3b_validator_receipt_dispatch_never_trusts_caller_route_or_bytes(monkeypatch):
+    """單一 Receipt RPC 僅由資料庫 Proof 分派候選，禁用 Handler／Body／Status 自選。"""
+    from fastapi.testclient import TestClient
+    from starlette import concurrency
+
+    from deception.world.models import SecurityErrorSource, WorldScope
+    from deception.world.protected_native_http import ProtectedNativeProjection
+
+    receipt = uuid4()
+    headers, body = fixed_synthetic_rejection_bytes("synthetic-carts", "cart_item_not_found")
+    projected = ProtectedNativeProjection(
+        receipt_id=receipt,
+        scope=WorldScope(environment_id="isolated", deployment_id="test",
+                         session_id="session", world_generation_id="generation"),
+        operation_id="updateGuestCartItem", request_fingerprint="a" * 64,
+        status_code=409, headers=headers, body_bytes=body,
+        envelope_hash=response_hashes(409, headers, body)[0],
+        source=SecurityErrorSource(template_id="cart_item_not_found",
+                                   contract_revision="synthetic-carts-1"),
+    )
+    calls = []
+    threadpool_calls = []
+    real_threadpool = concurrency.run_in_threadpool
+
+    async def traced_threadpool(func, *args, **kwargs):
+        """確認原生 Validator 的唯讀 PostgreSQL 查核不佔用 ASGI Event Loop。"""
+        threadpool_calls.append((func, args, kwargs))
+        return await real_threadpool(func, *args, **kwargs)
+
+    monkeypatch.setattr(concurrency, "run_in_threadpool", traced_threadpool)
+
+    def project_receipt(self, selected_receipt):
+        """記錄 Validator 實際收到的 Receipt，不接受外部操作參數。"""
+        calls.append(selected_receipt)
+        return projected
+
+    monkeypatch.setattr(PostgresProtectedNativeProjector,
+                        "project_verified_receipt", project_receipt)
+    projector = PostgresProtectedNativeProjector(
+        "postgresql://localhost/invalid-test", expected_login="validator",
+    )
+    app = create_native_validator_app(projector=projector)
+    with TestClient(app, base_url="http://validator.test") as insecure:
+        assert insecure.post("/internal/v1/project-receipt",
+                             json={"receipt_id": str(receipt)}).status_code == 503
+    with TestClient(app, base_url="https://validator.test") as secure:
+        for malicious in (
+            {"receipt_id": str(receipt), "operation_id": "GetOrdersId"},
+            {"receipt_id": str(receipt), "status_code": 200},
+            {"receipt_id": str(receipt), "body_b64": "e30="},
+            {"receipt_id": str(receipt), "source": {"kind": "snapshot"}},
+            {"receipt_id": str(receipt), "send_authorized": True},
+        ):
+            assert secure.post("/internal/v1/project-receipt", json=malicious).status_code == 400
+        assert secure.post("/internal/v1/project-receipt",
+                           content=(b'{"receipt_id":"' + str(receipt).encode() + b'",'
+                                    + b'"receipt_id":"' + str(receipt).encode() + b'"}'),
+                           ).status_code == 400
+        answer = secure.post("/internal/v1/project-receipt", json={"receipt_id": str(receipt)})
+        assert answer.status_code == 200
+        assert answer.json()["receipt_id"] == str(receipt)
+        assert answer.json()["operation_id"] == "updateGuestCartItem"
+        assert answer.json()["body_b64"] == base64.b64encode(body).decode("ascii")
+        assert answer.json()["trusted_send"] == "disabled"
+        assert "send_lease" not in answer.json() and "send_authorized" not in answer.json()
+    assert calls == [receipt]
+    assert len(threadpool_calls) == 1
+    assert threadpool_calls[0][1] == (receipt,) and threadpool_calls[0][2] == {}
+
+
 def test_g3b_cart_order_read_200_validator_rejects_forged_native_payloads(monkeypatch):
     """C-02／C-07 獨立 Validator 固定成功 JSON，不接受錯綁 Cart／Order 或任意 Header。"""
     from deception.security import protected_rpc
@@ -486,7 +882,7 @@ def test_g3b_cart_order_read_200_validator_rejects_forged_native_payloads(monkey
 
         async def post(self, url, *, json):
             """唯讀 Validator 只接受受保護 Receipt，不接受狀態或 Body 選擇。"""
-            assert url == "https://validator.invalid:8445/internal/v1/project-cart-read"
+            assert url == "https://validator.invalid:8445/internal/v1/project-receipt"
             assert json == {"receipt_id": str(receipt)}
             return httpx.Response(200, json=projection)
 
@@ -585,7 +981,7 @@ def test_g3b_cart_operation_validator_binds_historical_entity_to_requested_cart(
 
         async def post(self, url, *, json):
             """只允許以 Receipt 查核，不讓 Client 選擇歷史 Response。"""
-            assert url == "https://validator.invalid:8445/internal/v1/project-cart-read"
+            assert url == "https://validator.invalid:8445/internal/v1/project-receipt"
             assert json == {"receipt_id": str(receipt)}
             return httpx.Response(200, json=projected)
 
@@ -688,7 +1084,7 @@ def test_g3b_inventory_200_validator_handoff_rejects_modified_world_bytes(monkey
 
         async def post(self, url, *, json):
             """Validator 僅收 Receipt，禁止 Caller 自選 SKU 或 Response Body。"""
-            assert url == "https://validator.invalid:8445/internal/v1/project-inventory-snapshot"
+            assert url == "https://validator.invalid:8445/internal/v1/project-receipt"
             assert json == {"receipt_id": str(receipt)}
             return httpx.Response(200, json=projected)
 
@@ -805,7 +1201,7 @@ def test_g3b_inventory_operation_200_validator_rejects_forged_history(monkeypatc
 
         async def post(self, url, *, json):
             """驗證 RPC 僅傳 Receipt，絕不從 Verifier 帶入 Body／Status。"""
-            assert url == "https://validator.invalid:8445/internal/v1/project-inventory-operation"
+            assert url == "https://validator.invalid:8445/internal/v1/project-receipt"
             assert json == {"receipt_id": str(receipt)}
             return httpx.Response(200, json=projected)
 
@@ -884,7 +1280,7 @@ def test_g3b_independent_synthetic_409_handoff_denies_candidate_rebinding(
 
         async def post(self, url, *, json):
             """驗證唯一 Receipt 輸入，不接受 Runtime 傳入偽造來源。"""
-            assert url == "https://validator.invalid:8445/internal/v1/project-synthetic-rejection"
+            assert url == "https://validator.invalid:8445/internal/v1/project-receipt"
             assert json == {"receipt_id": str(receipt)}
             return httpx.Response(200, json=projected)
 
@@ -956,7 +1352,7 @@ def test_g3b_validator_handoff_preserves_native_status_headers_and_body(
 
         async def post(self, url, *, json):
             """核對 RPC 只傳 Receipt，不容許自選 Template 或 Scope。"""
-            assert url == "https://validator.invalid:8445/internal/v1/project-medusa-rejection"
+            assert url == "https://validator.invalid:8445/internal/v1/project-receipt"
             assert json == {"receipt_id": str(receipt)}
             return httpx.Response(200, json=projected)
 
@@ -1064,7 +1460,7 @@ def test_g3b_medusa_add_validator_handoff_rejects_rebound_commit(monkeypatch):
 
         async def post(self, url, *, json):
             """唯一 RPC 輸入是 Receipt，不能帶 Body／Status／來源選擇。"""
-            assert url == "https://validator.invalid:8445/internal/v1/project-medusa-add-success"
+            assert url == "https://validator.invalid:8445/internal/v1/project-receipt"
             assert json == {"receipt_id": str(receipt)}
             return httpx.Response(200, json=projected)
 
@@ -1138,7 +1534,7 @@ def test_g3b_medusa_delete_validator_requires_exact_deleted_item_and_commit(monk
 
         async def post(self, url, *, json):
             """只以 Receipt 查詢，不接受任意 Payload。"""
-            assert url == "https://validator.invalid:8445/internal/v1/project-medusa-add-success"
+            assert url == "https://validator.invalid:8445/internal/v1/project-receipt"
             assert json == {"receipt_id": str(receipt)}
             return httpx.Response(200, json=projected)
 
@@ -1226,7 +1622,7 @@ def test_g3b_medusa_complete_validator_denies_unverified_order(monkeypatch):
 
         async def post(self, url, *, json):
             """Caller 只可指定受保護 Receipt。"""
-            assert url == "https://validator.invalid:8445/internal/v1/project-medusa-add-success"
+            assert url == "https://validator.invalid:8445/internal/v1/project-receipt"
             assert json == {"receipt_id": str(receipt)}
             return httpx.Response(200, json=projected)
 
@@ -1571,7 +1967,7 @@ def test_g3b_medusa_read_validator_rejects_rebound_native_200(
 
         async def post(self, url, *, json):
             """只容許 Receipt，拒絕 Caller 提供 Body／Status 或 Scope。"""
-            assert url == "https://validator.invalid:8445/internal/v1/project-medusa-read"
+            assert url == "https://validator.invalid:8445/internal/v1/project-receipt"
             assert json == {"receipt_id": str(receipt)}
             return httpx.Response(200, json=reply)
 
@@ -1668,7 +2064,7 @@ def test_g3b_medusa_creation_validator_denies_scope_and_source_rebind(monkeypatc
 
         async def post(self, url, *, json):
             """RPC 不准由 Verifier 選擇原生回應內容。"""
-            assert url == "https://validator.invalid:8445/internal/v1/project-medusa-creation"
+            assert url == "https://validator.invalid:8445/internal/v1/project-receipt"
             assert json == {"receipt_id": str(receipt)}
             return httpx.Response(200, json=reply)
 
@@ -1713,13 +2109,33 @@ def test_g3b_real_container_ci_has_explicit_isolation_and_no_sender():
     assert "--network mirage-g3b-gateway-net" in code
     assert "--mode audit" in code
     assert "--profile g3b-isolated up --detach" in code
+    assert "--profile g3b-isolated down --volumes --remove-orphans" in code
+    assert "docker rm --force --volumes mirage-g3b-ci-db" in code
     assert "Wait for all four protected TLS listeners" in code
     assert "native-validator:8445" in code and "listener_ready" in code
-    assert "staging" not in code and "production" not in code
+    # GitHub PR 的 base branch 名可能含 staging 字樣；真正執行的 jobs 區段
+    # 才是必須沒有 staging／production Secret 或部署動作的信任邊界。
+    job_steps = code.partition("\njobs:")[2]
+    assert job_steps and "staging" not in job_steps and "production" not in job_steps
     compose = yaml.safe_load((root / "deploy/security-lab/g3b-compose.yaml").read_text(
         encoding="utf-8"))
     assert all(service["healthcheck"]["disable"] is True
                for service in compose["services"].values())
+
+
+def test_isolated_demo_ci_removes_postgres_and_output_volumes():
+    """CI 演示結束必清除本次 Compose 專案的 PG／輸出卷，不能留下測試資料。"""
+    root = Path(__file__).resolve().parents[1]
+    workflow = yaml.safe_load((root / ".github/workflows/container-smoke.yml").read_text(
+        encoding="utf-8"))
+    job = workflow["jobs"]["container-verification"]
+    assert job["runs-on"] == "ubuntu-latest"
+    cleanup = [step for step in job["steps"]
+               if step.get("name") == "Inspect and stop the isolated services"]
+    assert len(cleanup) == 1
+    assert cleanup[0]["if"] == "always()"
+    assert "docker compose down --volumes --remove-orphans" in cleanup[0]["run"]
+    assert "docker system prune" not in cleanup[0]["run"]
 
 
 def test_g3b_ci_signed_claims_are_pinned_and_short_lived():

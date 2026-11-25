@@ -14,7 +14,9 @@ from deception.security import TrustedSessionError
 from deception.security.ingress_receipt import IngressReceiptError, PostgresIngressReceiptWriter
 from deception.api.fingerprint import fingerprint_request
 from deception.api.fingerprint import fingerprint_httpx_request
-from deception.security.protected_rpc import create_direct_verifier_app
+from deception.security.protected_rpc import (
+    FixedCandidatePublisherMTLSClient, create_direct_verifier_app,
+)
 from test_operation_binding import original_request
 from deception.world import PostgresReplayStore
 from deception.world.replay import ReplayConsumeResult
@@ -272,6 +274,43 @@ def test_direct_https_verifier_captures_actual_request_and_mints_atomic_proof(is
                                  "/synthetic/inventory/reservations")
         assert rows[0][4] == hashlib.sha256(b"{}").hexdigest()
         assert connection.execute("SELECT count(*) FROM replay_entries").fetchone()[0] == 1
+
+
+def test_direct_verifier_never_publishes_without_independent_native_projection(
+        isolated_test_dsn, monkeypatch):
+    """真 PG：Publisher 已配置也不能繞過 Executor／Validator 完整投影核對。"""
+    from fastapi.testclient import TestClient
+
+    key = Ed25519PrivateKey.generate()
+    publisher = object.__new__(FixedCandidatePublisherMTLSClient)
+    attempts = []
+
+    async def forbidden_publish(self, receipt_id, *, expected_candidate_hash):
+        """缺少可信 Envelope 時嚴禁發起有副作用的 Candidate Promotion。"""
+        attempts.append((receipt_id, expected_candidate_hash))
+        raise AssertionError("publisher_called_without_verified_projection")
+
+    monkeypatch.setattr(FixedCandidatePublisherMTLSClient, "publish_receipt", forbidden_publish)
+    app = create_direct_verifier_app(
+        verifier=verifier(isolated_test_dsn, {"old": key}),
+        postgres_dsn=isolated_test_dsn, environment_id="env", deployment_id="deploy",
+        expected_issuer="gateway", expected_audience="mirage",
+        candidate_publisher_client=publisher,
+    )
+    with TestClient(app, base_url="https://mirage.test") as client:
+        request = client.build_request(
+            "GET", "/synthetic/inventory/sku-1",
+            headers={"x-request-id": "publisher-requires-native-projection"},
+        )
+        request.headers["x-trusted-session"] = signed(
+            key, jti=uuid4().hex, access_mode="inventory",
+            fingerprint=fingerprint_httpx_request(request,
+                                                  "publisher-requires-native-projection"),
+        )
+        response = client.send(request)
+        assert response.status_code == 503
+        assert response.json() == {"detail": "direct_verifier_publisher_projection_missing"}
+    assert attempts == []
 
 
 def test_direct_verifier_dispatches_inventory_over_real_executor_mtls_once(isolated_test_dsn, tmp_path):

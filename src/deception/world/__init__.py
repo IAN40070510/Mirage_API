@@ -19,7 +19,9 @@ from .models import (
 )
 from .postgres_admission import PostgresAdmissionControl
 from .postgres_candidate import PostgresCandidateStore
-from .protected_grant import PostgresCandidatePromoter, PostgresProtectedAuthorizer, ProtectedGrantError
+from .protected_grant import (PostgresCandidatePromoter, PostgresProtectedAuthorizer,
+                              PostgresVerifiedReceiptPublisher, ProtectedPublishedCandidate,
+                              ProtectedGrantError)
 from .postgres_replay import PostgresReplayStore
 from .postgres_store import PostgresWorldStore
 from .projection_registry import (
@@ -44,8 +46,10 @@ from .store import (
 )
 from .event_store import EventWorldStore, PostgresEventWorldStore
 from .protected_world import PostgresProtectedWorldExecutor
-from .protected_send import (PostgresProtectedSender, PostgresProtectedSnapshotPurger,
-                             ProtectedSendLease, ProtectedLeaseTransmission)
+from .protected_send import (PostgresKnownRestoreRecorder, PostgresProtectedSender,
+                             PostgresProtectedSnapshotPurger,
+                             ProtectedSendLease, ProtectedSendReconciliation, ProtectedLeaseTransmission,
+                             ProtectedPinnedASGIResponse)
 
 __all__ = [
     "AdmissionControl",
@@ -68,12 +72,17 @@ __all__ = [
     "PostgresAdmissionControl",
     "PostgresCandidateStore",
     "PostgresCandidatePromoter",
+    "PostgresVerifiedReceiptPublisher",
+    "ProtectedPublishedCandidate",
     "PostgresProtectedAuthorizer",
     "PostgresProtectedWorldExecutor",
+    "PostgresKnownRestoreRecorder",
     "PostgresProtectedSender",
     "PostgresProtectedSnapshotPurger",
     "ProtectedSendLease",
+    "ProtectedSendReconciliation",
     "ProtectedLeaseTransmission",
+    "ProtectedPinnedASGIResponse",
     "ProtectedGrantError",
     "PostgresReplayStore",
     "PostgresWorldStore",

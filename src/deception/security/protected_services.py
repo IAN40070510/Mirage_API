@@ -15,9 +15,12 @@ from fastapi import FastAPI
 from mirage_validator.json_utils import reject_constant, unique_object
 
 from .protected_rpc import (
-    FixedExecutorMTLSClient, FixedNativeValidatorMTLSClient, ProtectedRpcConfigurationError,
-    create_direct_verifier_app, create_fixed_executor_app, create_fixed_sender_app,
+    FixedCandidatePublisherMTLSClient, FixedExecutorMTLSClient,
+    FixedNativeValidatorMTLSClient, ProtectedRpcConfigurationError,
+    create_direct_verifier_app, create_fixed_authorizer_app, create_fixed_executor_app,
+    create_fixed_candidate_publisher_app, create_fixed_sender_app,
     create_native_validator_app, serve_direct_verifier_mtls, serve_fixed_executor_mtls,
+    serve_fixed_authorizer_mtls, serve_fixed_candidate_publisher_mtls,
     serve_fixed_sender_mtls, serve_native_validator_mtls,
 )
 
@@ -66,7 +69,8 @@ def _login_preflight(dsn: str, login: str, *, role: str, schema: str,
     if (not re.fullmatch(r"[a-z][a-z0-9_]{2,62}", login)
             or not re.fullmatch(r"[a-z][a-z0-9_]{0,62}", schema)):
         raise ProtectedRpcConfigurationError("g3b_service_login_invalid")
-    if role not in {"verifier", "executor", "validator", "sender"}:
+    if role not in {"verifier", "executor", "validator", "authorizer", "sender",
+                    "candidate_writer", "promoter"}:
         raise ProtectedRpcConfigurationError("g3b_service_unapproved_role")
     required = (("ingress_receipts", "INSERT"), ("ingress_receipts", "SELECT"),
                 ("replay_entries", "INSERT"), ("trusted_key_revocations", "SELECT"),
@@ -101,9 +105,32 @@ def _login_preflight(dsn: str, login: str, *, role: str, schema: str,
         required = (("response_admissions", "SELECT"),
                     ("protected_authorized_http_snapshots", "SELECT"),
                     ("protected_grant_bindings", "SELECT"),
+                    ("protected_local_restore_events", "SELECT"),
                     ("protected_send_leases", "INSERT"),
                     ("protected_send_leases", "SELECT"),
                     ("response_audit", "INSERT"))
+    if role == "candidate_writer":
+        required = (("candidate_records", "INSERT"), ("candidate_records", "SELECT"))
+    if role == "promoter":
+        required = tuple((name, "SELECT") for name in (
+            "candidate_records", "ingress_receipts", "protected_http_operation_bindings",
+            "read_admissions", "protected_world_read_sources", "world_operations",
+            "protected_world_commit_sources", "protected_world_rejection_sources",
+            "protected_medusa_rejection_sources", "projection_registry",
+            "projection_profile_revocations", "protected_cart_creations",
+            "guest_cart_creations", "synthetic_resources", "session_heads",
+            "session_world_bindings", "generation_controls", "world_snapshots",
+            "world_commit_receipts", "trusted_key_revocations",
+        )) + (("protected_candidate_promotions", "INSERT"),)
+    if role == "authorizer":
+        required = tuple((table, "SELECT") for table in (
+            "protected_candidate_promotions", "ingress_receipts", "projection_registry",
+            "session_heads", "session_world_bindings", "generation_controls",
+            "trusted_key_revocations", "projection_profile_revocations",
+            "response_admissions", "protected_grant_bindings",
+        )) + (("response_admissions", "INSERT"),
+              ("protected_grant_bindings", "INSERT"),
+              ("protected_authorized_http_snapshots", "INSERT"))
     if role == "validator":
         # C-01 必須可用獨立實體唯讀 Login 核對不可變 Creator→Derived Lineage，
         # M-03 還需唯讀比對原子保存的 Native Context，不得借用 Cart 寫入權。
@@ -125,6 +152,9 @@ def _login_preflight(dsn: str, login: str, *, role: str, schema: str,
                      ("protected_authorized_http_snapshots", "UPDATE"),
                      ("protected_authorized_http_snapshots", "INSERT"),
                      ("protected_grant_bindings", "INSERT"),
+                     ("protected_local_restore_events", "INSERT"),
+                     ("protected_local_restore_events", "UPDATE"),
+                     ("protected_local_restore_events", "DELETE"),
                      ("response_audit", "UPDATE"),
                      ("response_audit", "DELETE"),
                      ("ingress_receipts", "INSERT"),
@@ -134,6 +164,36 @@ def _login_preflight(dsn: str, login: str, *, role: str, schema: str,
                      ("world_snapshots", "UPDATE"),
                      ("session_heads", "UPDATE"),
                      ("generation_controls", "UPDATE"))
+    if role in {"candidate_writer", "promoter"}:
+        forbidden = tuple((name, privilege) for name, privilege in (
+            ("ingress_receipts", "INSERT"),
+            ("protected_http_operation_bindings", "INSERT"),
+            ("world_operations", "INSERT"),
+            ("world_snapshots", "UPDATE"),
+            ("response_admissions", "INSERT"),
+            ("protected_grant_bindings", "INSERT"),
+            ("protected_send_leases", "INSERT"),
+            ("protected_authorized_http_snapshots", "INSERT"),
+            ("candidate_records", "UPDATE"),
+            ("candidate_records", "DELETE"),
+            ("protected_candidate_promotions", "UPDATE"),
+            ("protected_candidate_promotions", "DELETE"),
+            ("protected_candidate_promotions", "INSERT") if role == "candidate_writer"
+            else ("candidate_records", "INSERT"),
+        ))
+    if role == "authorizer":
+        forbidden = (("ingress_receipts", "INSERT"),
+                     ("protected_candidate_promotions", "INSERT"),
+                     ("protected_authorized_http_snapshots", "SELECT"),
+                     ("protected_send_leases", "INSERT"),
+                     ("response_audit", "INSERT"),
+                     ("protected_local_restore_events", "INSERT"),
+                     ("world_operations", "INSERT"),
+                     ("protected_grant_bindings", "UPDATE"),
+                     ("protected_grant_bindings", "DELETE"),
+                     ("response_admissions", "DELETE"),
+                     ("generation_controls", "UPDATE"),
+                     ("response_admissions", "UPDATE"))
     if role == "executor" and platform == "synthetic-carts":
         required += (("protected_cart_creations", "INSERT"),
                      ("protected_cart_creations", "SELECT"),
@@ -202,6 +262,17 @@ def _login_preflight(dsn: str, login: str, *, role: str, schema: str,
                             ("response_admissions", column),
                     ).fetchone() != (False,):
                         raise ProtectedRpcConfigurationError("g4_sender_excessive_acl_detected")
+            if role == "authorizer":
+                for table, columns in (
+                        ("generation_controls", ("control_revision",)),
+                        ("response_admissions", ("state", "claim_owner",
+                                                 "claim_revision", "send_authorization_revision"))):
+                    for column in columns:
+                        if connection.execute(
+                                "SELECT has_column_privilege(%s,%s,'UPDATE')",
+                                (table, column),
+                        ).fetchone() != (True,):
+                            raise ProtectedRpcConfigurationError("g4_authorizer_column_acl_missing")
             if role == "validator":
                 for table in (
                         "protected_medusa_rejection_sources", "ingress_receipts",
@@ -219,11 +290,19 @@ def _login_preflight(dsn: str, login: str, *, role: str, schema: str,
                             (table, "INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER"),
                     ).fetchone() != (False,):
                         raise ProtectedRpcConfigurationError("g3b_service_readonly_acl_violated")
-            if role == "executor" and connection.execute(
+            if role in {"executor", "authorizer", "promoter"} and connection.execute(
                     "SELECT has_function_privilege(%s,'EXECUTE')",
                     (schema + ".protected_lock_reference(text,jsonb)",),
             ).fetchone() != (True,):
                 raise ProtectedRpcConfigurationError("g3b_service_lock_acl_missing")
+            if role in {"candidate_writer", "promoter"}:
+                for table in ("ingress_receipts", "world_snapshots", "candidate_records",
+                              "protected_candidate_promotions"):
+                    if connection.execute(
+                            "SELECT has_table_privilege(%s,'TRUNCATE,REFERENCES,TRIGGER')",
+                            (table,),
+                    ).fetchone() != (False,):
+                        raise ProtectedRpcConfigurationError("g4_publisher_excessive_acl_detected")
     except psycopg.Error as exc:
         raise ProtectedRpcConfigurationError("g3b_service_database_preflight_unverifiable") from exc
 
@@ -268,6 +347,7 @@ def create_verifier_service(config: Mapping[str, str]) -> FastAPI:
 
     if (config.get("MIRAGE_G3B_EXECUTOR_DSN_FILE")
             or config.get("MIRAGE_G3B_VALIDATOR_DSN_FILE")
+            or config.get("MIRAGE_G4_AUTHORIZER_DSN_FILE")
             or config.get("MIRAGE_G4_SENDER_DSN_FILE")
             or config.get("MIRAGE_POSTGRES_DSN")):
         raise ProtectedRpcConfigurationError("g3b_service_cross_role_secret_denied")
@@ -298,12 +378,27 @@ def create_verifier_service(config: Mapping[str, str]) -> FastAPI:
         client_key=_tls_path(config, "MIRAGE_G3B_VERIFIER_VALIDATOR_KEY_FILE"),
         server_ca=_tls_path(config, "MIRAGE_G3B_NATIVE_VALIDATOR_SERVER_CA_FILE"),
     )
+    publisher_keys = (
+        "MIRAGE_G4_PUBLISHER_ORIGIN", "MIRAGE_G4_VERIFIER_PUBLISHER_CERT_FILE",
+        "MIRAGE_G4_VERIFIER_PUBLISHER_KEY_FILE", "MIRAGE_G4_PUBLISHER_SERVER_CA_FILE",
+    )
+    publisher_client = None
+    if any(config.get(key) for key in publisher_keys):
+        if not all(config.get(key) for key in publisher_keys):
+            raise ProtectedRpcConfigurationError("g4_publisher_mtls_configuration_incomplete")
+        publisher_client = FixedCandidatePublisherMTLSClient(
+            origin=_required_config(config, "MIRAGE_G4_PUBLISHER_ORIGIN"),
+            client_cert=_tls_path(config, "MIRAGE_G4_VERIFIER_PUBLISHER_CERT_FILE"),
+            client_key=_tls_path(config, "MIRAGE_G4_VERIFIER_PUBLISHER_KEY_FILE"),
+            server_ca=_tls_path(config, "MIRAGE_G4_PUBLISHER_SERVER_CA_FILE"),
+        )
     return create_direct_verifier_app(
         verifier=checker, postgres_dsn=dsn,
         environment_id=environment, deployment_id=deployment,
         expected_issuer=_required_config(config, "MIRAGE_G3B_EXPECTED_ISSUER"),
         expected_audience=_required_config(config, "MIRAGE_G3B_EXPECTED_AUDIENCE"),
         executor_clients=clients, native_validator_client=validator_client,
+        candidate_publisher_client=publisher_client,
     )
 
 
@@ -317,6 +412,7 @@ def create_executor_service(config: Mapping[str, str]) -> FastAPI:
 
     if (config.get("MIRAGE_G3B_VERIFIER_DSN_FILE")
             or config.get("MIRAGE_G3B_VALIDATOR_DSN_FILE")
+            or config.get("MIRAGE_G4_AUTHORIZER_DSN_FILE")
             or config.get("MIRAGE_G4_SENDER_DSN_FILE")
             or config.get("MIRAGE_POSTGRES_DSN")):
         raise ProtectedRpcConfigurationError("g3b_service_cross_role_secret_denied")
@@ -356,6 +452,7 @@ def create_native_validator_service(config: Mapping[str, str]) -> FastAPI:
 
     if (config.get("MIRAGE_POSTGRES_DSN") or config.get("MIRAGE_G3B_VERIFIER_DSN_FILE")
             or config.get("MIRAGE_G3B_EXECUTOR_DSN_FILE")
+            or config.get("MIRAGE_G4_AUTHORIZER_DSN_FILE")
             or config.get("MIRAGE_G4_SENDER_DSN_FILE")):
         raise ProtectedRpcConfigurationError("g3b_service_cross_role_secret_denied")
     dsn = _secret_file(config, "MIRAGE_G3B_VALIDATOR_DSN_FILE", max_bytes=4096)
@@ -374,16 +471,103 @@ def create_native_validator_service(config: Mapping[str, str]) -> FastAPI:
     )
 
 
-def create_sender_service(config: Mapping[str, str]) -> FastAPI:
-    """只以 Sender 實體 Login／專用 Secret 建立尚未啟用傳輸的 G4 服務。"""
-    from deception.world.protected_send import PostgresProtectedSender
+def create_authorizer_service(config: Mapping[str, str]) -> FastAPI:
+    """用專用 Authorizer 實體 Login、最小權限及固定 Receipt-only mTLS 入口組裝服務。"""
+    from deception.world.protected_grant import PostgresProtectedAuthorizer
 
     if any(config.get(key) for key in (
             "MIRAGE_POSTGRES_DSN", "MIRAGE_G3B_VERIFIER_DSN_FILE",
-            "MIRAGE_G3B_EXECUTOR_DSN_FILE", "MIRAGE_G3B_VALIDATOR_DSN_FILE")):
+            "MIRAGE_G3B_EXECUTOR_DSN_FILE", "MIRAGE_G3B_VALIDATOR_DSN_FILE",
+            "MIRAGE_G4_SENDER_DSN_FILE")):
         raise ProtectedRpcConfigurationError("g3b_service_cross_role_secret_denied")
     if config.get("MIRAGE_TRUSTED_SEND_ENABLE") not in (None, "false"):
         raise ProtectedRpcConfigurationError("g3b_service_unsafe_runtime_configuration")
+    dsn = _secret_file(config, "MIRAGE_G4_AUTHORIZER_DSN_FILE", max_bytes=4096)
+    login = _required_config(config, "MIRAGE_G4_AUTHORIZER_LOGIN")
+    _login_preflight(dsn, login, role="authorizer",
+                     schema=_required_config(config, "MIRAGE_G3B_WORLD_SCHEMA"))
+    return create_fixed_authorizer_app(
+        authorizer=PostgresProtectedAuthorizer(dsn, expected_login=login),
+    )
+
+
+def create_candidate_publisher_service(config: Mapping[str, str]) -> FastAPI:
+    """以三個實體 SCRAM Login 組裝只讀重驗、低信任保存與可信 Promotion。
+
+    這是同一 Publisher 進程內的三組獨立資料庫身分；進程邊界本身仍需獨立
+    Container／Client CA／Secret Mount 隔離，不能宣稱三個獨立安全進程。
+    """
+    from psycopg.conninfo import conninfo_to_dict
+    from deception.world.models import ProjectionEvidence
+    from deception.world.postgres_candidate import PostgresCandidateStore
+    from deception.world.protected_grant import (
+        PostgresCandidatePromoter, PostgresVerifiedReceiptPublisher,
+    )
+    from deception.world.protected_native_http import PostgresProtectedNativeProjector
+
+    if (any(config.get(name) for name in (
+            "MIRAGE_POSTGRES_DSN", "MIRAGE_G3B_VERIFIER_DSN_FILE",
+            "MIRAGE_G3B_EXECUTOR_DSN_FILE", "MIRAGE_G3B_VALIDATOR_DSN_FILE",
+            "MIRAGE_G4_AUTHORIZER_DSN_FILE", "MIRAGE_G4_SENDER_DSN_FILE"))
+            or config.get("MIRAGE_TRUSTED_SEND_ENABLE") not in (None, "false")):
+        raise ProtectedRpcConfigurationError("g4_publisher_cross_role_secret_denied")
+    credentials = (
+        ("MIRAGE_G4_PUBLISHER_READER_DSN_FILE", "MIRAGE_G4_PUBLISHER_READER_LOGIN", "validator"),
+        ("MIRAGE_G4_PUBLISHER_WRITER_DSN_FILE", "MIRAGE_G4_PUBLISHER_WRITER_LOGIN",
+         "candidate_writer"),
+        ("MIRAGE_G4_PUBLISHER_PROMOTER_DSN_FILE", "MIRAGE_G4_PUBLISHER_PROMOTER_LOGIN",
+         "promoter"),
+    )
+    roles = tuple((_secret_file(config, file, max_bytes=4096),
+                   _required_config(config, login), kind)
+                  for file, login, kind in credentials)
+    if len({login for _, login, _ in roles}) != 3:
+        raise ProtectedRpcConfigurationError("g4_publisher_login_reused")
+    # 防止 Reader、Writer 和 Promoter 指向不同叢集／搜尋 schema；不同密碼
+    # 及使用者是唯一可異的連線欄位，不能用 Caller 自訂 search_path 重綁表。
+    conninfo = tuple({key: value for key, value in conninfo_to_dict(dsn).items()
+                      if key not in {"user", "password"}} for dsn, _, _ in roles)
+    if conninfo[0] != conninfo[1] or conninfo[1] != conninfo[2]:
+        raise ProtectedRpcConfigurationError("g4_publisher_database_rebound")
+    schema = _required_config(config, "MIRAGE_G3B_WORLD_SCHEMA")
+    for dsn, login, kind in roles:
+        _login_preflight(dsn, login, role=kind, schema=schema)
+    raw_evidence = _json_secret(config, "MIRAGE_G4_PUBLISHER_EVIDENCE_FILE")
+    if set(raw_evidence) != {"synthetic-inventory", "synthetic-carts", "medusa-native-cart"}:
+        raise ProtectedRpcConfigurationError("g4_publisher_evidence_platforms_invalid")
+    try:
+        evidences = {name: ProjectionEvidence.model_validate(payload)
+                     for name, payload in raw_evidence.items()}
+    except ValueError as exc:
+        raise ProtectedRpcConfigurationError("g4_publisher_evidence_unverifiable") from exc
+    domains = config.get("MIRAGE_DOMAINS_DIR")
+    medusa_source = (Path(domains) / "ecommerce/inputs/sources/medusa/openapi.yaml"
+                     if isinstance(domains, str) and domains else None)
+    publisher = PostgresVerifiedReceiptPublisher(
+        projector=PostgresProtectedNativeProjector(
+            roles[0][0], expected_login=roles[0][1], medusa_source=medusa_source,
+        ),
+        candidate_store=PostgresCandidateStore(roles[1][0]),
+        promoter=PostgresCandidatePromoter(roles[2][0], expected_login=roles[2][1]),
+        evidence_by_platform=evidences,
+    )
+    return create_fixed_candidate_publisher_app(publisher=publisher)
+
+
+def create_sender_service(config: Mapping[str, str]) -> FastAPI:
+    """核對 D-74 部署 Profile，再以獨立 Sender Login 建立封閉的 G4 服務。"""
+    from deception.world.protected_send import PostgresProtectedSender
+    from deception.security.restore_profile import load_restore_profile
+
+    if any(config.get(key) for key in (
+            "MIRAGE_POSTGRES_DSN", "MIRAGE_G3B_VERIFIER_DSN_FILE",
+            "MIRAGE_G3B_EXECUTOR_DSN_FILE", "MIRAGE_G3B_VALIDATOR_DSN_FILE",
+            "MIRAGE_G4_AUTHORIZER_DSN_FILE")):
+        raise ProtectedRpcConfigurationError("g3b_service_cross_role_secret_denied")
+    if config.get("MIRAGE_TRUSTED_SEND_ENABLE") not in (None, "false"):
+        raise ProtectedRpcConfigurationError("g3b_service_unsafe_runtime_configuration")
+    # Profile 只標示部署契約，絕不能藉此取消 Sender 的安全 Release Fuse。
+    load_restore_profile(config)
     dsn = _secret_file(config, "MIRAGE_G4_SENDER_DSN_FILE", max_bytes=4096)
     login = _required_config(config, "MIRAGE_G4_SENDER_LOGIN")
     _login_preflight(dsn, login, role="sender",
@@ -399,7 +583,13 @@ def from_environment() -> None:
     if (config.get("MIRAGE_TRUSTED_SEND_ENABLE") not in (None, "false")
             or sum(bool(config.get(name)) for name in (
                 "MIRAGE_G3B_EXECUTOR_DSN_FILE", "MIRAGE_G3B_VERIFIER_DSN_FILE",
-                "MIRAGE_G3B_VALIDATOR_DSN_FILE", "MIRAGE_G4_SENDER_DSN_FILE")) > 1):
+                "MIRAGE_G3B_VALIDATOR_DSN_FILE", "MIRAGE_G4_AUTHORIZER_DSN_FILE",
+                "MIRAGE_G4_SENDER_DSN_FILE")) > 1
+            or (any(config.get(key) for key in (
+                "MIRAGE_G4_PUBLISHER_READER_DSN_FILE",
+                "MIRAGE_G4_PUBLISHER_WRITER_DSN_FILE",
+                "MIRAGE_G4_PUBLISHER_PROMOTER_DSN_FILE"))
+                and config.get("MIRAGE_G3B_SERVICE_ROLE") != "publisher")):
         raise ProtectedRpcConfigurationError("g3b_service_unsafe_runtime_configuration")
     role = _required_config(config, "MIRAGE_G3B_SERVICE_ROLE")
     raw_port = _required_config(config, "MIRAGE_G3B_BIND_PORT")
@@ -437,6 +627,27 @@ def from_environment() -> None:
             server_cert=_tls_path(config, "MIRAGE_G4_SENDER_SERVER_CERT_FILE"),
             server_key=_tls_path(config, "MIRAGE_G4_SENDER_SERVER_KEY_FILE"),
             sender_client_ca=_tls_path(config, "MIRAGE_G4_SENDER_CLIENT_CA_FILE"),
+        )
+    elif role == "authorizer":
+        app = create_authorizer_service(config)
+        serve_fixed_authorizer_mtls(
+            app=app, host=host, port=int(raw_port),
+            server_cert=_tls_path(config, "MIRAGE_G4_AUTHORIZER_SERVER_CERT_FILE"),
+            server_key=_tls_path(config, "MIRAGE_G4_AUTHORIZER_SERVER_KEY_FILE"),
+            verifier_client_ca=_tls_path(config, "MIRAGE_G4_AUTHORIZER_VERIFIER_CLIENT_CA_FILE"),
+        )
+    elif role == "publisher":
+        if any(config.get(key) for key in (
+                "MIRAGE_G3B_EXECUTOR_DSN_FILE", "MIRAGE_G3B_VERIFIER_DSN_FILE",
+                "MIRAGE_G3B_VALIDATOR_DSN_FILE", "MIRAGE_G4_AUTHORIZER_DSN_FILE",
+                "MIRAGE_G4_SENDER_DSN_FILE")):
+            raise ProtectedRpcConfigurationError("g4_publisher_cross_role_secret_denied")
+        app = create_candidate_publisher_service(config)
+        serve_fixed_candidate_publisher_mtls(
+            app=app, host=host, port=int(raw_port),
+            server_cert=_tls_path(config, "MIRAGE_G4_PUBLISHER_SERVER_CERT_FILE"),
+            server_key=_tls_path(config, "MIRAGE_G4_PUBLISHER_SERVER_KEY_FILE"),
+            verifier_client_ca=_tls_path(config, "MIRAGE_G4_PUBLISHER_VERIFIER_CLIENT_CA_FILE"),
         )
     else:
         raise ProtectedRpcConfigurationError("g3b_service_unapproved_role")

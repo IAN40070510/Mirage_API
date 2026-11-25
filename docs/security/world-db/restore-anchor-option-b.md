@@ -2,6 +2,8 @@
 
 Status: **OWNER APPROVED / IMPLEMENTATION NOT COMPLETE / G5 NOT RUN**.
 
+> **D-74 scope update (2026-11-25):** Owner has selected a **full-feature, one-host standard Mirage profile** with **optional external Fence**. The absolute MUSTs, domain isolation and all acceptance cases below continue to govern the **external_fence enhanced profile when installed or advertised**; they are **not ordinary single-node startup requirements**. Standard mode does not claim whole-host rollback resistance and must independently pass all native role, transaction, ASGI/Send, Purge, detected-restore and Owner acceptance gates. Historical statements below remain as original Option B evidence, not proof that the new deployment profiles are implemented. See [D-74 profiles](single-node-restore-profiles.md). **Both profiles: NOT COMPLETE / NO-GO / Trusted Send OFF.**
+
 ## Trust boundary
 
 The Restore Anchor MUST be outside the World DB backup and restore domain. Its credentials, write authority, backup and retention policy MUST be independent from World DB Runtime, Verifier and Authorizer credentials. An isolated same-host laboratory store may validate the protocol but does not establish resistance to host-root compromise, host snapshot rollback, or a malicious Docker administrator.
@@ -221,6 +223,46 @@ World DB ↔ Fence DB 的跨庫 Commit Intent／ACK 對帳、完整事件語意�
 BD-05 Quarantine 原子解禁及 Sender／Purge 競態仍未實作，G5 不得簽成 PASS。
 本輪資料庫和網路均為拋棄式合成實驗，未觸及 staging/production。
 
+### 2026-11-25 Fence authority namespace／epoch 強制釘選（局部修補）
+
+在獨立 `PostgresAnchorPublisher` 與 `PostgresAnchorHeadReader` 的建構介面加入
+必填 `trusted_namespace`、`trusted_epoch`。這些值必須來自**獨立 Fence
+服務的部署設定**，不得從恢復後的 World DB、受信任 HTTP 請求或 Runtime
+參數取得。Publisher 在驗章／DB 寫入前拒絕不同範圍的 Checkpoint；Head
+Reader 在 DB 查詢／簽署 nonce 前拒絕不同 namespace 或 epoch，讀取原始鏈節
+也使用相同限制。這防止部署已釘選新世代時，舊世界資料誘使同一獨立服務
+替歷史世代簽署有效但過期的最新 Head。
+
+新增不需要資料庫的負面測試，驗證跨 namespace／舊 epoch 的 Publisher／
+Reader 請求在任何查詢前拒絕、未設定合法範圍不能啟動，並保留合法範圍的
+Head nonce 驗章。現有實體 PostgreSQL 測試仍負責證明合法發布與歷史鏈節
+讀取；未提供第二個專用 Fence DSN 的環境必須保留 SKIP，不可算成實體 PASS。
+
+**此子項仍未解決**：單一 namespace 下最高 active epoch 登錄（後續增量見下）、完整事件
+涵蓋、跨 World/Fence DB 未知 COMMIT／ACK 對帳、BD-05 原子自動解禁，以及
+Restore↔Sender↔Purge 競態。此切面不提供釋放 Quarantine 的 API，
+不修改正式發送封鎖，G5 仍 **OPEN／NO-GO**。
+
+### 2026-11-25 獨立 Fence DB 最高 active epoch 登錄（待實體 CI 簽收）
+
+第二個 Fence DB 隔離 schema 新增 `authority_epochs(namespace, generation, epoch)`
+不可變追加表，權威世代必須從 1 開始連續遞增、同一 namespace 不得重用 epoch。
+只有獨立 DBA 能追加；Publisher／Head Reader 只獲 `SELECT`，Runtime 無權讀寫。
+Publisher 在發佈之前使用與 DBA 世代追加同一把 namespace advisory transaction
+lock，再讀最高 generation 的 epoch；舊簽章與舊實體 DB login 不能在換代後
+接續更新 Head。Reader 在每次 Head 觀測與鏈節讀取時，都在獨立 DB 查當前
+最高 generation；舊 epoch 就算保有簽章有效的歷史 Head 也不可再次簽發。
+
+新增真第二 PostgreSQL 測試：管理者建立初始權威、Publisher／Reader 正常使用、
+DBA 追加第二世代、舊 Reader／Publisher 拒絕、新世代可進行獨立簽章鏈、
+Publisher 不得自行追加權威世代、管理者不能修改歷史或跳號。隔離 CI 會驗證
+這個新子項；在完成前不得把它登記為 PASS。
+
+**嚴格限制**：這只建立單一獨立 Fence DB 的世代上限與不可回退稽核資料。
+它不保證對抗該 Fence DB 管理者或儲存備份域自身的回退，也不驗證跨 epoch
+的全部業務事件涵蓋或跨兩庫原子性。BD-05 機器解禁、同時 Send/Purge、
+正式憑證與 Release Gate 仍未接線；正式 Trusted Send 保持 OFF。
+
 **隔離主線 CI 補證**：固定提交
 [`d35af3f`](https://github.com/IAN40070510/Mirage_API/commit/d35af3f62c9ab7bf667bfcae903540a3ec333f7d)
 的 [World PG17.6 #45426410173](https://github.com/IAN40070510/Mirage_API/actions/runs/45426410173)
@@ -247,12 +289,190 @@ Checkpoint。即使 Publisher Login 已有 Head 表的 UPDATE 權限，也不能
 Checkpoint，再證明 SQL Head 推進遭拒；不宣稱這可阻止已取得合法 Publisher
 簽章私鑰的人發布其他有效事件，也不能代替兩庫最高 Head 的持久化部署。
 
-**此項狀態仍是 G5 PARTIAL／NO-GO**：CI 只有兩個測試資料庫與用後即刪的
-隔離角色，尚未完成正式憑證隔離、不可回退的獨立最高 Head Authority、
+### 2026-11-25 Oracle 一次性完全隔離 PostgreSQL Lab — SQL／Restore PASS，已清理
+
+使用者另行授權在既有 SSH 主機 `138.2.107.99` 執行**測完立即清理**的
+Mirage 專用 Lab；不得借用或修改 MSDSS／正式 Mirage 容器、網路、資料卷與
+Secret。部署前盤點為 41 個既有容器、30 個網路、30 個資料卷；另以
+`mirage-g5-isotest-20261125-a71f` 全新命名空間建立兩個
+`postgres:17.6-alpine`（World／Fence）、兩個各自 `internal: true` 的
+Docker bridge、兩個獨立具名資料卷及一個同時接入兩個 Lab 網路的專用
+PostgreSQL Probe。沒有公布主機 TCP 埠，憑證在新建 0700 目錄產生、
+僅透過 Docker Secret 掛載，沒有讀取或複用 MSDSS Secret。
+
+以目前 `deploy/security-lab/g5-fence-schema.sql` 在 Fence DB 建立真實
+Trigger／表及最小權限角色；SQL 接受測試 **PASS**：拒絕 Authority 世代
+跳號與更新、拒絕 Checkpoint 改寫、拒絕不存在鏈節的 Head 推進，並允許
+連續有效鏈節前進至 Head 2、Authority Generation 2。World 在序號 1
+做 PostgreSQL `pg_dump -Fc`，推進至 2，再用 `pg_restore --clean`
+還原至 1；Probe 從專用雙網路以真實 SCRAM 登入讀得：
+
+```text
+PASS_FENCE_DDL_ACL_MONOTONIC_EPOCH_AND_HEAD | Head=2 | epoch-a
+PASS_RESTORED_WORLD_SEQ=1
+PASS_LIVE_SCRAM_ROLLBACK_QUARANTINE world=1 fence=2 auth_generation=2
+PASS_DB_NETWORK_SEPARATE_world_cannot_resolve_fence
+PASS_DB_NETWORK_SEPARATE_fence_cannot_resolve_world
+```
+
+這個 Quarantine 結論是隔離 Probe 比較兩庫序號所得的**驗收斷言**；不是
+正式 Restore 控制器、G4 Sender 或 BD-05 解禁路徑的端到端運轉證據。
+SQL Checkpoint 內容使用合成摘要與簽章占位資料，**不能**冒充 Publisher
+Ed25519 驗章測試；真實 Python／SCRAM／簽章鏈驗證另外由固定提交
+[`50b47a6`](https://github.com/IAN40070510/Mirage_API/commit/50b47a6696424e93692d31e06bb36cf23827c347)
+的 [World PG CI #45498525815](https://github.com/IAN40070510/Mirage_API/actions/runs/45498525815)
+（獨立 Fence PG `10 passed`）支援。
+
+Gateway 稽核工作：Fence DDL `job_01M87YDWBX008XNDD5HRYE07RH`；
+Fence SQL／ACL `job_01M87YG7MY00C46GC3BWX60W8M`；World
+`pg_dump` `job_01M87YH0P1001WWGQRVPJF66R7`、前進
+`job_01M87YH9AJ00EHA3W59DQPXQ8M`、`pg_restore`
+`job_01M87YHHDZ00P5G7D2PW606MSE`、還原確認
+`job_01M87YHVHT00XVTS3CXSBMAAAV`；跨網 SCRAM／Quarantine
+`job_01M87YJCXV00VV1FJQFM25PBSP`；反向網路隔離
+`job_01M87YKC8600SXBWY3XZ8B1RFW` 與
+`job_01M87YJQTG00PXG3RNERDH45A4`。
+
+清理 `compose.down` `job_01M87YNMDR00XKF9FNPYVT4WHC` 後，只針對
+本次新建的兩個具名資料卷及 Probe 自動產生的一個匿名資料卷執行已預覽的
+移除，並刪除新專案目錄及兩把一次性密鑰：
+`job_01M87YRTQQ00AYF6JHWB92462M`、
+`job_01M87YSHF2002CMM20ZVRYCZT6`、
+`job_01M87YS5CY0052CHY5N9K3XJ3S`、
+`job_01M87YTA7T00V9FFJJG8H5FMAF`。最後重新列舉為
+**41／30／30**，三份資源名稱集合與測試前完全相同，原有容器的執行
+狀態沒有變化，一次性工作目錄不存在。此測試對 MSDSS **零變更**。
+
+**判定：同主機的獨立 PostgreSQL Lab PASS／CLEAN；跨主機、不同回復域的
+正式 Restore Fence 未獲證明，G5 仍 OPEN／NO-GO，Trusted Send OFF。**
+
+### 2026-11-25 第二台 Oracle 主機一次性真簽章 Restore Lab — PASS／已銷毀
+
+使用者指定**不同於既有 `138.2.107.99` 共享主機**的獨立 SSH 主機
+`161.33.154.211`（Ubuntu 24.04 ARM64），要求完成驗證後刪除測試檔。
+先由使用者透過 PuTTY 在該主機核對 ED25519 SSH Host Key
+`SHA256:ISzzPU/8h6Js7i4diXg/FIqp0ir59rI7wqeMKo6C3a8`；Gateway 固定指紋
+並以專用臨時公鑰驗證登入成功。測試前盤點為 **0 容器／3 內建網路／0
+資料卷／0 映像**，全新專案路徑不存在。不修改 MSDSS 主機、正式環境、
+套件、系統核心、SSH 主機金鑰或防火牆。
+
+以一次性 `mirage-g5-external-oneoff-20261125-b43e` 專案部署 World／Fence
+兩個 `postgres:17.6-alpine`，各有獨立 `internal: true` Docker 網路、具名
+資料卷、SCRAM 認證與不對外發布的 5432 埠；無權限的測試端只加入這兩個
+Lab 網路。所有隨機資料庫密碼在主機新建 0700 目錄產生，以 Docker Secret
+掛載，不採用 Windows `.ppk` 或 MSDSS Secret。部署源碼精確鎖定
+[`5286138`](https://github.com/IAN40070510/Mirage_API/commit/528613877323fab158417cda065946f50098268f)。
+該主機沒有 Docker Buildx 和 `docker compose` 外掛，因此在不安裝任何
+主機套件的前提下，以既有 legacy Docker builder 和獨立
+`docker-compose` v2.24.0 建置與管理；建置上下文只含四個必要原始檔、
+空白 package init 和 Dockerfile，未包含密鑰。
+
+- **原始 G5 Python + 獨立實體 PostgreSQL**：真 Publisher／Reader／Runtime
+  SCRAM、Ed25519 簽章、世代切換、連續事件、SQL Trigger 與 ACL，共
+  `10 passed in 0.99s`（`job_01M883HJP400X4AGC8Q4G6K64A`）。
+- **額外端到端 signed restore Probe**：使用真正 `SignedAnchorCheckpoint`
+  與 `PostgresAnchorPublisher` 發布序號 1，再 `pg_dump -Fc` World；World
+  前進至 2 且已簽署 Fence Head 也到 2 後，實際執行 `pg_restore --clean`
+  將 World 回退至 1。獨立 `verify_restore_anchor` 回傳
+  `RESTORE_BEHIND` 且 `release_authorized=False`；Fence Head 保留 2。
+  DBA 再追加權威世代 2，舊 Publisher 與 Reader 均拒絕。
+  初始簽章 `job_01M883P4HG00005C12VNHRJ1F7`、
+  `pg_dump` `job_01M883PGJP00NCE6QN57GZ8R8S`、
+  發布第二鏈節 `job_01M883PZJF00WEJ6VSGPMZNH2Y`、
+  `pg_restore` `job_01M883QCP100SKJXJSGJJGVQDR`、
+  還原／世代拒絕驗證 `job_01M883QP9600DJCXQ8DFRMP8ZJ`。
+- **網路及密碼負向測試**：World/Fence 容器互相無 DNS 解析，Host
+  PostgreSQL 連線全面使用 SCRAM，錯誤密碼遭拒（
+  `job_01M883R87100Z2JB5BCT4KPJJR`、
+  `job_01M883S15V00TZE7RVYKCW6AMH`、
+  `job_01M883RT7300DK2R7PC277XY4B`）。
+
+```text
+10 passed in 0.99s
+PASS_SIGNED_HEAD_SEQ1_RELEASE_DENIED
+PASS_SIGNED_HEAD_SEQ2_WORLD_SEQ2_RELEASE_DENIED
+PASS_REAL_SIGNED_RESTORE_BEHIND_QUARANTINE world=1 fence=2 gen=2
+PASS_RETIRED_EPOCH_PUBLISHER_READER_DENIED
+PASS_WORLD_CANNOT_RESOLVE_FENCE
+PASS_FENCE_CANNOT_RESOLVE_WORLD
+PASS_SCRAM_REQUIRED_AND_WRONG_PASSWORD_REJECTED
+```
+
+清理以獨立 Compose `down` 作業 `job_01M883SSM500PNDZY2CW359RMC`
+移除 3 個容器與 2 個網路；專用資料卷移除
+`job_01M883V0QF00SYQZYN097519WK`、
+`job_01M883VG1F00ZQNZTK89780XJE`；再按實際 parent chain，逐一
+移除 **8 個**新建測試／中間 Docker 映像，未使用廣域 prune。最後移除含
+Git clone、程式、一次性密碼、Compose 與 SQL 的整個專用目錄（dry-run
+確認 528 entries，`job_01M88428S3009E9FR144HED03M`）。資源再次
+盤點回到**0 容器／3 內建網路／0 資料卷／0 映像**，專案路徑不存在。
+
+臨時 Gateway Ed25519 公鑰只對 `/home/ubuntu/.ssh/authorized_keys` 的
+精確一行做原子移除（`job_01M8843S91008RDDVQ50FDCCTK`，保留原
+owner／group／0600 權限），下一次連線在
+`job_01M884424T00JR72ARW5FP5KB0` 得到
+`unable to authenticate`，並已刪除 Gateway 臨時主機註冊。
+Gateway 刪除主機時仍輸出 `manual_required`，因為公鑰先被撤銷使
+Gateway 無法**再次**登入驗證；前述精確替換和 SSH 拒絕是已取得的
+撤銷證據，使用者仍可由 PuTTY 自行補做 `authorized_keys` 最後確認。
+Windows 原有 `private.ppk` **沒有讀取、傳送或刪除**。
+
+**界線：**新主機與原有 MSDSS 主機確實分離，但本次合成 World 與 Fence
+仍位於**同一台新的測試主機**，且測後全部銷毀；這不等於正式 World
+Host ↔ 外部 Fence Authority 的跨主機連線、獨立備份域不可回退能力，
+也未涵蓋雙 DB Unknown ACK、BD-05 自動解禁及 Send/Purge 競態。
+**G5 仍 PARTIAL／NO-GO，Trusted Send OFF，非 Owner 簽核。**
+
+### 2026-11-25 Fence COMMIT ACK 遺失的唯讀確認 API — 真 PG CI PASS
+
+`PostgresAnchorPublisher.confirm_committed(checkpoint)` 對事先簽署的
+`COMMITTED` Checkpoint 進行**純查詢**；它不重送 `append()`、不修改 Head，
+也不把 Fence ACK 當成 World DB 已提交的證據。查詢前先用固定 Ed25519
+公鑰驗簽、檢查預設 Namespace／Epoch；Fence 交易設定唯讀與鎖逾時，
+確認實際 Publisher Login，並取得與獨立 DBA 世代追加共用的 Advisory Lock。
+接著檢查最新 Authority Epoch、Publication ID 唯一索引對應的所有
+Checkpoint 欄位／簽章／摘要，以及獨立 Head 已包含該鏈節。
+
+| 條件 | 唯讀對帳結果 | 放行與重送 |
+| --- | --- | --- |
+| 同一 Publication 的完整欄位、簽章與 Digest 一致，Head 已包含 | 傳回既存 Checkpoint Digest | 仍不可解禁或自動重送 |
+| 簽章錯誤、Namespace／Epoch 不符、舊世代 | 拒絕 | 均不可 |
+| Publication 不存在、孤兒 Checkpoint／Head 未包含 | `publication_unresolved` | 均不可 |
+| 同 Publication ID 的鏈節內容不同、Head Digest 衝突 | `publication_conflict` | 均不可 |
+| Fence 連線、鎖、ACL 或交易結果不可觀測 | `publication_unverifiable` | 均不可 |
+
+新增真 PostgreSQL 測試覆蓋「**資料庫實際 COMMIT、客戶端遺失 ACK**」後
+查詢成功、尚未寫入的下一節保持 Unknown、第二節前進後仍可確認第一節、
+Publication ID 衝突及孤兒 Checkpoint、Authority Epoch 退役的拒絕；
+不需資料庫的單元測試證明錯誤簽章在連線前被攔截，網路中斷保持 Unknown。
+固定程式 SHA [`2276874`](https://github.com/IAN40070510/Mirage_API/commit/227687400d6f6e22425c09b3c046511beda35b14)
+的 [World PG17.6 CI #45525365753](https://github.com/IAN40070510/Mirage_API/actions/runs/45525365753)
+**success**：獨立實體 Fence PostgreSQL／SCRAM／Ed25519 `12 passed`、
+受保護 World DB `177 passed`、獨立 mTLS `5 passed`、G5 密碼學 `9 passed`；
+兩個 PG 實體服務分別使用 5432／5433 埠和不同 DB Login，全部是
+GitHub Actions 的可拋棄服務，不接入 MSDSS。相同 SHA 的
+[全量 Python CI #45525365730](https://github.com/IAN40070510/Mirage_API/actions/runs/45525365730)
+`success`：`1467 passed / 14 skipped / 2 warnings`（341.01 秒）；
+[容器 Push CI #45525365761](https://github.com/IAN40070510/Mirage_API/actions/runs/45525365761)
+及 [Draft PR CI #45525375489](https://github.com/IAN40070510/Mirage_API/actions/runs/45525375489)
+均 `success`。這些 PASS 是 Fence 只讀對帳**子項**，沒有證明 G5 完成。
+
+**未完成的安全邊界不變：**World DB 持久化的發布 Intent／雙資料庫未知 ACK
+狀態機、World COMMIT 確認、BD-05 Release、正式跨復原域部署、
+G4 真 Send/Purge 競態及 G6 Owner 驗收皆尚未證明。G5 OPEN，
+Trusted Send OFF／DECEIVE OFF，PR 保持 Draft／NO-GO。
+
+**此項狀態仍是 G5 PARTIAL／NO-GO**：CI 與一次性隔離主機測試通過真實
+密碼學與 PostgreSQL 合約，但尚未完成正式憑證隔離、不可回退的最高
+Head Authority、
 端到端事件語意覆蓋、World DB 發布意圖與雙向未知 ACK 對帳、BD-05
 Quarantine 原子自動解禁、正式 Restore／Send／Purge 競態。任何符合簽章的
 `HEAD_MATCHED` 仍固定 `release_authorized=False`，Sender 保持 Sealed。
 
-Use only the dedicated `mir-sec-world001-lab` resources for implementation and tests. Do not attach the existing staging networks, restart the seven existing containers, reuse production secrets, merge the Draft PR, or enable trusted send.
+The pre-existing `mir-sec-world001-lab` remains dedicated to its earlier tests.
+The separately authorized one-time `mirage-g5-isotest-20261125-a71f` environment
+was created outside those resources and completely removed after verification.
+Do not attach existing staging/MSDSS networks, restart existing containers, reuse
+production secrets, merge the Draft PR, or enable trusted send.
 
 Decision: **Option B approved**. Implementation: **IN PROGRESS**. G5: **NOT RUN**. MIR-SEC-WORLD-001: **OPEN**. Mirage release: **NO-GO**.

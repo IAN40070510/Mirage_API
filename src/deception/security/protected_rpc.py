@@ -52,6 +52,115 @@ class FixedNativeProjectionCall(SyntheticModel):
     receipt_id: UUID4
 
 
+class FixedAuthorizerCall(SyntheticModel):
+    """授權 RPC 只收由 Verifier 已簽驗的 Receipt ID，不收候選或決策資料。"""
+
+    receipt_id: UUID4
+
+
+class FixedCandidatePublisherMTLSClient:
+    """Verifier 以獨立 mTLS 身分只傳 Receipt，核對 Promotion Ref/Hash 不取 bytes。"""
+
+    def __init__(self, *, origin: str, client_cert: Path, client_key: Path,
+                 server_ca: Path) -> None:
+        """釘選專屬 HTTPS 服務與相互驗證憑證，拒絕 URL 夾帶任意路徑或身份。"""
+        parsed = urlsplit(origin) if isinstance(origin, str) else None
+        if (parsed is None or parsed.scheme != "https" or not parsed.hostname
+                or parsed.port is None or parsed.path not in {"", "/"}
+                or parsed.query or parsed.fragment or parsed.username or parsed.password):
+            raise ProtectedRpcConfigurationError("fixed_publisher_origin_invalid")
+        require_mtls_files(server_cert=client_cert, server_key=client_key,
+                           client_ca=server_ca)
+        context = ssl.create_default_context(cafile=str(server_ca))
+        context.load_cert_chain(str(client_cert), str(client_key))
+        if not context.check_hostname or context.verify_mode != ssl.CERT_REQUIRED:
+            raise ProtectedRpcConfigurationError("fixed_publisher_server_verification_required")
+        self._origin = origin.rstrip("/")
+        self._tls = context
+
+    async def publish_receipt(self, receipt_id: UUID, *, expected_candidate_hash: str) -> dict[str, object]:
+        """單次 RPC 核對 Receipt 派生 Ref 與原 Validator 已驗 Hash；ACK 不重送。"""
+        if (not isinstance(receipt_id, UUID) or receipt_id.version != 4
+                or not isinstance(expected_candidate_hash, str)
+                or re.fullmatch(r"[0-9a-f]{64}", expected_candidate_hash) is None):
+            raise ProtectedRpcConfigurationError("fixed_publisher_receipt_invalid")
+        async with httpx.AsyncClient(verify=self._tls, trust_env=False, timeout=8.0) as client:
+            response = await client.post(
+                self._origin + "/internal/v1/publish-receipt",
+                json={"receipt_id": str(receipt_id)},
+            )
+        if response.status_code != 200:
+            raise ProtectedRpcConfigurationError("fixed_publisher_result_unverifiable")
+        try:
+            result = json.loads(response.content, object_pairs_hook=unique_object,
+                                parse_constant=reject_constant)
+        except ValueError as exc:
+            raise ProtectedRpcConfigurationError("fixed_publisher_result_invalid") from exc
+        if (not isinstance(result, dict) or set(result) != {
+                    "receipt_id", "candidate_ref", "candidate_hash",
+                    "candidate_version", "trusted_send"}
+                or result["receipt_id"] != str(receipt_id)
+                or result["candidate_ref"] != "verified-native-" + receipt_id.hex
+                or not isinstance(result["candidate_hash"], str)
+                or re.fullmatch(r"[0-9a-f]{64}", result["candidate_hash"]) is None
+                or result["candidate_hash"] != expected_candidate_hash
+                or type(result["candidate_version"]) is not int
+                or result["candidate_version"] != 1
+                or result["trusted_send"] != "disabled"):
+            raise ProtectedRpcConfigurationError("fixed_publisher_result_binding_mismatch")
+        return result
+
+
+class FixedAuthorizerMTLSClient:
+    """獨立 Verifier 以固定 mTLS 身分單次呼叫 Authorizer，不重送未知 COMMIT。"""
+
+    def __init__(self, *, origin: str, client_cert: Path, client_key: Path,
+                 server_ca: Path) -> None:
+        """固定 Authorizer HTTPS 身分與專屬 Client 憑證，拒絕 URL 指向任意端點。"""
+        url = urlsplit(origin) if isinstance(origin, str) else None
+        if (url is None or url.scheme != "https" or not url.hostname or url.port is None
+                or url.path not in {"", "/"} or url.query or url.fragment
+                or url.username is not None or url.password is not None):
+            raise ProtectedRpcConfigurationError("fixed_authorizer_origin_invalid")
+        require_mtls_files(server_cert=client_cert, server_key=client_key, client_ca=server_ca)
+        context = ssl.create_default_context(cafile=str(server_ca))
+        context.load_cert_chain(str(client_cert), str(client_key))
+        if not context.check_hostname or context.verify_mode != ssl.CERT_REQUIRED:
+            raise ProtectedRpcConfigurationError("fixed_authorizer_tls_verification_required")
+        self._origin = origin.rstrip("/")
+        self._tls = context
+
+    async def authorize_receipt(self, receipt_id: UUID) -> dict[str, str]:
+        """只送單一 Receipt UUID4，精確核對回傳身分並拒絕任何補發指示。"""
+        if not isinstance(receipt_id, UUID) or receipt_id.version != 4:
+            raise ProtectedRpcConfigurationError("fixed_authorizer_receipt_invalid")
+        async with httpx.AsyncClient(verify=self._tls, trust_env=False, timeout=8.0) as client:
+            response = await client.post(
+                self._origin + "/internal/v1/authorize-receipt",
+                json={"receipt_id": str(receipt_id)},
+            )
+        if response.status_code != 200:
+            raise ProtectedRpcConfigurationError("fixed_authorizer_result_unverifiable")
+        try:
+            data = json.loads(response.content, object_pairs_hook=unique_object,
+                              parse_constant=reject_constant)
+        except ValueError as exc:
+            raise ProtectedRpcConfigurationError("fixed_authorizer_result_invalid") from exc
+        if (not isinstance(data, dict)
+                or set(data) != {"receipt_id", "admission_id", "send_owner",
+                                 "request_fingerprint", "candidate_hash", "trusted_send"}
+                or data["receipt_id"] != str(receipt_id)
+                or data["send_owner"] != "protected-sender-" + receipt_id.hex
+                or not isinstance(data["admission_id"], str)
+                or not re.fullmatch(r"[0-9a-f]{32}", data["admission_id"])
+                or any(not isinstance(data[name], str)
+                       or not re.fullmatch(r"[0-9a-f]{64}", data[name])
+                       for name in ("request_fingerprint", "candidate_hash"))
+                or data["trusted_send"] != "disabled"):
+            raise ProtectedRpcConfigurationError("fixed_authorizer_result_binding_mismatch")
+        return data
+
+
 class FixedExecutorMTLSClient:
     """獨立 Verifier 用專屬 Client Cert 對已固定 Receipt 單次呼叫 Executor。"""
 
@@ -291,7 +400,7 @@ class FixedNativeValidatorMTLSClient:
             raise ProtectedRpcConfigurationError("cart_creation_operation_unapproved")
         async with httpx.AsyncClient(verify=self._tls, trust_env=False, timeout=8.0) as client:
             response = await client.post(
-                self._origin + "/internal/v1/project-cart-creation",
+                self._origin + "/internal/v1/project-receipt",
                 json={"receipt_id": str(receipt_id)},
             )
         if response.status_code != 200:
@@ -378,7 +487,7 @@ class FixedNativeValidatorMTLSClient:
             raise ProtectedRpcConfigurationError("medusa_creation_operation_unapproved")
         async with httpx.AsyncClient(verify=self._tls, trust_env=False, timeout=8.0) as client:
             response = await client.post(
-                self._origin + "/internal/v1/project-medusa-creation",
+                self._origin + "/internal/v1/project-receipt",
                 json={"receipt_id": str(receipt_id)},
             )
         if response.status_code != 200:
@@ -480,7 +589,7 @@ class FixedNativeValidatorMTLSClient:
             raise ProtectedRpcConfigurationError("cart_validator_unexpected_attempt")
         async with httpx.AsyncClient(verify=self._tls, trust_env=False, timeout=8.0) as client:
             response = await client.post(
-                self._origin + "/internal/v1/project-cart-read",
+                self._origin + "/internal/v1/project-receipt",
                 json={"receipt_id": str(receipt_id)},
             )
         if response.status_code != 200:
@@ -593,7 +702,7 @@ class FixedNativeValidatorMTLSClient:
             raise ProtectedRpcConfigurationError("medusa_validator_operation_unapproved")
         async with httpx.AsyncClient(verify=self._tls, trust_env=False, timeout=8.0) as client:
             response = await client.post(
-                self._origin + "/internal/v1/project-medusa-read",
+                self._origin + "/internal/v1/project-receipt",
                 json={"receipt_id": str(receipt_id)},
             )
         if response.status_code != 200:
@@ -681,7 +790,7 @@ class FixedNativeValidatorMTLSClient:
             raise ProtectedRpcConfigurationError("medusa_add_validator_operation_unapproved")
         async with httpx.AsyncClient(verify=self._tls, trust_env=False, timeout=8.0) as client:
             response = await client.post(
-                self._origin + "/internal/v1/project-medusa-add-success",
+                self._origin + "/internal/v1/project-receipt",
                 json={"receipt_id": str(receipt_id)},
             )
         if response.status_code != 200:
@@ -771,7 +880,7 @@ class FixedNativeValidatorMTLSClient:
 
         async with httpx.AsyncClient(verify=self._tls, trust_env=False, timeout=8.0) as client:
             response = await client.post(
-                self._origin + "/internal/v1/project-medusa-rejection",
+                self._origin + "/internal/v1/project-receipt",
                 json={"receipt_id": str(receipt_id)},
             )
         if response.status_code != 200:
@@ -843,7 +952,7 @@ class FixedNativeValidatorMTLSClient:
             raise ProtectedRpcConfigurationError("synthetic_validator_operation_unapproved")
         async with httpx.AsyncClient(verify=self._tls, trust_env=False, timeout=8.0) as client:
             response = await client.post(
-                self._origin + "/internal/v1/project-synthetic-rejection",
+                self._origin + "/internal/v1/project-receipt",
                 json={"receipt_id": str(receipt_id)},
             )
         if response.status_code != 200:
@@ -920,7 +1029,7 @@ class FixedNativeValidatorMTLSClient:
             raise ProtectedRpcConfigurationError("synthetic_success_attempt_invalid")
         async with httpx.AsyncClient(verify=self._tls, trust_env=False, timeout=8.0) as client:
             response = await client.post(
-                self._origin + "/internal/v1/project-synthetic-success",
+                self._origin + "/internal/v1/project-receipt",
                 json={"receipt_id": str(receipt_id)},
             )
         if response.status_code != 200:
@@ -1013,7 +1122,7 @@ class FixedNativeValidatorMTLSClient:
             raise ProtectedRpcConfigurationError("inventory_validator_operation_unapproved")
         async with httpx.AsyncClient(verify=self._tls, trust_env=False, timeout=8.0) as client:
             response = await client.post(
-                self._origin + "/internal/v1/project-inventory-snapshot",
+                self._origin + "/internal/v1/project-receipt",
                 json={"receipt_id": str(receipt_id)},
             )
         if response.status_code != 200:
@@ -1114,7 +1223,7 @@ class FixedNativeValidatorMTLSClient:
             raise ProtectedRpcConfigurationError("inventory_operation_validator_unapproved")
         async with httpx.AsyncClient(verify=self._tls, trust_env=False, timeout=8.0) as client:
             response = await client.post(
-                self._origin + "/internal/v1/project-inventory-operation",
+                self._origin + "/internal/v1/project-receipt",
                 json={"receipt_id": str(receipt_id)},
             )
         if response.status_code != 200:
@@ -1295,12 +1404,13 @@ def create_fixed_executor_app(*, executor) -> FastAPI:
 
 
 def create_native_validator_app(*, projector) -> FastAPI:
-    """在專用 Validator mTLS 入口重建受保護的 Medusa 原生拒絕候選。
+    """在專用 Validator mTLS 入口唯讀重建 20 種原生 HTTP 候選。
 
     只接受 Receipt，不接受 Caller 指定模板、Scope、Status 或 Payload。
     回傳的是內部候選交接資料，**不能**作為已授權的客戶端 HTTP 回應。
     """
     from deception.world.protected_native_http import PostgresProtectedNativeProjector
+    from starlette.concurrency import run_in_threadpool
 
     if not isinstance(projector, PostgresProtectedNativeProjector):
         raise ProtectedRpcConfigurationError("native_validator_requires_protected_projector")
@@ -1312,6 +1422,7 @@ def create_native_validator_app(*, projector) -> FastAPI:
         return {"control_plane": "native-validator-candidate-only", "trusted_send": "disabled"}
 
     @app.post("/internal/v1/project-inventory-snapshot")
+    @app.post("/internal/v1/project-receipt")
     @app.post("/internal/v1/project-inventory-operation")
     @app.post("/internal/v1/project-cart-read")
     @app.post("/internal/v1/project-medusa-creation")
@@ -1322,7 +1433,7 @@ def create_native_validator_app(*, projector) -> FastAPI:
     @app.post("/internal/v1/project-synthetic-rejection")
     @app.post("/internal/v1/project-medusa-rejection")
     async def project(request: Request) -> dict[str, object]:
-        """按固定 URL 選 Medusa 400/404 或 Synthetic 409，不接受 Caller 選模板。"""
+        """依已驗 Receipt 或相容固定路徑分派可信投影，隔離同步 DB 鎖等待。"""
         if request.scope.get("scheme") != "https":
             raise HTTPException(status_code=503, detail="native_validator_tls_required")
         received = bytearray()
@@ -1339,26 +1450,29 @@ def create_native_validator_app(*, projector) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="native_validator_request_invalid") from exc
         try:
-            if request.scope.get("path") == "/internal/v1/project-inventory-snapshot":
-                projected = projector.project_inventory_snapshot(UUID(str(call.receipt_id)))
+            if request.scope.get("path") == "/internal/v1/project-receipt":
+                selected = projector.project_verified_receipt
+            elif request.scope.get("path") == "/internal/v1/project-inventory-snapshot":
+                selected = projector.project_inventory_snapshot
             elif request.scope.get("path") == "/internal/v1/project-inventory-operation":
-                projected = projector.project_inventory_operation(UUID(str(call.receipt_id)))
+                selected = projector.project_inventory_operation
             elif request.scope.get("path") == "/internal/v1/project-cart-read":
-                projected = projector.project_cart_read(UUID(str(call.receipt_id)))
+                selected = projector.project_cart_read
             elif request.scope.get("path") == "/internal/v1/project-medusa-creation":
-                projected = projector.project_medusa_creation(UUID(str(call.receipt_id)))
+                selected = projector.project_medusa_creation
             elif request.scope.get("path") == "/internal/v1/project-medusa-read":
-                projected = projector.project_medusa_read(UUID(str(call.receipt_id)))
+                selected = projector.project_medusa_read
             elif request.scope.get("path") == "/internal/v1/project-medusa-add-success":
-                projected = projector.project_medusa_add_success(UUID(str(call.receipt_id)))
+                selected = projector.project_medusa_add_success
             elif request.scope.get("path") == "/internal/v1/project-cart-creation":
-                projected = projector.project_cart_creation(UUID(str(call.receipt_id)))
+                selected = projector.project_cart_creation
             elif request.scope.get("path") == "/internal/v1/project-synthetic-success":
-                projected = projector.project_synthetic_success(UUID(str(call.receipt_id)))
+                selected = projector.project_synthetic_success
             elif request.scope.get("path") == "/internal/v1/project-synthetic-rejection":
-                projected = projector.project_synthetic_rejection(UUID(str(call.receipt_id)))
+                selected = projector.project_synthetic_rejection
             else:
-                projected = projector.project_medusa_rejection(UUID(str(call.receipt_id)))
+                selected = projector.project_medusa_rejection
+            projected = await run_in_threadpool(selected, call.receipt_id)
         except Exception as exc:
             raise HTTPException(status_code=503, detail="native_validator_source_unverifiable") from exc
         return {
@@ -1372,6 +1486,115 @@ def create_native_validator_app(*, projector) -> FastAPI:
             "source": projected.source.model_dump(),
             "trusted_send": "disabled",
         }
+
+    return app
+
+
+def create_fixed_candidate_publisher_app(*, publisher) -> FastAPI:
+    """獨立 Publisher HTTPS/mTLS 只接 Receipt，固定投影、保存、Promotion 一次。
+
+    這不是 Sender；只回傳參照／Hash／version 的內部對帳結果，絕不回應原生
+    Client bytes 或為未知 COMMIT 自動重試。Caller 無法提供 Evidence／Source。
+    """
+    import psycopg
+    from starlette.concurrency import run_in_threadpool
+    from deception.world.protected_grant import (
+        PostgresVerifiedReceiptPublisher, ProtectedGrantError,
+    )
+    from deception.world.store import WorldStoreError
+
+    if not isinstance(publisher, PostgresVerifiedReceiptPublisher):
+        raise ProtectedRpcConfigurationError("fixed_publisher_requires_protected_publisher")
+    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+
+    @app.get("/internal/ready")
+    async def ready() -> dict[str, str]:
+        """只證明受信任 Publisher 入口存活，不宣稱 Promotion 或 Send 已放行。"""
+        return {"control_plane": "native-candidate-publisher", "trusted_send": "disabled"}
+
+    @app.post("/internal/v1/publish-receipt")
+    async def publish(request: Request) -> dict[str, object]:
+        """HTTPS 單一 UUID4 Receipt 固定寫入，拒絕變更候選或 ACK 不明重試。"""
+        if request.scope.get("scheme") != "https":
+            raise HTTPException(status_code=503, detail="fixed_publisher_tls_required")
+        received = bytearray()
+        async for chunk in request.stream():
+            if len(received) + len(chunk) > 1024:
+                raise HTTPException(status_code=413, detail="fixed_publisher_request_too_large")
+            received.extend(chunk)
+        try:
+            parsed = json.loads(received, object_pairs_hook=unique_object,
+                                parse_constant=reject_constant)
+            if not isinstance(parsed, dict) or set(parsed) != {"receipt_id"}:
+                raise ValueError("fixed_publisher_fields_invalid")
+            call = FixedNativeProjectionCall.model_validate_json(received)
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=400, detail="fixed_publisher_rpc_invalid") from exc
+        try:
+            result = await run_in_threadpool(publisher.publish_receipt_once, call.receipt_id)
+        except (ProtectedGrantError, WorldStoreError, psycopg.Error, ValueError) as exc:
+            raise HTTPException(status_code=503,
+                                detail="fixed_publisher_promotion_unverifiable") from exc
+        return {"receipt_id": str(result.receipt_id), "candidate_ref": result.candidate_ref,
+                "candidate_hash": result.candidate_hash,
+                "candidate_version": result.candidate_version,
+                "trusted_send": "disabled"}
+
+    return app
+
+
+def create_fixed_authorizer_app(*, authorizer) -> FastAPI:
+    """以獨立 mTLS Authorizer 提供只接收 Receipt UUID4 的固定一次性授權 RPC。
+
+    不允許 Caller 指定 Body、Status、Candidate、Scope、Owner、Deadline 或
+    Policy Revision；所有真正授權資料在 Authorizer 實體 Login 的 DB 查回。
+    本入口只產生已授權的 Snapshot，不向 Client／Gateway 發送業務 bytes。
+    """
+    from deception.world.protected_grant import PostgresProtectedAuthorizer, ProtectedGrantError
+    from starlette.concurrency import run_in_threadpool
+    import psycopg
+
+    if not isinstance(authorizer, PostgresProtectedAuthorizer):
+        raise ProtectedRpcConfigurationError("fixed_authorizer_requires_protected_authorizer")
+    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+
+    @app.get("/internal/ready")
+    async def ready() -> dict[str, str]:
+        """只回報獨立 Authorizer 入口存活，不冒稱已完成業務回應。"""
+        return {"control_plane": "authorizer-receipt-only", "trusted_send": "disabled"}
+
+    @app.post("/internal/v1/authorize-receipt")
+    async def authorize_receipt(request: Request) -> dict[str, str]:
+        """嚴格解析單一 Receipt，COMMIT／ACL 不明一律 503 且不自行重試。"""
+        if request.scope.get("scheme") != "https":
+            raise HTTPException(status_code=503, detail="fixed_authorizer_tls_required")
+        received = bytearray()
+        async for chunk in request.stream():
+            if len(received) + len(chunk) > 2048:
+                raise HTTPException(status_code=413, detail="fixed_authorizer_rpc_too_large")
+            received.extend(chunk)
+        body = bytes(received)
+        try:
+            data = json.loads(body, object_pairs_hook=unique_object,
+                              parse_constant=reject_constant)
+            if not isinstance(data, dict) or set(data) != {"receipt_id"}:
+                raise ValueError("fixed_authorizer_fields_invalid")
+            # SyntheticModel 的 strict UUID4 不接受 Python str 隱式轉型；
+            # 在獨立 JSON 重複鍵檢查後，使用 JSON 模式解析線上 UUID 字串。
+            call = FixedAuthorizerCall.model_validate_json(body)
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=400, detail="fixed_authorizer_rpc_invalid") from exc
+        try:
+            # 同步 PostgreSQL 鎖等待不得卡住 mTLS Event Loop 的其他請求。
+            admission, owner = await run_in_threadpool(
+                authorizer.authorize_promoted_receipt_once, call.receipt_id)
+        except (ProtectedGrantError, psycopg.Error, ValueError) as exc:
+            raise HTTPException(status_code=503,
+                                detail="fixed_authorizer_result_unverifiable") from exc
+        return {"receipt_id": str(call.receipt_id), "admission_id": admission.admission_id,
+                "send_owner": owner,
+                "request_fingerprint": admission.request_binding_digest,
+                "candidate_hash": admission.candidate_hash, "trusted_send": "disabled"}
 
     return app
 
@@ -1391,13 +1614,13 @@ def create_fixed_sender_app(*, sender) -> FastAPI:
     @app.get("/internal/ready")
     async def ready() -> dict[str, str]:
         """只回報 Sender mTLS 服務存活，不聲稱可起送或完成 G5。"""
-        return {"control_plane": "sender-sealed-until-restore-fence",
+        return {"control_plane": "sender-sealed-pending-security-acceptance",
                 "trusted_send": "disabled"}
 
     @app.post("/internal/v1/send")
     async def send() -> None:
         """任何起送或偽造 Payload 嘗試都固定封閉，且不呼叫 Sender。"""
-        raise HTTPException(status_code=503, detail="fixed_sender_restore_fence_required")
+        raise HTTPException(status_code=503, detail="fixed_sender_release_gates_not_met")
 
     return app
 
@@ -1408,6 +1631,7 @@ def create_direct_verifier_app(
     executor_client: FixedExecutorMTLSClient | None = None,
     executor_clients: Mapping[str, FixedExecutorMTLSClient] | None = None,
     native_validator_client: FixedNativeValidatorMTLSClient | None = None,
+    candidate_publisher_client: FixedCandidatePublisherMTLSClient | None = None,
 ) -> FastAPI:
     """在獨立 Gateway mTLS 入口由實際 HTTP 訊息建立受保護 Operation Receipt。
 
@@ -1426,6 +1650,9 @@ def create_direct_verifier_app(
         raise ProtectedRpcConfigurationError("direct_verifier_executor_routes_ambiguous")
     if native_validator_client is not None and not isinstance(native_validator_client, FixedNativeValidatorMTLSClient):
         raise ProtectedRpcConfigurationError("direct_verifier_native_validator_invalid")
+    if (candidate_publisher_client is not None
+            and not isinstance(candidate_publisher_client, FixedCandidatePublisherMTLSClient)):
+        raise ProtectedRpcConfigurationError("direct_verifier_publisher_client_invalid")
     if executor_clients is not None and (
             not isinstance(executor_clients, Mapping) or not executor_clients
             or any(platform not in {"synthetic-inventory", "synthetic-carts", "medusa-native-cart"}
@@ -1707,6 +1934,24 @@ def create_direct_verifier_app(
             except Exception as exc:
                 raise HTTPException(status_code=503,
                                     detail="direct_verifier_synthetic_projection_unverifiable") from exc
+        promotion = None
+        if candidate_publisher_client is not None:
+            # Publisher 不得取得 Caller 自填的候選資料，且只能在另一個獨立
+            # Validator 已完成全封套驗證後接受 Receipt。Hash 不匹配即拒絕。
+            if (not isinstance(projection, dict)
+                    or projection.get("delivery") != "candidate_only_no_send_authorization"
+                    or not isinstance(projection.get("envelope_hash"), str)
+                    or re.fullmatch(r"[0-9a-f]{64}", projection["envelope_hash"]) is None):
+                raise HTTPException(status_code=503,
+                                    detail="direct_verifier_publisher_projection_missing")
+            try:
+                promotion = await candidate_publisher_client.publish_receipt(
+                    receipt_id, expected_candidate_hash=projection["envelope_hash"],
+                )
+            except Exception as exc:
+                # 不猜 Promotion 是否 COMMIT，絕不重用 JTI 或再次發出 Publisher RPC。
+                raise HTTPException(status_code=503,
+                                    detail="direct_verifier_publisher_unverifiable") from exc
         # 不能在 HTTP 回應暴露已驗證 claims 或受保護 DB Secret；此結果非 Sender。
         result: dict[str, object] = {"receipt_id": str(receipt_id),
                                      "operation_id": operation.operation_id}
@@ -1714,6 +1959,8 @@ def create_direct_verifier_app(
             result["executor_result"] = outcome
         if projection is not None:
             result["native_projection"] = projection
+        if promotion is not None:
+            result["candidate_promotion"] = promotion
         return result
 
     return app
@@ -1872,6 +2119,52 @@ def serve_fixed_sender_mtls(
     )
     if config.ssl_cert_reqs is not ssl.CERT_REQUIRED:
         raise ProtectedRpcConfigurationError("fixed_sender_mtls_not_required")
+    uvicorn.Server(config).run()
+
+
+def serve_fixed_authorizer_mtls(
+    *, app: FastAPI, host: str, port: int, server_cert: Path,
+    server_key: Path, verifier_client_ca: Path,
+) -> None:
+    """以專屬 HTTPS Server 與 Verifier Client CA 啟動真正憑證驗證的 Authorizer。"""
+    if not isinstance(app, FastAPI):
+        raise ProtectedRpcConfigurationError("fixed_authorizer_app_required")
+    require_mtls_files(server_cert=server_cert, server_key=server_key,
+                       client_ca=verifier_client_ca)
+    if not isinstance(host, str) or not host or type(port) is not int or not 1 <= port <= 65535:
+        raise ProtectedRpcConfigurationError("fixed_authorizer_bind_invalid")
+    config = uvicorn.Config(
+        app, host=host, port=port,
+        ssl_certfile=str(server_cert), ssl_keyfile=str(server_key),
+        ssl_ca_certs=str(verifier_client_ca), ssl_cert_reqs=ssl.CERT_REQUIRED,
+        ssl_version=ssl.PROTOCOL_TLS_SERVER, http="h11", log_level="warning",
+        proxy_headers=False, access_log=False,
+    )
+    if config.ssl_cert_reqs is not ssl.CERT_REQUIRED:
+        raise ProtectedRpcConfigurationError("fixed_authorizer_mtls_not_required")
+    uvicorn.Server(config).run()
+
+
+def serve_fixed_candidate_publisher_mtls(
+    *, app: FastAPI, host: str, port: int, server_cert: Path,
+    server_key: Path, verifier_client_ca: Path,
+) -> None:
+    """Publisher 的專屬 mTLS Listener；無憑證或異角色 Client 在網路層拒絕。"""
+    if not isinstance(app, FastAPI):
+        raise ProtectedRpcConfigurationError("fixed_publisher_app_required")
+    require_mtls_files(server_cert=server_cert, server_key=server_key,
+                       client_ca=verifier_client_ca)
+    if not isinstance(host, str) or not host or type(port) is not int or not 1 <= port <= 65535:
+        raise ProtectedRpcConfigurationError("fixed_publisher_bind_invalid")
+    config = uvicorn.Config(
+        app, host=host, port=port,
+        ssl_certfile=str(server_cert), ssl_keyfile=str(server_key),
+        ssl_ca_certs=str(verifier_client_ca), ssl_cert_reqs=ssl.CERT_REQUIRED,
+        ssl_version=ssl.PROTOCOL_TLS_SERVER, http="h11", log_level="warning",
+        proxy_headers=False, access_log=False,
+    )
+    if config.ssl_cert_reqs is not ssl.CERT_REQUIRED:
+        raise ProtectedRpcConfigurationError("fixed_publisher_mtls_not_required")
     uvicorn.Server(config).run()
 
 

@@ -302,6 +302,11 @@ def from_environment():
     required = ("MIRAGE_TRUSTED_SETTINGS_FILE", "MIRAGE_POSTGRES_DSN", "MIRAGE_DEMO_ORIGIN")
     if any(not os.environ.get(name) for name in required):
         raise ValueError("trusted settings file, PostgreSQL DSN and deployment origin are required")
+    from deception.security.restore_profile import load_restore_profile
+
+    # 正式入口先鎖定 D-74 模式聲明；外部設定遺失／錯配時不得轉成單機。
+    # 這是配置驗證而非 Restore release，後方的獨立 Send Fuse 仍維持封閉。
+    load_restore_profile()
     from deception.security.world_acl import WorldAclPreflightError, require_restricted_world_runtime
 
     require_restricted_world_runtime(os.environ["MIRAGE_POSTGRES_DSN"],

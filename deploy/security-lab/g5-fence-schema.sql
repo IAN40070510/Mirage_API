@@ -2,6 +2,37 @@
 -- A separate database owner must provision publisher/head-reader login ACLs.
 CREATE SCHEMA mirage_restore_fence;
 
+-- Out-of-World-DB epoch authority: only the independent DBA may append.
+-- A signed Head for an older epoch must never be mistaken for the current Head.
+CREATE TABLE mirage_restore_fence.authority_epochs (
+    namespace text NOT NULL,
+    generation bigint NOT NULL CHECK (generation BETWEEN 1 AND 9223372036854775806),
+    epoch text NOT NULL,
+    PRIMARY KEY (namespace, generation),
+    UNIQUE (namespace, epoch)
+);
+
+CREATE FUNCTION mirage_restore_fence.protect_authority_epoch()
+RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+    previous_generation bigint;
+BEGIN
+    -- The Publisher takes this same transaction lock before reading the latest
+    -- epoch. It cannot commit an old-epoch Head after an epoch transition.
+    PERFORM pg_advisory_xact_lock(hashtextextended('mirage.fence.epoch:' || NEW.namespace, 0));
+    SELECT MAX(generation) INTO previous_generation
+    FROM mirage_restore_fence.authority_epochs WHERE namespace = NEW.namespace;
+    IF NEW.generation <> COALESCE(previous_generation, 0) + 1 THEN
+        RAISE EXCEPTION 'restore_anchor_epoch_not_monotonic' USING ERRCODE = '42501';
+    END IF;
+    RETURN NEW;
+END
+$$;
+
+CREATE TRIGGER authority_epoch_append_only
+BEFORE INSERT ON mirage_restore_fence.authority_epochs
+FOR EACH ROW EXECUTE FUNCTION mirage_restore_fence.protect_authority_epoch();
+
 CREATE TABLE mirage_restore_fence.checkpoints (
     namespace text NOT NULL,
     epoch text NOT NULL,
@@ -33,6 +64,10 @@ BEGIN
     RAISE EXCEPTION 'restore_anchor_append_only' USING ERRCODE = '42501';
 END
 $$;
+
+CREATE TRIGGER authority_epoch_immutable
+BEFORE UPDATE OR DELETE OR TRUNCATE ON mirage_restore_fence.authority_epochs
+FOR EACH STATEMENT EXECUTE FUNCTION mirage_restore_fence.reject_checkpoint_mutation();
 
 CREATE TRIGGER checkpoints_immutable
 BEFORE UPDATE OR DELETE OR TRUNCATE ON mirage_restore_fence.checkpoints

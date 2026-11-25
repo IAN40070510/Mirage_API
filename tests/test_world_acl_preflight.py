@@ -42,6 +42,8 @@ def test_world_acl_formal_entrypoint_cannot_bypass_missing_services(monkeypatch)
     monkeypatch.setenv("MIRAGE_TRUSTED_SETTINGS_FILE", "/unused/not_read.json")
     monkeypatch.setenv("MIRAGE_POSTGRES_DSN", "postgresql://unused.invalid/db")
     monkeypatch.setenv("MIRAGE_DEMO_ORIGIN", "https://invalid.example")
+    monkeypatch.setenv("MIRAGE_RESTORE_PROFILE", "standard_single_node")
+    monkeypatch.setenv("MIRAGE_RESTORE_PROFILE_VERSION", "1")
     # 模擬 ACL 檢查已回傳 OK，保護服務尚未接入的 Release Fuse 仍須獨立存在。
     monkeypatch.setattr("deception.security.world_acl.require_restricted_world_runtime",
                         lambda *_args, **_kwargs: None)

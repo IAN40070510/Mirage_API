@@ -4,6 +4,8 @@
 
 **v0.2 — Test Plan Only；全部新案例狀態 `NOT_RUN`，不能因本文件被提交而改為 PASS。**
 
+> **2026-11-25 D-74 deployment-scope update:** 發行分為完整功能的 `standard_single_node` 與選配 `external_fence`。以下歷史上對外部 Anchor 的嚴格測試保留，**只在啟用／宣稱 Enhanced Profile 時作為必要外部保證**；不構成標準單機 API 必須有第二台主機的條件。標準單機仍需完整 Native HTTP/Send/Purge/ACL/Unknown/已知 Restore 驗收，且不宣稱能偵測整台 VM 靜默回滾。新矩陣見 [D-74 模式驗收](single-node-restore-profiles.md)；**全部新項目 NOT_RUN、Trusted Send OFF、NO-GO**。
+
 ## 1. 測試環境、身份與證據
 
 - 基準原始碼：Mirage `main` `88dc2008fd35a2d3873949a769653dc9f18e8980`；針對修復 PR 再記錄 branch SHA、Migration Hash、PostgreSQL 版本、Role ACL 與 feature flags。
@@ -146,6 +148,12 @@
 ## 6. 關閉與部署限制
 
 測試報告、ACL Dump、容器秘密掛載、真實 Postgres 版本、Key Trust Registry、Restore 手冊、完整 G3b～G6 技術驗收和 Owner 對固定 SHA／環境的最終核准**缺一不可**。人工責任依已採納的 [Solo Developer Security Acceptance v1](solo-developer-security-acceptance-v1.md) 由 Owner 承擔；外部獨立人工審查建議但非本個人專案的一般強制門檻，未執行不得稱為已受第三方審核。未完成時：`MIR-SEC-WORLD-001: OPEN`、`Mirage release: NO-GO`、`production trusted-send mode: DISABLED`（**政策要求；真實強制控制尚待查核**）。沒有 HTTP 攻擊回報或 PR 合併不能取代證據。
+
+## D-74 補充：Profile 不能混用 PASS
+
+- 標準單機 Profile 的驗收不能拿外部 Fence 的模擬 CI 替代；至少要在無外部 DSN／Key 的真實部署，證實完整成功與拒絕 HTTP、Send Lease/ASGI、Purge/GC、ACL、已知 Restore 與未知 COMMIT 均遵守不可重送原則。
+- 外部 Fence 強化 Profile 的 `WORLD-RESTORE-PUBLISH-01`、`WORLD-RESTORE-FENCE-01`、RESTORE-ANCHOR 與 BD-05 仍需全部真實故障注入；同主機兩個 Docker PG 只能是協定子測試。
+- Profile 切換、外部服務故障、舊 Config／Mixed Binary、Release Fuse 和安全能力聲明須獨立負向驗收。**本增補沒有執行任何安全案例**。
 
 ## 7. v0.2 契約完成／狀態交付規則
 

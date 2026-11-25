@@ -54,6 +54,77 @@ Session 逐欄比對，保留已驗證的 `native_projection.status_code`、
 由 Runtime 自選 Body、Status 或 Template。不得把 `body_b64` 直接交給 Gateway
 發送，須先建立合法 Promotion／Authorized Snapshot／獨立 Sender Lease 與 G5 Fence。
 
+新增 `POST /internal/v1/project-receipt` 作為獨立 Validator 的統一投影入口：
+外部請求只能提供單一 UUIDv4 `receipt_id`；專用唯讀 PostgreSQL Login
+從不可變 `protected_http_operation_bindings` 與 `ingress_receipts` 的 Fingerprint
+一致性，固定選擇 20 個 Synthetic／Medusa Operation 之一。寫入操作再查真
+`protected_world_commit_sources`、`protected_world_rejection_sources` 與
+`protected_medusa_rejection_sources` 的唯一互斥來源，分派已驗證的成功或拒絕
+投影；來源缺失、混雜、Operation／Receipt／Fingerprint 重綁皆 fail closed。
+此入口不接受 Caller 提供 Handler、成功／失敗狀態碼、Body、Scope、Template
+或核准旗標；返回的仍是**候選**，不建立 Promotion／Grant／Sender Lease。
+Verifier 的十條原生候選 mTLS Client 路徑都收斂到這個 Receipt-only URL，
+各路徑仍獨立核對真實 Executor Operation／Envelope／來源、原始已驗簽 JWS
+的 Scope 與該操作的固定原生 JSON 語意；固定分型投影 RPC 只保留向後相容。
+Validator 將同步 PostgreSQL 查證放進受控執行緒池，不在 ASGI Event Loop
+上等待 DB／Row Lock；所有來源查核錯誤仍回 503，並無候選降級路徑。
+此接線**未建立** Verifier→Authorizer→Sender 的完整授權傳輸通路，
+不得視為 G4/G6 的 Client HTTP 發送驗收。
+
+G4 新增受信任 `PostgresVerifiedReceiptPublisher` 與固定
+`POST /internal/v1/publish-receipt` HTTP App：唯一 Caller 欄位是 UUID4 Receipt；
+Publisher 在已驗證的唯讀原生投影上重新計算完整 v1 Envelope，從不可變 Ingress
+Receipt／ReadAdmission 取 DB 期限，使用固定 `verified-native-{receipt_id.hex}`
+參照與**平台釘選**、已登錄且未撤銷的 `ProjectionEvidence`，先保存不可變
+Candidate，再透過獨立物理 Login 的 `PostgresCandidatePromoter` 鎖定 Receipt、
+比對真實來源及 Registry 並寫入 version=1 Promotion。回傳只含 Ref／Hash／版本，
+不含任何原生 bytes，無法由呼叫端選 Candidate／證據／期限。專用
+`FixedCandidatePublisherMTLSClient` 也只送 UUID4 Receipt，精確驗證
+`verified-native-{receipt.hex}`、版本 1、與獨立 Validator 已驗封套相同的
+SHA-256 與 `trusted_send=disabled`；
+額外欄位或錯綁均拒絕。ACK 不明不自動
+重試，Candidate 已保存但 Promotion 失敗也不能冒充 Grant。此為可驗證的
+**接線 primitive／RPC App**；不能因此解除既有 Sender Release Fuse。
+
+後續新增 `create_candidate_publisher_service`／`MIRAGE_G3B_SERVICE_ROLE=publisher`
+與 [G4 Publisher 隔離 Compose 範本](../deploy/security-lab/g4-publisher-compose.yaml)：
+啟動時必須同時讀三個*不同*物理 Login 的獨立 Secret，依序使用只讀
+`validator`、低信任 `candidate_writer` 與可信 `promoter`，逐個核對
+`NOINHERIT`、schema、必要／禁止的 SQL 權限及 `protected_lock_reference`
+函式授權。三個連線的資料庫參數除了 `user`／`password` 必須一致；
+證據檔 `MIRAGE_G4_PUBLISHER_EVIDENCE_FILE` 必須釘選三個平台的完整
+`ProjectionEvidence`，無檔、缺平台或配置跨角色 DSN 即拒絕啟動。
+Candidate Writer 只需 `INSERT/SELECT candidate_records`；Store 的既存候選
+比對不使用需要 `UPDATE` 權限的 Row Lock，後續 Promoter 仍以受保護
+`protected_lock_reference` 鎖住同筆 Candidate、獨立重算封套雜湊後才建立
+不可變 Promotion，不需要 Writer `UPDATE/DELETE` 權限。
+
+Verifier 可選配四項**必須全部同時存在**的設定：
+`MIRAGE_G4_PUBLISHER_ORIGIN`（固定 HTTPS `https://candidate-publisher:8446`）、
+`MIRAGE_G4_VERIFIER_PUBLISHER_CERT_FILE`、
+`MIRAGE_G4_VERIFIER_PUBLISHER_KEY_FILE`、
+`MIRAGE_G4_PUBLISHER_SERVER_CA_FILE`。配置時必須先取得獨立 Native
+Validator 驗證過的封套及 `delivery=candidate_only_no_send_authorization`，
+才用 Receipt-only mTLS 向 Publisher 單次提交；只接受相同 Envelope SHA
+及固定 Ref／Version 的 Promotion。若 Validator 未接線、Publisher ACK 未知
+或 Hash 不合，外部控制面回 503，不能重送 JTI、重新 Promotion 或
+跳過核對；**若未配置則維持原有不做 Promotion 的隔離行為**。
+
+此 Compose 範本只提供獨立容器，內部三組 DB 帳密仍由同一個 Publisher
+進程持有，不可錯認為三個互不信任的進程；必須在真實獨立測試 PG、專用
+CA／Secret 和隔離網路完成整路徑實測。此設計尚未把 Promotion 接到
+Authorizer→Sender 的完整 Client HTTP 送出，更不提供沒有外部 Fence 的
+跨整機回滾安全保證；G4/G5/G6 結案仍有正式驗收缺口。
+
+同一拋棄式 PostgreSQL 17.6 的追加整合測試，還從真實三組 SCRAM
+Reader／Writer／Promoter、固定 `GET` 原生投影及 Receipt-only Grant，接到
+`ProtectedPinnedASGIResponse`；驗證在第一個 `http.response.start` 前唯一
+Send Lease 已 COMMIT，發出的 Status／Headers／Body 與 DB Pin 完全相同，
+傳完是 `SEND_COMPLETED`，再次進入同一 ASGI Response 必拒絕。
+該子案例使用**隔離 Lab 管理員**作 Sender，目的是測端到端功能；不能取代
+專用 Sender 實體 Login、真實 Client 網路傳輸、未知 ACK 和 G5 整機復原
+驗收。真 PG 結果必須綁當輪固定 SHA，未通過不能稱為 PASS。
+
 M-03 已知 Variant 的受保護 Executor Commit 已接線供隔離驗證：原始
 `POST /store/carts/{id}/line-items` 必須有與 JWS Fingerprint 完全一致的
 Publishable Key、JSON Body、Derived Cart Capability 和 Creator→Derived
@@ -159,7 +230,7 @@ python -m deception.security.protected_services
 
 | 設定 | 用途 |
 | --- | --- |
-| `MIRAGE_G3B_SERVICE_ROLE` | `verifier`、`executor`、`validator`；`sender` 僅啟動封閉的 G4 入口 |
+| `MIRAGE_G3B_SERVICE_ROLE` | `verifier`、`executor`、`validator`；G4 另有 `authorizer` 的 Receipt-only mTLS、`sender` 封閉入口 |
 | `MIRAGE_G3B_BIND_HOST`、`MIRAGE_G3B_BIND_PORT` | 明確的 Listener 位址與 TCP 埠，不提供公開 HTTP fallback |
 | `MIRAGE_G3B_WORLD_SCHEMA` | 與 PG 連線 `current_schema()` 必須精確一致，避免查詢同名假表 |
 | `MIRAGE_TRUSTED_SEND_ENABLE` | 若存在，只能是 `false`；所有正式發送依舊不可用 |
@@ -200,6 +271,29 @@ Native Validator 專用：
 | `MIRAGE_G3B_VALIDATOR_SERVER_CERT_FILE`／`MIRAGE_G3B_VALIDATOR_SERVER_KEY_FILE` | Validator mTLS Server 身份 |
 | `MIRAGE_G3B_VALIDATOR_CLIENT_CA_FILE` | 只接受 Verifier→Validator 專用 Client CA |
 
+G4 獨立 Authorizer（新接線候選，未放行 Sender）專用：
+
+| 設定 | 用途 |
+| --- | --- |
+| `MIRAGE_G4_AUTHORIZER_DSN_FILE`／`MIRAGE_G4_AUTHORIZER_LOGIN` | 獨立 SCRAM 實體 Login；不得共用其他角色 Secret |
+| `MIRAGE_G4_AUTHORIZER_SERVER_CERT_FILE`／`MIRAGE_G4_AUTHORIZER_SERVER_KEY_FILE` | Authorizer mTLS Server 憑證與私鑰 |
+| `MIRAGE_G4_AUTHORIZER_VERIFIER_CLIENT_CA_FILE` | 僅核准 Verifier Client CA，拒絕 Runtime／Executor 自行呼叫 |
+
+Authorizer 服務新增 `POST /internal/v1/authorize-receipt`，只能接收
+`{"receipt_id":"UUIDv4"}`，所有 Candidate／Scope／Policy／Deadline／Owner
+都由保護資料庫的唯一 Promotion／Registry 導出；無 TLS、額外 JSON 欄位、
+未知／重複 Receipt 或授權提交不明皆不得產生成功回應。
+`FixedAuthorizerMTLSClient` 只送 Receipt，精確核對回覆的 Admission／Owner／
+Fingerprint／Candidate Hash，不接受 `trusted_send=enabled` 或額外權限欄位。
+Authorizer 啟動 preflight 驗證專屬物理 Login、固定 Schema、禁止跨角色 DML，
+以及 `generation_controls.control_revision` 和 Admission 必需欄位的 column-only
+UPDATE。此新增服務仍待真 SCRAM／網路隔離與正式 Client HTTP 端到端驗收；
+它**只授權 Snapshot，不傳輸 HTTP bytes**，Sender Release Fuse 保持關閉。
+隔離 G4 測試額外覆蓋一次性 SCRAM Login 以 `claim_revision` 等四個 Admission
+欄位級 UPDATE 完成 Grant→Claim→Authorize；不得 SELECT 已授權 Snapshot bytes，
+也有真 TLS 握手檢查無 Client Cert、不同 CA 及偽造 Candidate/Deadline 的拒絕。
+這些測試僅證明 Authorizer 邊界，尚不是 Verifier→Authorizer→Sender 端到端。
+
 G4 Sender（只准隔離部署；不屬於 G3b 四容器拓樸）專用：
 
 | 設定 | 用途 |
@@ -215,9 +309,16 @@ Sender 啟動前檢查物理 Login、`NOINHERIT`、無 Role 成員資格、固�
 建立或改寫快照權。多個角色的 DSN 同時出現時直接拒絕啟動。這些是**啟動時
 權限檢查合約**，不是已驗證的正式 ACL 授權清單。
 
-`GET /internal/ready` 僅回報 `sender-sealed-until-restore-fence`，
+`GET /internal/ready` 僅回報 `sender-sealed-pending-security-acceptance`，
 `POST /internal/v1/send` 不論輸入或 mTLS Caller 身分一律 503，**不呼叫
-StartSend、不建立 Lease、不輸出 HTTP Payload**。既有
+StartSend、不建立 Lease、不輸出 HTTP Payload**。
+Sender 啟動時還會解析 D-74 版本化部署宣告（`MIRAGE_RESTORE_PROFILE`、
+`MIRAGE_RESTORE_PROFILE_VERSION=1`），標準單機不需要 Fence；選配外部模式
+缺少權威設定或金鑰、或單機配置殘留 Fence 設定，一律 Fail-Closed。
+此部分只是模式配置校驗，尚未完成持久模式釘選、正式 Sender 或 Restore
+驗收。503 固定分類為 `fixed_sender_release_gates_not_met`，不再錯稱
+「沒有外部 Fence」本身是標準單機的禁止原因。這不改變硬性 Release Fuse。
+既有
 `PostgresProtectedSender.start_send()` 增加必填 UUIDv4 Receipt，對照
 Authorized Snapshot／Grant Binding 的同一 Receipt，阻止只有 Admission ID 的
 交叉起送；`ProtectedLeaseTransmission` 在 ASGI 起送前也核對 Lease 的 Receipt。

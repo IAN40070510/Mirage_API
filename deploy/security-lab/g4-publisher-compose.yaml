@@ -1,0 +1,65 @@
+# G4 獨立 Publisher 的隔離部署範本；只產生 Promotion，Sender 依舊封閉。
+# 需外部建立專用 SCRAM Role、mTLS CA、Secret 及不可與 MSDSS 共用的隔離網路。
+# 不可把同主機三個資料庫 Login 誤稱三個獨立進程或跨整機回滾保證。
+name: ${G4_PUBLISHER_PROJECT:-mirage-g4-publisher-isolated}
+
+services:
+  candidate-publisher:
+    image: ${G3B_CI_IMAGE:-mirage-api:standalone}
+    command: ["python", "-m", "deception.security.protected_services"]
+    profiles: ["g4-publisher-isolated"]
+    user: "10026:10026"
+    restart: "no"
+    read_only: true
+    init: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 64
+    mem_limit: 256m
+    tmpfs: ["/tmp:size=16m,mode=1777"]
+    healthcheck:
+      disable: true
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      MIRAGE_G3B_SERVICE_ROLE: publisher
+      MIRAGE_G3B_BIND_HOST: 0.0.0.0
+      MIRAGE_G3B_BIND_PORT: "8446"
+      MIRAGE_G3B_WORLD_SCHEMA: ${MIRAGE_G3B_WORLD_SCHEMA:?required}
+      MIRAGE_G4_PUBLISHER_READER_LOGIN: ${MIRAGE_G4_PUBLISHER_READER_LOGIN:?required}
+      MIRAGE_G4_PUBLISHER_WRITER_LOGIN: ${MIRAGE_G4_PUBLISHER_WRITER_LOGIN:?required}
+      MIRAGE_G4_PUBLISHER_PROMOTER_LOGIN: ${MIRAGE_G4_PUBLISHER_PROMOTER_LOGIN:?required}
+      MIRAGE_G4_PUBLISHER_READER_DSN_FILE: /run/secrets/g4_publisher_reader_dsn
+      MIRAGE_G4_PUBLISHER_WRITER_DSN_FILE: /run/secrets/g4_publisher_writer_dsn
+      MIRAGE_G4_PUBLISHER_PROMOTER_DSN_FILE: /run/secrets/g4_publisher_promoter_dsn
+      MIRAGE_G4_PUBLISHER_EVIDENCE_FILE: /run/secrets/g4_publisher_evidence
+      MIRAGE_G4_PUBLISHER_SERVER_CERT_FILE: /run/secrets/g4_publisher_server_cert
+      MIRAGE_G4_PUBLISHER_SERVER_KEY_FILE: /run/secrets/g4_publisher_server_key
+      MIRAGE_G4_PUBLISHER_VERIFIER_CLIENT_CA_FILE: /run/secrets/g4_publisher_verifier_ca
+      MIRAGE_TRUSTED_SEND_ENABLE: "false"
+    secrets:
+      - g4_publisher_reader_dsn
+      - g4_publisher_writer_dsn
+      - g4_publisher_promoter_dsn
+      - g4_publisher_evidence
+      - g4_publisher_server_cert
+      - g4_publisher_server_key
+      - g4_publisher_verifier_ca
+    networks: [g3b_execution, g3b_database]
+    expose: ["8446"]
+
+networks:
+  g3b_execution:
+    external: true
+    name: ${G3B_CI_EXECUTION_NETWORK:-mirage-g3b-execution-net}
+  g3b_database:
+    external: true
+    name: ${G3B_CI_DATABASE_NETWORK:-mirage-g3b-database-net}
+
+secrets:
+  g4_publisher_reader_dsn: {external: true}
+  g4_publisher_writer_dsn: {external: true}
+  g4_publisher_promoter_dsn: {external: true}
+  g4_publisher_evidence: {external: true}
+  g4_publisher_server_cert: {external: true}
+  g4_publisher_server_key: {external: true}
+  g4_publisher_verifier_ca: {external: true}

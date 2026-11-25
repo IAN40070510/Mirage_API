@@ -37,4 +37,6 @@ jobs:
         run: |
           docker compose ps -a
           docker compose logs --no-color --tail=100
-          docker compose down
+          # 只在 GitHub Actions 拋棄式 runner 內移除本次 Mirage Compose
+          # 專案的容器、網路與 PostgreSQL／輸出 named volumes，避免殘留測試資料。
+          docker compose down --volumes --remove-orphans

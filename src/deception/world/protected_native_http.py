@@ -335,6 +335,99 @@ class PostgresProtectedNativeProjector(_ProtectedConnection):
                 raise ProtectedGrantError("protected_medusa_source_path_invalid")
             self._medusa_specification = load_contract(medusa_source)[1]
 
+    def project_verified_receipt(self, receipt_id: UUID) -> ProtectedNativeProjection:
+        """只憑已提交的 Verifier Proof／可信來源選定原生投影，不接受 Caller 自選 Handler。
+
+        固定 20 個 Synthetic／Medusa Operation 映射。對寫入操作，先從互斥的
+        保護來源確認 Commit／Rejection／Medusa 來源恰有一種，才分派舊版已
+        驗證的投影方法；無來源、來源混雜或 Proof／回覆身分不一致一律拒絕。
+        這只重建候選，不插入 Promotion、核發 Grant 或輸出任何 Client bytes。
+        """
+        if not isinstance(receipt_id, UUID) or receipt_id.version != 4:
+            raise ProtectedGrantError("protected_project_dispatch_receipt_invalid")
+        direct = {
+            ("synthetic-inventory", "getSyntheticInventory", "GET", "/synthetic/inventory/{sku}"):
+                self.project_inventory_snapshot,
+            ("synthetic-inventory", "getSyntheticOperation", "GET", "/synthetic/operations/{attempt}"):
+                self.project_inventory_operation,
+            ("synthetic-carts", "createGuestCart", "POST", "/synthetic/carts"):
+                self.project_cart_creation,
+            ("synthetic-carts", "getGuestCart", "GET", "/synthetic/carts/{cart_id}"):
+                self.project_cart_read,
+            ("synthetic-carts", "getSyntheticOrder", "GET", "/synthetic/orders/{order_id}"):
+                self.project_cart_read,
+            ("synthetic-carts", "getCartOperation", "GET", "/synthetic/carts/{cart_id}/operations/{attempt}"):
+                self.project_cart_read,
+            ("medusa-native-cart", "PostCarts", "POST", "/store/carts"):
+                self.project_medusa_creation,
+            ("medusa-native-cart", "GetCartsId", "GET", "/store/carts/{id}"):
+                self.project_medusa_read,
+            ("medusa-native-cart", "GetOrdersId", "GET", "/store/orders/{id}"):
+                self.project_medusa_read,
+        }
+        synthetic_mutations = {
+            ("synthetic-inventory", "reserveSyntheticInventory", "POST", "/synthetic/inventory/reservations"),
+            ("synthetic-inventory", "cancelSyntheticInventory", "POST", "/synthetic/inventory/reservations/{reservation_id}/cancel"),
+            ("synthetic-carts", "addGuestCartItem", "POST", "/synthetic/carts/{cart_id}/line-items"),
+            ("synthetic-carts", "updateGuestCartItem", "POST", "/synthetic/carts/{cart_id}/line-items/{item_id}"),
+            ("synthetic-carts", "removeGuestCartItem", "DELETE", "/synthetic/carts/{cart_id}/line-items/{item_id}"),
+            ("synthetic-carts", "completeGuestCart", "POST", "/synthetic/carts/{cart_id}/complete"),
+            ("synthetic-carts", "cancelSyntheticOrder", "POST", "/synthetic/orders/{order_id}/cancel"),
+        }
+        medusa_mutations = {
+            ("medusa-native-cart", "PostCartsIdLineItems", "POST", "/store/carts/{id}/line-items"),
+            ("medusa-native-cart", "PostCartsIdLineItemsLine_id", "POST", "/store/carts/{id}/line-items/{line_id}"),
+            ("medusa-native-cart", "DeleteCartsIdLineItemsLine_id", "DELETE", "/store/carts/{id}/line-items/{line_id}"),
+            ("medusa-native-cart", "PostCartsIdComplete", "POST", "/store/carts/{id}/complete"),
+        }
+        with self._connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SET LOCAL statement_timeout='5s'")
+                cursor.execute(
+                    """SELECT b.platform,b.operation_id,b.method,b.path_template,
+                              b.request_fingerprint
+                       FROM protected_http_operation_bindings b
+                       JOIN ingress_receipts r ON r.receipt_id=b.receipt_id
+                         AND r.request_fingerprint=b.request_fingerprint
+                       WHERE b.receipt_id=%s""", (receipt_id,),
+                )
+                proof = cursor.fetchone()
+                if proof is None:
+                    raise ProtectedGrantError("protected_project_dispatch_proof_missing")
+                route, fingerprint = tuple(proof[:4]), proof[4]
+                if route in direct:
+                    selected = direct[route]
+                elif route in synthetic_mutations or route in medusa_mutations:
+                    cursor.execute(
+                        """SELECT
+                             (SELECT count(*) FROM protected_world_commit_sources
+                              WHERE receipt_id=%s),
+                             (SELECT count(*) FROM protected_world_rejection_sources
+                              WHERE receipt_id=%s),
+                             (SELECT count(*) FROM protected_medusa_rejection_sources
+                              WHERE receipt_id=%s)""",
+                        (receipt_id, receipt_id, receipt_id),
+                    )
+                    committed, rejected, medusa_rejected = cursor.fetchone()
+                    if (committed, rejected, medusa_rejected) == (1, 0, 0):
+                        selected = (self.project_medusa_add_success
+                                    if route in medusa_mutations else self.project_synthetic_success)
+                    elif (committed, rejected, medusa_rejected) == (0, 1, 0) and route in synthetic_mutations:
+                        selected = self.project_synthetic_rejection
+                    elif (committed, rejected, medusa_rejected) == (0, 0, 1) and route in medusa_mutations:
+                        selected = self.project_medusa_rejection
+                    else:
+                        raise ProtectedGrantError("protected_project_dispatch_source_ambiguous")
+                else:
+                    raise ProtectedGrantError("protected_project_dispatch_route_unapproved")
+        projected = selected(receipt_id)
+        if (not isinstance(projected, ProtectedNativeProjection)
+                or projected.receipt_id != receipt_id
+                or projected.operation_id != route[1]
+                or projected.request_fingerprint != fingerprint):
+            raise ProtectedGrantError("protected_project_dispatch_result_mismatch")
+        return projected
+
     def project_cart_creation(self, receipt_id: UUID) -> ProtectedNativeProjection:
         """以獨立唯讀證據建立 C-01 200：授權 Scope 保持原始 Creator。"""
         from jsonschema import Draft202012Validator

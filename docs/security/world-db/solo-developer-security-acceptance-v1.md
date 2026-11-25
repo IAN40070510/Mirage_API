@@ -32,8 +32,11 @@ Mirage release 自己的驗收另有必要簽核，仍須各自遵守，不能�
 | --- | --- | --- |
 | G3b | 20 條原生 Client HTTP 成功／拒絕／重試、獨立來源與角色 ACL、精確 Payload／Header／Status | **OPEN** |
 | G4 | 不可變 Authorized Snapshot、Pin、一次性 Send Lease、真正 ASGI 首 bytes 與失敗恢復 | **OPEN** |
-| G5 | World DB 還原域外最高可信 Head、Quarantine、BD-05 證據自動解禁、雙向 ACK/COMMIT 故障與 Send/Purge 競態 | **OPEN** |
+| G5 — 標準單機 | 無外部 Fence 的完整業務與可信發送功能、受保護本機 ACL／StartSend／Purge／已知 Restore／Unknown、正確宣告整機回滾保證缺失 | **NOT_IMPLEMENTED／NOT_RUN** |
+| G5 — 選配外部 Fence | 僅於啟用／宣稱外部強化保護時，必驗 World DB 域外最高 Head、BD-05 原子自動解禁、雙向 COMMIT/ACK、跨復原域 Restore 與競態 | **NOT_COMPLETE／NOT_RUN** |
 | G6 | PostgreSQL 真實權限、競態／故障注入、混合版本回退、端到端效能、既有功能回歸與發布前清單 | **OPEN** |
+
+**2026-11-25 D-74 Owner 產品方向**：Mirage 單機完整功能，外部 Fence 選配；詳見 [單機／強化模式契約](single-node-restore-profiles.md)。適用的測試集合由**實際發行 Profile** 決定；G3b、G4、G6 與單機基本安全不因外部選配而放寬。沒有域外最高可信 Head 時，**整機快照回滾不可復活的保證不可聲稱**。Owner 本次決定不等於對該殘餘風險的最終 Release 接納，也沒有解封 Trusted Send。
 
 所有操作按矩陣保留 `NOT_RUN`／`RUNNING`／`PASS`／`FAIL`／`BLOCKED`／
 `STALE` 狀態，只有相符的真實實測可以變成 `PASS`。
