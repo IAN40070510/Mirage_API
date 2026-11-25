@@ -116,6 +116,15 @@ CA／Secret 和隔離網路完成整路徑實測。此設計尚未把 Promotion 
 Authorizer→Sender 的完整 Client HTTP 送出，更不提供沒有外部 Fence 的
 跨整機回滾安全保證；G4/G5/G6 結案仍有正式驗收缺口。
 
+同一拋棄式 PostgreSQL 17.6 的追加整合測試，還從真實三組 SCRAM
+Reader／Writer／Promoter、固定 `GET` 原生投影及 Receipt-only Grant，接到
+`ProtectedPinnedASGIResponse`；驗證在第一個 `http.response.start` 前唯一
+Send Lease 已 COMMIT，發出的 Status／Headers／Body 與 DB Pin 完全相同，
+傳完是 `SEND_COMPLETED`，再次進入同一 ASGI Response 必拒絕。
+該子案例使用**隔離 Lab 管理員**作 Sender，目的是測端到端功能；不能取代
+專用 Sender 實體 Login、真實 Client 網路傳輸、未知 ACK 和 G5 整機復原
+驗收。真 PG 結果必須綁當輪固定 SHA，未通過不能稱為 PASS。
+
 M-03 已知 Variant 的受保護 Executor Commit 已接線供隔離驗證：原始
 `POST /store/carts/{id}/line-items` 必須有與 JWS Fingerprint 完全一致的
 Publishable Key、JSON Body、Derived Cart Capability 和 Creator→Derived

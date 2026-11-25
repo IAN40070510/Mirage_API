@@ -561,10 +561,13 @@ def test_native_receipt_publisher_promotes_with_distinct_real_scram_logins(
     if os.environ.get("MIRAGE_WORLD_ROLE_TEST_ISOLATED") != "true":
         pytest.skip("requires disposable PostgreSQL cluster for independent SCRAM logins")
     import psycopg
+    import asyncio
     from psycopg import sql
     from psycopg.conninfo import conninfo_to_dict, make_conninfo
     from deception.security.protected_rpc import ProtectedRpcConfigurationError
     from deception.security.protected_services import create_candidate_publisher_service
+    from deception.world.protected_send import PostgresProtectedSender, ProtectedPinnedASGIResponse
+    from deception.world.transmission import TransmissionError
 
     dsn, now = isolated_test_dsn, int(time.time())
     binding = SessionBinding(environment_id="publisher-lab", deployment_id="isolated",
@@ -722,8 +725,6 @@ def test_native_receipt_publisher_promotes_with_distinct_real_scram_logins(
             assert admission.candidate_ref == published.candidate_ref
             assert admission.candidate_hash == published.candidate_hash
             assert owner == "protected-sender-" + receipt.hex
-            with pytest.raises(psycopg.errors.UniqueViolation):
-                publisher.publish_receipt_once(receipt)
             with psycopg.connect(dsn) as connection:
                 assert connection.execute(
                     "SELECT count(*) FROM protected_candidate_promotions WHERE ingress_receipt_id=%s",
@@ -731,6 +732,51 @@ def test_native_receipt_publisher_promotes_with_distinct_real_scram_logins(
                 ).fetchone() == (1,)
                 assert connection.execute("SELECT count(*) FROM protected_send_leases"
                                           ).fetchone() == (0,)
+            # 原生 HTTP 不能由 Verifier 的 JSON 直接發送；必須在唯一
+            # Promotion→Grant→Authorized Snapshot→Lease COMMIT 之後才出 ASGI bytes。
+            # 此處 Sender 使用隔離 Lab 管理員供端到端功能核對；Sender 真實
+            # 最小權限 SCRAM 與 Restore 另由 Protected Send 套件逐項驗收。
+            expected = response_envelope(
+                projected.status_code, projected.headers, projected.body_bytes,
+            )
+            outgoing = ProtectedPinnedASGIResponse(
+                sender=PostgresProtectedSender(dsn, expected_login=_real_login(dsn)),
+                admission_id=admission.admission_id, receipt_id=receipt, owner=owner,
+                request_fingerprint=proof.request_fingerprint, expected_envelope=expected,
+            )
+            messages = []
+
+            async def deliver(message):
+                """第一個 ASGI start 之前檢查 DB 已持久提交唯一 Send Lease。"""
+                if not messages:
+                    with psycopg.connect(dsn) as observer:
+                        assert observer.execute(
+                            "SELECT state FROM response_admissions WHERE admission_id=%s",
+                            (admission.admission_id,),
+                        ).fetchone() == ("SEND_STARTED",)
+                        assert observer.execute(
+                            "SELECT count(*) FROM protected_send_leases WHERE admission_id=%s",
+                            (admission.admission_id,),
+                        ).fetchone() == (1,)
+                messages.append(message)
+
+            asyncio.run(outgoing({"type": "http", "scheme": "https"}, None, deliver))
+            assert messages == [
+                {"type": "http.response.start", "status": projected.status_code,
+                 "headers": [(b"content-type", b"application/json")]},
+                {"type": "http.response.body", "body": projected.body_bytes},
+            ]
+            with pytest.raises(TransmissionError, match="protected_pinned_asgi_reused"):
+                asyncio.run(outgoing({"type": "http", "scheme": "https"}, None, deliver))
+            with pytest.raises(psycopg.errors.UniqueViolation):
+                publisher.publish_receipt_once(receipt)
+            with psycopg.connect(dsn) as connection:
+                assert connection.execute(
+                    "SELECT state FROM response_admissions WHERE admission_id=%s",
+                    (admission.admission_id,),
+                ).fetchone() == ("SEND_COMPLETED",)
+                assert connection.execute("SELECT count(*) FROM protected_send_leases"
+                                          ).fetchone() == (1,)
         finally:
             for login, _ in users.values():
                 admin.execute(sql.SQL("DROP OWNED BY {}").format(sql.Identifier(login)))
