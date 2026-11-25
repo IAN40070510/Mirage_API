@@ -106,6 +106,13 @@ Admission 完整交叉綁定與故障注入為其後增量，須另看該版 SHA
 及 `SET ROLE` 權限提升全部失敗；測試結束 `DROP OWNED`／`DROP ROLE`。
 此子項在該版 CI 通過前保持 **PENDING**，亦不代替實際部署最小權限簽收。
 
+另外補強 `start_send()` 的授權前不可變 Admission 交叉檢查：除了 Snapshot
+的 Fingerprint／Hash／Candidate Ref／世代與 bytes，還必須確認原始
+Admission ID、授權期限、傳輸期限及 Admission 世代與資料庫實體欄位完全
+一致。隔離負面測試刻意保留正常 Pin，僅改 Admission JSON 的這些欄位；
+任何差異都必須在建立 Lease／`SEND_STARTED` 前拒絕。**須另以包含該修補的
+確切 SHA CI 驗收**，不可沿用舊版 Sender 證據。
+
 套件與授權：僅使用專案既有 `psycopg`、Starlette／ASGI、Python 標準庫與
 PostgreSQL 17；未加入新模型／商用外部服務。依賴授權沿用專案既有清單。
 

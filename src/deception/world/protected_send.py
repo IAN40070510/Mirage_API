@@ -77,7 +77,8 @@ class PostgresProtectedSender(_ProtectedConnection):
                     """SELECT a.state,a.claim_owner,a.transmission_deadline,a.admission,
                               s.receipt_id,s.request_fingerprint,s.candidate_hash,
                               s.envelope_bytes,s.send_owner,s.transmission_deadline,
-                              s.world_generation_id,s.candidate_ref
+                              s.world_generation_id,s.candidate_ref,
+                              a.authorization_deadline,a.world_generation_id
                        FROM response_admissions a
                        JOIN protected_authorized_http_snapshots s
                          ON s.admission_id=a.admission_id
@@ -105,7 +106,11 @@ class PostgresProtectedSender(_ProtectedConnection):
                 pinned = bytes(row[7])
                 admission = ResponseAdmission.model_validate(row[3])
                 verified_hashes = _verified_envelope_hashes(pinned)
-                if (verified_hashes != (
+                if (admission.admission_id != admission_id
+                        or admission.authorization_deadline != row[12]
+                        or admission.transmission_deadline != row[2]
+                        or admission.world_generation_id != row[13]
+                        or verified_hashes != (
                         admission.candidate_hash, admission.immutable_body_hash,
                         admission.semantic_headers_hash) or row[6] != admission.candidate_hash
                         or row[10] != admission.world_generation_id

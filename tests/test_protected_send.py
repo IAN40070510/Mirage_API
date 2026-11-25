@@ -76,6 +76,42 @@ def test_single_send_lease_claims_exact_snapshot_and_never_rearms(isolated_test_
         ).fetchall() == [(0, "send_started"), (1, "response_send_attempted"), (2, "asgi_send_completed")]
 
 
+@pytest.mark.parametrize("field,changed", [
+    ("admission_id", "forged-admission"),
+    ("authorization_deadline", "earlier"),
+    ("transmission_deadline", "later"),
+])
+def test_start_send_rejects_mismatched_admission_identity_or_deadlines(isolated_test_dsn, field, changed):
+    """精確 Pin 仍在也不可對 Admission 原始身分或任何期限遭修改的記錄起送。"""
+    import psycopg
+
+    admission, owner, envelope, seeded = _authorized_pin(isolated_test_dsn)
+    if changed == "earlier":
+        changed_value = admission.authorization_deadline - 1
+    elif changed == "later":
+        changed_value = admission.transmission_deadline + 100
+    else:
+        changed_value = changed
+    cast = "text" if changed == "forged-admission" else "bigint"
+    with psycopg.connect(isolated_test_dsn) as connection:
+        connection.execute(
+            f"UPDATE response_admissions "
+            f"SET admission=jsonb_set(admission,ARRAY[%s],to_jsonb(%s::{cast})) "
+            f"WHERE admission_id=%s",
+            (field, changed_value, admission.admission_id),
+        )
+    sender = PostgresProtectedSender(isolated_test_dsn, expected_login=_login(isolated_test_dsn))
+    with pytest.raises(ProtectedGrantError, match="protected_send_pinned_payload_invalid"):
+        sender.start_send(
+            admission_id=admission.admission_id, receipt_id=seeded[3], owner=owner,
+            request_fingerprint=admission.request_binding_digest, expected_envelope=envelope,
+        )
+    with psycopg.connect(isolated_test_dsn) as connection:
+        assert connection.execute("SELECT state FROM response_admissions WHERE admission_id=%s",
+                                  (admission.admission_id,)).fetchone() == ("SEND_AUTHORIZED",)
+        assert connection.execute("SELECT count(*) FROM protected_send_leases").fetchone() == (0,)
+
+
 def test_sender_reconciliation_is_readonly_and_never_reauthorizes_send(isolated_test_dsn):
     """模擬 COMMIT ACK 遺失，僅查可見 Lease／終態，不把查無 Lease 當安全重試。"""
     import psycopg
