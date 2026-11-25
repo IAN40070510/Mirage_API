@@ -90,6 +90,19 @@ Request、Authorizer→Sender mTLS RPC、啟動／復原協定與 Release Fuse
 未驗收前，固定 Sender HTTP 仍只能回 503。這是可驗證的真實 bytes 傳輸
 子功能，**不能**當成 G3b 客戶端原生回應或 G4 整體完成。
 
+**G3b→G4 受保護 Receipt 授權接線（新增、待確切 SHA CI）**：
+`PostgresProtectedAuthorizer.authorize_promoted_receipt_once()` 的輸入只是一個
+UUIDv4 Receipt；從持久化 Promotion 與 Registry 取得完整 Scope、唯一
+Candidate Ref、Projection Evidence 與不可變期限，拒絕同一 Receipt 有兩個
+Promotion 或 Registry 證據不符。以原 Receipt UUID 固定一次性 Grant Operation
+ID，用不可變 Token/Promotion 到期時間確定授權期限及 Sender Owner；依序
+執行 Grant→Claim→Authorize，任何失敗不重試。真 PostgreSQL 測試串接
+Receipt→Promotion→Grant Binding→Authorized Snapshot→Send Lease→原生 ASGI
+200 和終態 Audit，並測重用 Receipt、兩份候選的負面情境。
+此方法目前仍是**獨立 Authorizer 內部 primitive**，尚無專用角色的對外
+mTLS RPC／完整 Validator→Candidate 提交流程，也不接受任意 Runtime 指定的
+Header/Body 作為授權證據；不可把這個類別直接暴露為公開 HTTP API。
+
 **G5 已知 Restore／在途 ASGI 窗口（追加隔離子項，待 CI）**：
 `known_restore_delivery_window()` 在已提交 Lease **之後**取得 PG Session
 共享 advisory lock、重新查已知 Restore 標記，並保持該鎖直到本次 ASGI

@@ -135,6 +135,76 @@ def test_protected_grant_binds_receipt_promotion_and_admission_atomically(isolat
                                   (seeded[0].world_generation_id,)).fetchone()[0] == 1
 
 
+def test_receipt_only_authorizer_pins_snapshot_and_sends_native_asgi(isolated_test_dsn):
+    """只提供已驗證 Receipt，從原始可信 Promotion 建立授權並實際輸出真 DB Pin HTTP。"""
+    import asyncio
+    import psycopg
+    from deception.world import PostgresProtectedSender, ProtectedPinnedASGIResponse
+
+    seeded = _seed(isolated_test_dsn)
+    assert _promote(isolated_test_dsn, seeded) == 1
+    authorizer = PostgresProtectedAuthorizer(isolated_test_dsn, expected_login=_login(isolated_test_dsn))
+    admission, owner = authorizer.authorize_promoted_receipt_once(seeded[3])
+    assert owner == "protected-sender-" + seeded[3].hex
+    expected = response_envelope(200, [("content-type", "application/json")], b'{"synthetic":true}')
+    sender = PostgresProtectedSender(isolated_test_dsn, expected_login=_login(isolated_test_dsn))
+    response = ProtectedPinnedASGIResponse(
+        sender=sender, admission_id=admission.admission_id,
+        receipt_id=seeded[3], owner=owner,
+        request_fingerprint=admission.request_binding_digest, expected_envelope=expected,
+    )
+    messages = []
+
+    async def record(message):
+        """保留 Sender 真正發出的 ASGI 訊息以驗證狀態、標頭與精確內容。"""
+        messages.append(message)
+
+    asyncio.run(response({"type": "http", "scheme": "https"}, None, record))
+    assert messages == [
+        {"type": "http.response.start", "status": 200,
+         "headers": [(b"content-type", b"application/json")]},
+        {"type": "http.response.body", "body": b'{"synthetic":true}'},
+    ]
+    with psycopg.connect(isolated_test_dsn) as connection:
+        assert connection.execute("SELECT count(*) FROM protected_grant_bindings").fetchone() == (1,)
+        assert connection.execute("SELECT count(*) FROM protected_authorized_http_snapshots").fetchone() == (1,)
+        assert connection.execute("SELECT count(*) FROM protected_send_leases").fetchone() == (1,)
+        assert connection.execute(
+            "SELECT state FROM response_admissions WHERE admission_id=%s",
+            (admission.admission_id,),
+        ).fetchone() == ("SEND_COMPLETED",)
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        authorizer.authorize_promoted_receipt_once(seeded[3])
+
+
+def test_receipt_only_authorizer_rejects_ambiguous_promotions(isolated_test_dsn):
+    """一份合法 Receipt 若存在兩份不同 Promotion，Authorizer 不可任選其一授權。"""
+    import psycopg
+
+    seeded = _seed(isolated_test_dsn)
+    assert _promote(isolated_test_dsn, seeded) == 1
+    selected, source, evidence, receipt_id, _, hashes, now = seeded
+    other_ref = uuid4().hex
+    PostgresCandidateStore(isolated_test_dsn).put(
+        selected, other_ref,
+        response_envelope(200, [("content-type", "application/json")], b'{"synthetic":true}'),
+        expires_at=now + 120,
+    )
+    promoter = PostgresCandidatePromoter(isolated_test_dsn, expected_login=_login(isolated_test_dsn))
+    assert promoter.promote(
+        receipt_id=receipt_id, scope=selected, candidate_ref=other_ref,
+        request_fingerprint=digest("a"), envelope_hash=hashes[0],
+        immutable_body_hash=hashes[1], semantic_headers_hash=hashes[2],
+        evidence=evidence, source=source,
+    ) == 1
+    authorizer = PostgresProtectedAuthorizer(isolated_test_dsn, expected_login=_login(isolated_test_dsn))
+    with pytest.raises(ProtectedGrantError, match="protected_receipt_promotion_not_unique"):
+        authorizer.authorize_promoted_receipt_once(receipt_id)
+    with psycopg.connect(isolated_test_dsn) as connection:
+        assert connection.execute("SELECT count(*) FROM protected_grant_bindings").fetchone() == (0,)
+        assert connection.execute("SELECT count(*) FROM response_admissions").fetchone() == (0,)
+
+
 def test_send_authorization_pins_immutable_http_envelope(isolated_test_dsn):
     """SEND_AUTHORIZED 與精確 Payload Pin 同交易落地，不能改寫或拿其他 Receipt 借用。"""
     import psycopg
