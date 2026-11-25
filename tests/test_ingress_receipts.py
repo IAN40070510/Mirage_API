@@ -15,7 +15,9 @@ from deception.security.ingress_receipt import IngressReceiptError, PostgresIngr
 from deception.api.fingerprint import fingerprint_request
 from deception.api.fingerprint import fingerprint_httpx_request
 from deception.security.protected_rpc import (
-    FixedCandidatePublisherMTLSClient, create_direct_verifier_app,
+    FixedAuthorizerMTLSClient, FixedCandidatePublisherMTLSClient,
+    FixedExecutorMTLSClient, FixedNativeValidatorMTLSClient,
+    ProtectedRpcConfigurationError, create_direct_verifier_app,
 )
 from test_operation_binding import original_request
 from deception.world import PostgresReplayStore
@@ -311,6 +313,106 @@ def test_direct_verifier_never_publishes_without_independent_native_projection(
         assert response.status_code == 503
         assert response.json() == {"detail": "direct_verifier_publisher_projection_missing"}
     assert attempts == []
+
+
+def test_direct_verifier_authorizes_only_after_matching_independent_promotion(monkeypatch):
+    """Verifier 依 Receipt→Executor→Validator→Publisher→Authorizer 順序串接且拒絕跨候選授權。"""
+    from fastapi.testclient import TestClient
+    from types import SimpleNamespace
+    from deception.security.trusted_session import TrustedSessionVerifier
+
+    receipt = uuid4()
+    candidate_hash = "c" * 64
+    observed = []
+    context = {"fingerprint": "", "authorization_hash": candidate_hash, "unknown": False}
+
+    def verified(self, token, **kwargs):
+        """固定可信 Receipt，保留 ASGI 原始請求綁定資訊以檢查下游。"""
+        assert token == "test-jws" and kwargs["expected_issuer"] == "gateway"
+        observed.append("verify")
+        context["fingerprint"] = kwargs["request_fingerprint"]
+        return SimpleNamespace(environment_id="env", deployment_id="deploy",
+                               session_id="session"), receipt
+
+    async def execute(self, **kwargs):
+        """固定 Executor 只能得到受保護 Receipt 與原始 HTTP，沒有 Sender 權。"""
+        observed.append("execute")
+        assert kwargs["receipt_id"] == receipt
+        return {"kind": "inventory_read_admitted", "operation": "getSyntheticInventory",
+                "resource_id": "sku-1", "read_admission_id": "a" * 32,
+                "world_generation_id": "b" * 32, "state_version": 1,
+                "state_hash": "f" * 64}
+
+    async def project(self, **kwargs):
+        """獨立唯讀 Validator 只交付受來源綁定的候選 Hash。"""
+        observed.append("project")
+        assert kwargs["receipt_id"] == receipt
+        return {"delivery": "candidate_only_no_send_authorization",
+                "envelope_hash": candidate_hash}
+
+    async def publish(self, given_receipt, *, expected_candidate_hash):
+        """先固定 Promotion，之後才允許受保護授權鏈接手。"""
+        observed.append("publish")
+        assert given_receipt == receipt and expected_candidate_hash == candidate_hash
+        return {"receipt_id": str(receipt), "candidate_ref": "verified-native-" + receipt.hex,
+                "candidate_hash": candidate_hash, "candidate_version": 1,
+                "trusted_send": "disabled"}
+
+    async def authorize(self, given_receipt):
+        """Authorizer 只能得到 Receipt；模擬哈希錯綁與未知 COMMIT。"""
+        observed.append("authorize")
+        assert given_receipt == receipt
+        if context["unknown"]:
+            raise ConnectionError("simulated_authorizer_ack_unknown")
+        return {"receipt_id": str(receipt), "admission_id": "d" * 32,
+                "send_owner": "protected-sender-" + receipt.hex,
+                "request_fingerprint": context["fingerprint"],
+                "candidate_hash": context["authorization_hash"], "trusted_send": "disabled"}
+
+    monkeypatch.setattr(TrustedSessionVerifier, "verify_with_receipt", verified)
+    monkeypatch.setattr(FixedExecutorMTLSClient, "execute_receipt", execute)
+    monkeypatch.setattr(FixedNativeValidatorMTLSClient, "project_inventory_snapshot", project)
+    monkeypatch.setattr(FixedCandidatePublisherMTLSClient, "publish_receipt", publish)
+    monkeypatch.setattr(FixedAuthorizerMTLSClient, "authorize_receipt", authorize)
+    kwargs = dict(
+        verifier=verifier("postgresql://unused.invalid/isolated", {}),
+        postgres_dsn="postgresql://unused.invalid/isolated",
+        environment_id="env", deployment_id="deploy",
+        expected_issuer="gateway", expected_audience="mirage",
+        executor_client=object.__new__(FixedExecutorMTLSClient),
+        native_validator_client=object.__new__(FixedNativeValidatorMTLSClient),
+        candidate_publisher_client=object.__new__(FixedCandidatePublisherMTLSClient),
+        authorizer_client=object.__new__(FixedAuthorizerMTLSClient),
+    )
+    with pytest.raises(ProtectedRpcConfigurationError, match="authorizer_chain_invalid"):
+        create_direct_verifier_app(**{**kwargs, "candidate_publisher_client": None})
+    app = create_direct_verifier_app(**kwargs)
+    with TestClient(app, base_url="https://mirage.test") as client:
+        def request():
+            """每次組裝一個不同 Request ID 的可信 HTTPS 讀取，禁止重用。"""
+            return client.get("/synthetic/inventory/sku-1", headers={
+                "x-request-id": uuid4().hex, "x-trusted-session": "test-jws"})
+
+        accepted = request()
+        assert accepted.status_code == 200
+        assert accepted.json()["receipt_authorization"]["candidate_hash"] == candidate_hash
+        assert accepted.json()["candidate_promotion"]["candidate_hash"] == candidate_hash
+        assert observed == ["verify", "execute", "project", "publish", "authorize"]
+
+        observed.clear()
+        context["authorization_hash"] = "e" * 64
+        mismatched = request()
+        assert mismatched.status_code == 503
+        assert mismatched.json() == {"detail": "direct_verifier_authorization_binding_mismatch"}
+        assert observed == ["verify", "execute", "project", "publish", "authorize"]
+
+        observed.clear()
+        context["authorization_hash"] = candidate_hash
+        context["unknown"] = True
+        uncertain = request()
+        assert uncertain.status_code == 503
+        assert uncertain.json() == {"detail": "direct_verifier_authorization_unverifiable"}
+        assert observed == ["verify", "execute", "project", "publish", "authorize"]
 
 
 def test_direct_verifier_dispatches_inventory_over_real_executor_mtls_once(isolated_test_dsn, tmp_path):

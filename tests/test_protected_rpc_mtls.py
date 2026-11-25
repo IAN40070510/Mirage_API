@@ -85,6 +85,34 @@ def test_protected_rpc_requires_distinct_nonempty_mtls_material(tmp_path):
     assert create_sealed_app().openapi_url is None
 
 
+def test_verifier_authorizer_and_publisher_deny_copied_tls_client_identity(tmp_path):
+    """兩種持久寫入角色即使把相同憑證複製到不同檔名，也不能共用簽章身分。"""
+    from deception.security.protected_services import _require_separate_authorizer_publisher_identity
+
+    publisher_root, authorizer_root = tmp_path / "publisher", tmp_path / "authorizer"
+    publisher_root.mkdir()
+    authorizer_root.mkdir()
+    _, _, _, publisher_cert, publisher_key = _issue_mtls_certificates(publisher_root)
+    _, _, _, authorizer_cert, authorizer_key = _issue_mtls_certificates(authorizer_root)
+    config = {
+        "MIRAGE_G4_VERIFIER_PUBLISHER_CERT_FILE": str(publisher_cert),
+        "MIRAGE_G4_VERIFIER_PUBLISHER_KEY_FILE": str(publisher_key),
+        "MIRAGE_G4_VERIFIER_AUTHORIZER_CERT_FILE": str(authorizer_cert),
+        "MIRAGE_G4_VERIFIER_AUTHORIZER_KEY_FILE": str(authorizer_key),
+    }
+    assert _require_separate_authorizer_publisher_identity(config) is None
+    copied_cert = authorizer_root / "copied-client.pem"
+    copied_cert.write_bytes(publisher_cert.read_bytes())
+    with pytest.raises(ProtectedRpcConfigurationError, match="identity_reuse_denied"):
+        _require_separate_authorizer_publisher_identity({
+            **config, "MIRAGE_G4_VERIFIER_AUTHORIZER_CERT_FILE": str(copied_cert),
+        })
+    with pytest.raises(ProtectedRpcConfigurationError, match="identity_reuse_denied"):
+        _require_separate_authorizer_publisher_identity({
+            **config, "MIRAGE_G4_VERIFIER_AUTHORIZER_KEY_FILE": str(publisher_key),
+        })
+
+
 def test_protected_rpc_real_mtls_rejects_missing_client_identity(tmp_path):
     """真實 TLS Server 拒絕無 Client Cert，持證方也不能執行封閉的業務 RPC。"""
     ca, server_cert, server_key, client_cert, client_key = _issue_mtls_certificates(tmp_path)

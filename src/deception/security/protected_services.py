@@ -15,7 +15,7 @@ from fastapi import FastAPI
 from mirage_validator.json_utils import reject_constant, unique_object
 
 from .protected_rpc import (
-    FixedCandidatePublisherMTLSClient, FixedExecutorMTLSClient,
+    FixedAuthorizerMTLSClient, FixedCandidatePublisherMTLSClient, FixedExecutorMTLSClient,
     FixedNativeValidatorMTLSClient, ProtectedRpcConfigurationError,
     create_direct_verifier_app, create_fixed_authorizer_app, create_fixed_executor_app,
     create_fixed_candidate_publisher_app, create_fixed_sender_app,
@@ -335,6 +335,32 @@ def _tls_path(config: Mapping[str, str], name: str) -> Path:
     return Path(_required_config(config, name))
 
 
+def _client_certificate_public_key(path: Path) -> bytes:
+    """從 mTLS Client Cert 取出標準化公鑰，防止複製 PEM 檔案繞過跨角色隔離。"""
+    from cryptography import x509
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
+    try:
+        certificate = x509.load_pem_x509_certificate(path.read_bytes())
+        return certificate.public_key().public_bytes(Encoding.DER,
+                                                     PublicFormat.SubjectPublicKeyInfo)
+    except (OSError, ValueError, TypeError):
+        raise ProtectedRpcConfigurationError("g4_verifier_client_certificate_unverifiable") from None
+
+
+def _require_separate_authorizer_publisher_identity(config: Mapping[str, str]) -> None:
+    """驗證兩條寫入信任鏈不共用 mTLS Key、Cert 或複製後的相同公鑰。"""
+    auth_cert = _tls_path(config, "MIRAGE_G4_VERIFIER_AUTHORIZER_CERT_FILE")
+    publisher_cert = _tls_path(config, "MIRAGE_G4_VERIFIER_PUBLISHER_CERT_FILE")
+    auth_key = _tls_path(config, "MIRAGE_G4_VERIFIER_AUTHORIZER_KEY_FILE")
+    publisher_key = _tls_path(config, "MIRAGE_G4_VERIFIER_PUBLISHER_KEY_FILE")
+    if (auth_cert.resolve() == publisher_cert.resolve()
+            or auth_key.resolve() == publisher_key.resolve()
+            or _client_certificate_public_key(auth_cert)
+            == _client_certificate_public_key(publisher_cert)):
+        raise ProtectedRpcConfigurationError("g4_authorizer_publisher_identity_reuse_denied")
+
+
 def create_verifier_service(config: Mapping[str, str]) -> FastAPI:
     """使用唯一 Verifier Login 與兩個不共用的 TLS 身分組裝原始 HTTP 入口。
 
@@ -392,6 +418,23 @@ def create_verifier_service(config: Mapping[str, str]) -> FastAPI:
             client_key=_tls_path(config, "MIRAGE_G4_VERIFIER_PUBLISHER_KEY_FILE"),
             server_ca=_tls_path(config, "MIRAGE_G4_PUBLISHER_SERVER_CA_FILE"),
         )
+    authorizer_keys = (
+        "MIRAGE_G4_AUTHORIZER_ORIGIN", "MIRAGE_G4_VERIFIER_AUTHORIZER_CERT_FILE",
+        "MIRAGE_G4_VERIFIER_AUTHORIZER_KEY_FILE", "MIRAGE_G4_AUTHORIZER_SERVER_CA_FILE",
+    )
+    authorizer_client = None
+    if any(config.get(key) for key in authorizer_keys):
+        if publisher_client is None or not all(config.get(key) for key in authorizer_keys):
+            raise ProtectedRpcConfigurationError("g4_authorizer_mtls_chain_incomplete")
+        # Authorizer 是另一個寫入 Grant 的信任角色，不能重用 Publisher Client
+        # 身分或私鑰；這不是把兩個角色套用同一憑證名稱的功能捷徑。
+        _require_separate_authorizer_publisher_identity(config)
+        authorizer_client = FixedAuthorizerMTLSClient(
+            origin=_required_config(config, "MIRAGE_G4_AUTHORIZER_ORIGIN"),
+            client_cert=_tls_path(config, "MIRAGE_G4_VERIFIER_AUTHORIZER_CERT_FILE"),
+            client_key=_tls_path(config, "MIRAGE_G4_VERIFIER_AUTHORIZER_KEY_FILE"),
+            server_ca=_tls_path(config, "MIRAGE_G4_AUTHORIZER_SERVER_CA_FILE"),
+        )
     return create_direct_verifier_app(
         verifier=checker, postgres_dsn=dsn,
         environment_id=environment, deployment_id=deployment,
@@ -399,6 +442,7 @@ def create_verifier_service(config: Mapping[str, str]) -> FastAPI:
         expected_audience=_required_config(config, "MIRAGE_G3B_EXPECTED_AUDIENCE"),
         executor_clients=clients, native_validator_client=validator_client,
         candidate_publisher_client=publisher_client,
+        authorizer_client=authorizer_client,
     )
 
 
