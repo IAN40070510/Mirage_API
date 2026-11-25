@@ -26,9 +26,9 @@ from deception.security.protected_rpc import (
     serve_fixed_sender_mtls,
 )
 from deception.world import (PostgresCandidatePromoter, PostgresProtectedAuthorizer,
-                             PostgresProtectedSender)
+                             PostgresKnownRestoreRecorder, PostgresProtectedSender)
 from test_protected_rpc_mtls import _issue_mtls_certificates, _unused_local_port
-from test_protected_grant import _login, _seed
+from test_protected_grant import _login, _promote, _seed
 from test_postgres_conformance import isolated_test_dsn
 from test_receipt_proxy_sender import _candidate_sender
 
@@ -511,3 +511,205 @@ def test_gateway_three_real_tls_hops_use_one_real_postgres_send_lease(
                 worker.join(timeout=5)
                 if worker.is_alive():
                     worker.kill()
+
+
+def _g6_authorized_receipt(dsn):
+    """建立不同 UUID/JTI 的真 PG Receipt→Promotion→Authorizer，不仰賴假 Lease。"""
+    # 同個隔離 schema 的多個 Receipt 不得重用 registry_revision=1 的 Contract。
+    seeded = _seed(dsn, contract_hash=hashlib.sha256(uuid4().bytes).hexdigest())
+    assert _promote(dsn, seeded) == 1
+    authorizer = PostgresProtectedAuthorizer(dsn, expected_login=_login(dsn))
+    admission, owner = authorizer.authorize_promoted_receipt_once(seeded[3])
+    assert owner == "protected-sender-" + seeded[3].hex
+    return GatewayAuthorizedReceipt(seeded[3], admission.candidate_hash), admission
+
+
+def _g6_start_sender_listener(app, *, port, sender_ca, sender_root):
+    """僅啟動一次 loopback Sender mTLS 子程序，確認真的握手就緒。"""
+    worker = multiprocessing.Process(target=serve_fixed_sender_mtls, kwargs={
+        "app": app, "host": "127.0.0.1", "port": port,
+        "server_cert": sender_root / "server.pem",
+        "server_key": sender_root / "server.key", "sender_client_ca": sender_ca,
+    })
+    worker.start()
+    context = ssl.create_default_context(cafile=str(sender_ca))
+    context.load_cert_chain(str(sender_root / "client.pem"),
+                            str(sender_root / "client.key"))
+    with httpx.Client(verify=context, trust_env=False, timeout=1) as probe:
+        for _ in range(50):
+            try:
+                response = probe.get(f"https://127.0.0.1:{port}/internal/ready")
+                assert response.status_code == 200
+                return worker
+            except (httpx.ConnectError, httpx.ReadError):
+                assert worker.is_alive(), "G6 isolated Sender stopped during startup"
+                time.sleep(0.1)
+    worker.terminate()
+    worker.join(timeout=5)
+    pytest.fail("G6 isolated Sender mTLS readiness timed out")
+
+
+def _g6_stop_worker(worker):
+    """只回收本測試建立的專用 loopback 子程序，不觸碰共享服務。"""
+    if worker is not None:
+        worker.terminate()
+        worker.join(timeout=5)
+        if worker.is_alive():
+            worker.kill()
+            worker.join(timeout=5)
+
+
+def test_gateway_g6_sender_outage_recovers_only_with_fresh_receipt(
+        tmp_path, monkeypatch, isolated_test_dsn):
+    """Sender 真 TCP 停機回固定 503 無 Lease；重啟後只用新 Receipt 正常發出。"""
+    import psycopg
+
+    sender_port = _unused_local_port()
+    (verifier, sender), (_, sender_ca, _, sender_root) = _gateway_clients(
+        tmp_path, verifier_port=_unused_local_port(), sender_port=sender_port)
+    offline_pin, offline_admission = _g6_authorized_receipt(isolated_test_dsn)
+    recovered_pin, recovered_admission = _g6_authorized_receipt(isolated_test_dsn)
+    current = {"pin": offline_pin, "verifier_calls": 0}
+
+    async def isolated_verified(_original):
+        """僅模擬 Verifier 回傳已存在的真 PG 授權；本例不宣稱 JWS 驗章。"""
+        current["verifier_calls"] += 1
+        return current["pin"]
+
+    monkeypatch.setattr(verifier, "verify_original", isolated_verified)
+    app = create_gateway_native_proxy_candidate_app(
+        verifier_client=verifier, sender_client=sender)
+    pg_sender = PostgresProtectedSender(isolated_test_dsn,
+                                        expected_login=_login(isolated_test_dsn))
+    sender_app = create_receipt_proxy_sender_candidate_app(sender=pg_sender)
+    headers = {"x-request-id": "g6-outage", "x-trusted-session": "isolated-stub"}
+    worker = None
+    try:
+        with TestClient(app, base_url="https://client.example") as client:
+            # 真 HTTPS mTLS Sender 連線拒絕；沒有 Sender 被呼叫，自然沒有 Lease。
+            offline = client.get("/store/carts", headers=headers)
+            assert offline.status_code == 503
+            assert offline.json() == {"detail": "gateway_delivery_unverifiable"}
+            assert b"synthetic" not in offline.content
+            with psycopg.connect(isolated_test_dsn) as connection:
+                assert connection.execute(
+                    "SELECT count(*) FROM protected_send_leases WHERE admission_id=%s",
+                    (offline_admission.admission_id,),
+                ).fetchone() == (0,)
+            # 不重送未知結果的舊 Receipt；改用獨立 JTI 的全新授權。
+            worker = _g6_start_sender_listener(
+                sender_app, port=sender_port, sender_ca=sender_ca, sender_root=sender_root)
+            current["pin"] = recovered_pin
+            headers["x-request-id"] = "g6-recovered-fresh"
+            recovered = client.get("/store/carts", headers=headers)
+            assert recovered.status_code == 200
+            assert recovered.content == b'{"synthetic":true}'
+            assert current["verifier_calls"] == 2
+            with psycopg.connect(isolated_test_dsn) as connection:
+                assert connection.execute(
+                    "SELECT admission_id FROM protected_send_leases ORDER BY admission_id"
+                ).fetchall() == [(recovered_admission.admission_id,)]
+                assert connection.execute(
+                    "SELECT state FROM response_admissions WHERE admission_id=%s",
+                    (recovered_admission.admission_id,),
+                ).fetchone() == ("SEND_COMPLETED",)
+    finally:
+        _g6_stop_worker(worker)
+
+
+def test_gateway_g6_post_commit_ack_loss_never_emits_native_or_second_lease(
+        tmp_path, monkeypatch, isolated_test_dsn):
+    """真 PG Lease COMMIT 後遺失應答，Gateway 固定 503；重試不能建立第二個 Lease。"""
+    import psycopg
+
+    sender_port = _unused_local_port()
+    (verifier, sender), (_, sender_ca, _, sender_root) = _gateway_clients(
+        tmp_path, verifier_port=_unused_local_port(), sender_port=sender_port)
+    pin, admission = _g6_authorized_receipt(isolated_test_dsn)
+    pg_sender = PostgresProtectedSender(isolated_test_dsn,
+                                        expected_login=_login(isolated_test_dsn))
+    committed_start = pg_sender.start_send
+
+    def commit_then_lose_ack(**kwargs):
+        """先取得已實際提交的 Lease，再故意讓 Sender 無法確認 COMMIT 回覆。"""
+        lease = committed_start(**kwargs)
+        if lease is not None:
+            raise OSError("simulated_lost_post_commit_reply")
+        return None
+
+    monkeypatch.setattr(pg_sender, "start_send", commit_then_lose_ack)
+
+    async def isolated_verified(_original):
+        """固定回傳真 PG Authorizer 所簽發的 Receipt/hash，不假冒 JWS。"""
+        return pin
+
+    monkeypatch.setattr(verifier, "verify_original", isolated_verified)
+    sender_app = create_receipt_proxy_sender_candidate_app(sender=pg_sender)
+    app = create_gateway_native_proxy_candidate_app(
+        verifier_client=verifier, sender_client=sender)
+    worker = None
+    try:
+        worker = _g6_start_sender_listener(
+            sender_app, port=sender_port, sender_ca=sender_ca, sender_root=sender_root)
+        with TestClient(app, base_url="https://client.example") as client:
+            for request_id in ("g6-commit-unknown", "g6-explicit-replay-denied"):
+                result = client.get("/store/carts", headers={
+                    "x-request-id": request_id, "x-trusted-session": "isolated-stub"})
+                assert result.status_code == 503
+                assert result.json() == {"detail": "gateway_delivery_unverifiable"}
+                assert b"synthetic" not in result.content
+            with psycopg.connect(isolated_test_dsn) as connection:
+                assert connection.execute(
+                    "SELECT count(*) FROM protected_send_leases WHERE admission_id=%s",
+                    (admission.admission_id,),
+                ).fetchone() == (1,)
+                assert connection.execute(
+                    "SELECT state FROM response_admissions WHERE admission_id=%s",
+                    (admission.admission_id,),
+                ).fetchone() == ("SEND_AUTHORIZED",)
+    finally:
+        _g6_stop_worker(worker)
+
+
+def test_gateway_g6_known_restore_quarantines_native_sender_across_mtls(
+        tmp_path, monkeypatch, isolated_test_dsn):
+    """Known Restore 真 PG 隔離旗標阻止 Sender Lease；Gateway 不洩漏原生內容。"""
+    import psycopg
+
+    sender_port = _unused_local_port()
+    (verifier, sender), (_, sender_ca, _, sender_root) = _gateway_clients(
+        tmp_path, verifier_port=_unused_local_port(), sender_port=sender_port)
+    pin, admission = _g6_authorized_receipt(isolated_test_dsn)
+    recorder = PostgresKnownRestoreRecorder(
+        isolated_test_dsn, expected_login=_login(isolated_test_dsn))
+    assert recorder.mark_known_restore(uuid4())
+
+    async def isolated_verified(_original):
+        """故意回傳 Restore 前建立的真 Receipt，驗證 Sender 必須重新檢查。"""
+        return pin
+
+    monkeypatch.setattr(verifier, "verify_original", isolated_verified)
+    sender_app = create_receipt_proxy_sender_candidate_app(sender=PostgresProtectedSender(
+        isolated_test_dsn, expected_login=_login(isolated_test_dsn)))
+    app = create_gateway_native_proxy_candidate_app(
+        verifier_client=verifier, sender_client=sender)
+    worker = None
+    try:
+        worker = _g6_start_sender_listener(
+            sender_app, port=sender_port, sender_ca=sender_ca, sender_root=sender_root)
+        with TestClient(app, base_url="https://client.example") as client:
+            blocked = client.get("/store/carts", headers={
+                "x-request-id": "g6-restore", "x-trusted-session": "isolated-stub"})
+            assert blocked.status_code == 503
+            assert blocked.json() == {"detail": "gateway_delivery_unverifiable"}
+            assert b"synthetic" not in blocked.content
+        with psycopg.connect(isolated_test_dsn) as connection:
+            assert connection.execute(
+                "SELECT count(*) FROM protected_send_leases WHERE admission_id=%s",
+                (admission.admission_id,),
+            ).fetchone() == (0,)
+            assert connection.execute(
+                "SELECT count(*) FROM protected_local_restore_events"
+            ).fetchone() == (1,)
+    finally:
+        _g6_stop_worker(worker)
