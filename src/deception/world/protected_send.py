@@ -45,7 +45,7 @@ class PostgresKnownRestoreRecorder(_ProtectedConnection):
                                (_RESTORE_LOCK_NAMESPACE, _RESTORE_LOCK_KEY))
                 cursor.execute(
                     "INSERT INTO protected_local_restore_events(restore_event_id) "
-                    "VALUES (%s) ON CONFLICT (restore_event_id) DO NOTHING",
+                    "VALUES (%s) ON CONFLICT DO NOTHING",
                     (restore_event_id,),
                 )
                 # 不使用 RETURNING，讓專用 Recorder 只需 INSERT、無需 SELECT。

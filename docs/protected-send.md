@@ -107,6 +107,10 @@ lock、檢查此表；Recorder 取得同一鎖的排他型態才能插入事件�
 只需 `INSERT`，同 ID 使用 `ON CONFLICT DO NOTHING` 查核結果，不需要
 `SELECT`／`UPDATE`／`DELETE`。新增真 PostgreSQL `NOINHERIT` SCRAM 兩角色
 最小權限與禁止 `SET ROLE` 的隔離測試；正式部署 Secret/ACL 尚未驗收。
+首輪測試發現 PostgreSQL 對**指定 Conflict Arbiter** 的寫法還要求額外
+讀取權，實體 Recorder 因而 `permission denied`（不是 PASS）；已改為
+不指定 Arbiter 的 `ON CONFLICT DO NOTHING`，僅以受保護表唯一主鍵
+處理重複事件。此差異必須由下一版真 SCRAM CI 確認，不以純單元測試替代。
 
 此方法**只能偵測由部署控制面明確告知、且事件在目前 World DB 中仍可見的
 已知 Restore**。部署流程須先停止受信任入口，完成還原後、任何 Sender
