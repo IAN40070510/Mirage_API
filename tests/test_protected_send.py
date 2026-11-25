@@ -14,7 +14,7 @@ from deception.api.fingerprint import fingerprint_request
 from deception.core.renderer import ResponseRenderer
 from deception.world import (
     AdmissionOperationResult, AdmissionState, PostgresProtectedAuthorizer,
-    PostgresProtectedSender, PostgresProtectedSnapshotPurger,
+    PostgresKnownRestoreRecorder, PostgresProtectedSender, PostgresProtectedSnapshotPurger,
     ProtectedGrantError, ProtectedLeaseTransmission, ProtectedSendLease,
     ProtectedSendReconciliation,
 )
@@ -74,6 +74,77 @@ def test_single_send_lease_claims_exact_snapshot_and_never_rearms(isolated_test_
             "SELECT sequence,event_name FROM response_audit WHERE admission_id=%s ORDER BY sequence",
             (admission.admission_id,),
         ).fetchall() == [(0, "send_started"), (1, "response_send_attempted"), (2, "asgi_send_completed")]
+
+
+def test_known_local_restore_blocks_future_send_lease_persistently(isolated_test_dsn):
+    """已知 Restore 事件一旦落盤，換 Sender 連線或重啟仍不得取得新的 Lease。"""
+    import psycopg
+
+    admission, owner, envelope, seeded = _authorized_pin(isolated_test_dsn)
+    login = _login(isolated_test_dsn)
+    recorder = PostgresKnownRestoreRecorder(isolated_test_dsn, expected_login=login)
+    event_id = uuid4()
+    assert recorder.mark_known_restore(event_id)
+    assert not recorder.mark_known_restore(event_id)
+    assert recorder.mark_known_restore(uuid4())
+    with pytest.raises(ProtectedGrantError, match="known_restore_event_id_invalid"):
+        recorder.mark_known_restore(UUID(int=0))
+    with psycopg.connect(isolated_test_dsn) as connection:
+        assert connection.execute("SELECT count(*) FROM protected_local_restore_events").fetchone() == (2,)
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            connection.execute("DELETE FROM protected_local_restore_events")
+    sender = PostgresProtectedSender(isolated_test_dsn, expected_login=login)
+    assert sender.start_send(
+        admission_id=admission.admission_id, receipt_id=seeded[3], owner=owner,
+        request_fingerprint=admission.request_binding_digest, expected_envelope=envelope,
+    ) is None
+    with psycopg.connect(isolated_test_dsn) as connection:
+        assert connection.execute("SELECT state FROM response_admissions WHERE admission_id=%s",
+                                  (admission.admission_id,)).fetchone() == ("SEND_AUTHORIZED",)
+        assert connection.execute("SELECT count(*) FROM protected_send_leases").fetchone() == (0,)
+
+
+def test_known_restore_lock_serializes_concurrent_sender_start(isolated_test_dsn):
+    """Restore 排他交易鎖先取得時，並行 StartSend 必等事件提交並拒絕新 Lease。"""
+    import psycopg
+
+    admission, owner, envelope, seeded = _authorized_pin(isolated_test_dsn)
+    sender = PostgresProtectedSender(isolated_test_dsn, expected_login=_login(isolated_test_dsn))
+    args = dict(admission_id=admission.admission_id, receipt_id=seeded[3], owner=owner,
+                request_fingerprint=admission.request_binding_digest, expected_envelope=envelope)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with psycopg.connect(isolated_test_dsn) as mark_transaction:
+            mark_transaction.execute("SELECT pg_advisory_xact_lock(%s,%s)",
+                                     (1296650823, 1380275028))
+            pending = pool.submit(sender.start_send, **args)
+            time.sleep(0.1)
+            assert not pending.done()
+            mark_transaction.execute("INSERT INTO protected_local_restore_events "
+                                     "(restore_event_id) VALUES (%s)", (uuid4(),))
+        assert pending.result(timeout=8) is None
+    with psycopg.connect(isolated_test_dsn) as connection:
+        assert connection.execute("SELECT count(*) FROM protected_send_leases").fetchone() == (0,)
+        assert connection.execute("SELECT state FROM response_admissions WHERE admission_id=%s",
+                                  (admission.admission_id,)).fetchone() == ("SEND_AUTHORIZED",)
+
+
+def test_missing_local_restore_evidence_table_fails_closed(isolated_test_dsn):
+    """本機隔離證據表缺失不能默認安全，StartSend 必拒絕且回滾全部起送動作。"""
+    import psycopg
+
+    admission, owner, envelope, seeded = _authorized_pin(isolated_test_dsn)
+    with psycopg.connect(isolated_test_dsn) as connection:
+        connection.execute("DROP TABLE protected_local_restore_events")
+    sender = PostgresProtectedSender(isolated_test_dsn, expected_login=_login(isolated_test_dsn))
+    with pytest.raises(psycopg.errors.UndefinedTable):
+        sender.start_send(
+            admission_id=admission.admission_id, receipt_id=seeded[3], owner=owner,
+            request_fingerprint=admission.request_binding_digest, expected_envelope=envelope,
+        )
+    with psycopg.connect(isolated_test_dsn) as connection:
+        assert connection.execute("SELECT count(*) FROM protected_send_leases").fetchone() == (0,)
+        assert connection.execute("SELECT state FROM response_admissions WHERE admission_id=%s",
+                                  (admission.admission_id,)).fetchone() == ("SEND_AUTHORIZED",)
 
 
 @pytest.mark.parametrize("field,changed", [

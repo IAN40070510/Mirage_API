@@ -17,6 +17,41 @@ from .protected_grant import _ProtectedConnection, _verified_envelope_hashes, Pr
 from .transmission import TransmissionError, current_time, response_envelope, response_hashes
 
 
+# 固定 PostgreSQL transaction-level advisory lock：同一 DB/schema 的 Recorder 與
+# Sender 在取得新 Lease 前序列化「已知 Restore」通知；不能防止整機快照倒退。
+_RESTORE_LOCK_NAMESPACE = 1296650823  # MIRG
+_RESTORE_LOCK_KEY = 1380275028        # REST
+
+
+class PostgresKnownRestoreRecorder(_ProtectedConnection):
+    """由受信任部署控制面落盤已知 Restore 事件，持久阻止後續的新 Send Lease。"""
+
+    def mark_known_restore(self, restore_event_id: UUID) -> bool:
+        """以單一 UUID4 在真實 PostgreSQL 寫入不可變事件；重送同 ID 不改寫。
+
+        呼叫方必須在 World Restore 前停止新的入口，且不得把此函式當作
+        整機快照回滾偵測。COMMIT ACK 不明時只可沿用原 ID 對帳；沒有
+        自動解封或人工 override，待單機復原驗證契約完成才能另行實作。
+        """
+        if not isinstance(restore_event_id, UUID) or restore_event_id.version != 4:
+            raise ProtectedGrantError("known_restore_event_id_invalid")
+        with self._connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SET LOCAL lock_timeout='3s'")
+                cursor.execute("SELECT current_setting('transaction_isolation')")
+                if cursor.fetchone()[0] != "read committed":
+                    raise ProtectedGrantError("known_restore_requires_read_committed")
+                cursor.execute("SELECT pg_advisory_xact_lock(%s,%s)",
+                               (_RESTORE_LOCK_NAMESPACE, _RESTORE_LOCK_KEY))
+                cursor.execute(
+                    "INSERT INTO protected_local_restore_events(restore_event_id) "
+                    "VALUES (%s) ON CONFLICT (restore_event_id) DO NOTHING "
+                    "RETURNING restore_event_id",
+                    (restore_event_id,),
+                )
+                return cursor.fetchone() is not None
+
+
 @dataclass(frozen=True)
 class ProtectedSendLease:
     """已在資料庫一次性消費的發送憑據；Payload bytes 只能來自受保護 Pin。"""
@@ -101,6 +136,13 @@ class PostgresProtectedSender(_ProtectedConnection):
                     "SELECT 1 FROM protected_authorized_snapshot_purge_fences "
                     "WHERE admission_id=%s", (admission_id,),
                 )
+                if cursor.fetchone() is not None:
+                    return None
+                # 對同一資料庫的已知 Restore 通知取得共享交易鎖；部署控制面
+                # 只能在排他鎖下新增事件，確保標記提交後的新 StartSend 必拒絕。
+                cursor.execute("SELECT pg_advisory_xact_lock_shared(%s,%s)",
+                               (_RESTORE_LOCK_NAMESPACE, _RESTORE_LOCK_KEY))
+                cursor.execute("SELECT 1 FROM protected_local_restore_events LIMIT 1")
                 if cursor.fetchone() is not None:
                     return None
                 pinned = bytes(row[7])

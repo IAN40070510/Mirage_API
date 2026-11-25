@@ -34,6 +34,18 @@ MIRAGE_RESTORE_PROFILE_VERSION=1
 
 `standard_single_node` requires **no** `MIRAGE_FENCE_*` fields or Fence installation. For the optional mode, set `MIRAGE_RESTORE_PROFILE=external_fence` and provide `MIRAGE_FENCE_AUTHORITY_DSN`, `MIRAGE_FENCE_NAMESPACE`, `MIRAGE_FENCE_EPOCH`, `MIRAGE_FENCE_PUBLISHER_PUBLIC_KEY_FILE`, and `MIRAGE_FENCE_HEAD_PUBLIC_KEY_FILE`. The public-key files currently use lowercase 64-hex-character representations of distinct Ed25519 public keys; their contents, not paths, are digested in the in-memory profile. Keep the DSN and any credentials outside documentation, command logs and images. No external adapter is enabled from these settings yet.
 
+**Known-restore local guard candidate (not release-accepted):** Migration
+`030_local_known_restore_quarantine.sql` and `PostgresKnownRestoreRecorder` record
+append-only restore-event IDs in the World PostgreSQL. An advisory transaction lock
+serializes new Sender Lease creation against event insertion; once an event is
+committed, later new leases are denied. The schema/table must exist and the Sender
+must have SELECT or starting a lease fails closed. This is a narrowly scoped
+single-node mechanism, **not** an external Fence or whole-host rollback detector.
+The deployer must suspend ingress before restore and persist the marker **after**
+restoring the database, before reopening Sender; restoring an older DB image after
+the marker could erase it. There is no verified release path, startup orchestrator,
+or protection against already-started network sends yet, so SINGLE-NODE-03 remains OPEN.
+
 Missing external DSN/secret must not prevent standard single-node **configuration parsing**; configured external mode cannot downgrade to standard because an external field is missing or corrupt. **Remaining security blocker:** a deliberately changed environment that removes *all* external settings is not detectable from an environment-only declaration. An authoritative, durable mode pin outside the World restore domain, guarded transitions, liveness/freshness verification and persistent quarantine are still required before claiming full `SINGLE-NODE-05` or any external assurance. A configured external profile whose authority becomes unavailable MUST remain quarantined, without silent downgrade.
 
 ## Standard single-node security acceptance — all mandatory

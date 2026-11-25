@@ -21,7 +21,8 @@ transmission_factory=...)` 接到既有 `ValidatedHTTPResponse`：在真正發�
 `protected_rpc.create_sealed_app()` 仍對業務 RPC 回 503；
 `trusted_http.from_environment()` 繼續硬拒絕。正式 Sender OS 身分／Secret／
 網路 ACL／mTLS 呼叫綁定、G5 Restore/Purge Fence、跨資料庫線性化及 G6
-驗收尚未完成；沒有外部權威 Fence 時，此 Primitive 不得啟用到外界。
+驗收尚未完成。D-74 的標準單機模式不強制安裝外部 Fence，但上述正式
+Sender、已知 Restore 恢復與 G6 Gate 未通過前，這個 Primitive 不得對外解封。
 
 ## 輸入與輸出
 
@@ -92,6 +93,26 @@ Fingerprint 只得到 `UNVERIFIABLE`；即使觀察不到 Lease 也不可重起�
 另強制核對原 Grant Binding、Admission JSON 的 ID／Fingerprint／Hash／世代／
 Candidate Ref／期限與受保護 Snapshot；任何不一致回 `UNVERIFIABLE`。
 這只改善故障診斷，不處理跨庫權威、客戶端 ACK、正式服務接線與 Restore。
+
+### D-74 已知 Restore 本機隔離事件（新隔離子項，待本版 CI）
+
+`030_local_known_restore_quarantine.sql` 建立不可更新、不可刪除的
+`protected_local_restore_events`；受信任部署 Recorder 以實體獨立 PostgreSQL
+登入 `mark_known_restore(uuid4)` 寫入事件，同 UUID 可安全重查，不產生第二
+事件。Sender 在原 Admission Row Lock 之後取得本機共享 advisory transaction
+lock、檢查此表；Recorder 取得同一鎖的排他型態才能插入事件。**事件已提交後**
+的新 Lease 一律拒絕，已存在的原授權與 Snapshot 不更改。若表缺失、無 SELECT
+權或 Lock/DB 無法查證則 fail closed。Sender 角色的啟動前 ACL 明確需要
+`SELECT` 且禁止 `INSERT`／`UPDATE`／`DELETE`；Recorder 的獨立 Login
+正式部署 Secret/ACL 尚未驗收。
+
+此方法**只能偵測由部署控制面明確告知、且事件在目前 World DB 中仍可見的
+已知 Restore**。部署流程須先停止受信任入口，完成還原後、任何 Sender
+重啟前落盤事件；單靠資料庫內事件無法保證停機時程、不會被後續資料庫還原
+覆寫，亦不能識別整台 VM 回滾或阻止已起送的網路 bytes 繼續傳輸。
+目前只提供**單向持久隔離**，沒有放行 API、沒有繞過旗標，需另完成本機
+驗證與原子 Release、部署 orchestration、角色/競態/故障驗收後才可簽
+`SINGLE-NODE-03`。標準單機不宣稱整機快照抗回滾；外部 Fence 仍為選配。
 
 初始唯讀對帳程式 [SHA `8bd5586`](https://github.com/IAN40070510/Mirage_API/commit/8bd5586f7ee7db4e25417ab20dc4b75ff811e566)
 在 [隔離 PostgreSQL CI #45541214196](https://github.com/IAN40070510/Mirage_API/actions/runs/45541214196)

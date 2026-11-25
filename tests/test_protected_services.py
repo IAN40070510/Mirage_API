@@ -265,6 +265,7 @@ def test_g4_sender_preflight_requires_column_only_state_update(monkeypatch):
                 allowed = {("response_admissions", "SELECT"),
                            ("protected_authorized_http_snapshots", "SELECT"),
                            ("protected_grant_bindings", "SELECT"),
+                           ("protected_local_restore_events", "SELECT"),
                            ("protected_send_leases", "INSERT"),
                            ("protected_send_leases", "SELECT"),
                            ("response_audit", "INSERT")}
