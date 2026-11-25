@@ -7,7 +7,7 @@
 | G3b | ARM64 四個獨立 non-root mTLS 服務與專用 SCRAM、20/20 無簽章路徑拒絕；同一原生 Client HTTP 的真 Ed25519 JWS→Verifier→Executor→Validator→Publisher→Authorizer 跨七 TLS Listener 已在隔離測試通過 | 七服務正式部署的獨立最小權限 Login／憑證輪替、跨故障域與安全審核 |
 | G4 | Receipt-only Sender 綁定不可變 DB Pin，唯一 Lease；Gateway 原始 HTTP mTLS、授權 Envelope Hash 與 Client 原生 HTTP；隔離七 TLS／真 PG／JWS 重放測試已通過 | 正式服務仍封閉 503；正式 Sender／Gateway 部署、完整正式拓樸與 Client 端安全審核 |
 | G5 | 已知 Restore／Purge、不可逆 Lease、密碼學 Anchor 模擬與獨立 PostgreSQL Fence 的隔離回歸 | 正式 Restore 控制面／故障域啟動與可選外部 Fence Acceptance；單機不得宣稱防整機快照倒退 |
-| G6 | 真 JWS 全鏈經七 TLS／PG Lease／原生 200，JWS 重放阻擋；Sender TCP 停機、復原新 Receipt、COMMIT 後未知 ACK、Known Restore 四項隔離案例均 fail-closed；Gateway Client 下游斷線不重送 | Client 實體掉線／網路封包遺失／逾時／跨節點重啟全矩陣、可追溯放行與 Owner 簽核 |
+| G6 | 真 JWS 全鏈經七 TLS／PG Lease／原生 200，JWS 重放阻擋；Sender TCP 停機、復原新 Receipt、COMMIT 後未知 ACK、Known Restore 與實際 Sender mTLS Read Timeout 五類隔離案例均 fail-closed；Gateway Client 下游斷線不重送 | Client 實體掉線／網路封包遺失／跨節點重啟與延遲綜合矩陣、可追溯放行與 Owner 簽核 |
 
 隔離候選分支的 PR 為 [#32](https://github.com/IAN40070510/Mirage_API/pull/32)、[#33](https://github.com/IAN40070510/Mirage_API/pull/33)、[#34](https://github.com/IAN40070510/Mirage_API/pull/34)，全為 Draft／**NO-GO**，正式 `Trusted Send OFF`。#33 確切 SHA `5294d075` 的完整 Python CI **1541 passed／14 skipped**，ARM64 World／Role **258 passed／8 skipped**；#34 的確切 CI 應以該 PR 最新 SHA 與 Actions/JUnit 為準，不能沿用前一版的數字冒充。上述 ARM64 是獨立 `161.33.154.211` 測試區，未修改共用 Oracle 既有部署。
 

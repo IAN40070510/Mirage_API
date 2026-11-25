@@ -52,7 +52,8 @@ Verifier／Sender RPC、Hash 錯誤、任何異常均返回固定 503；**不重
 實驗使用；**無任何 production CLI 或環境旗標**能啟動這個對外候選。
 
 隔離驗收現在分兩層：`tests/test_protected_gateway_proxy.py` 使用固定 Verifier
-stub 專門驗三層 TLS、真 PG Lease、Hash、Sender 停機／復原與故障；另外
+stub 專門驗三層 TLS、真 PG Lease、Hash、Sender 停機／復原、真 mTLS Read
+Timeout（8 秒，單次 RPC）與故障；另外
 `tests/test_g6_full_real_chain.py` 以**真正的 Ed25519 JWS、原始 Fingerprint、
 七個各自 loopback TLS Listener** 驗證同一 Client HTTP 經 Gateway→Verifier→
 Executor→Native Validator→Publisher→Authorizer→Sender 原生 200，接著重放

@@ -720,3 +720,48 @@ def test_gateway_g6_known_restore_quarantines_native_sender_across_mtls(
             ).fetchone() == (1,)
     finally:
         _g6_stop_worker(worker)
+
+
+def test_gateway_g6_real_sender_mtls_read_timeout_has_one_rpc_and_fixed_503(
+        tmp_path, monkeypatch):
+    """真 mTLS Listener 逾時不得自動重試，Gateway 零原生 bytes 且只呼叫一次。"""
+    sender_port = _unused_local_port()
+    (verifier, sender), (_, sender_ca, _, sender_root) = _gateway_clients(
+        tmp_path, verifier_port=_unused_local_port(), sender_port=sender_port)
+    pin = GatewayAuthorizedReceipt(uuid4(), "a" * 64)
+    attempts = multiprocessing.Value("i", 0)
+    slow_sender = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+
+    @slow_sender.get("/internal/ready")
+    async def ready():
+        """只在健康探針回應，避免把探針誤算成業務送達。"""
+        return {"trusted_send": "disabled"}
+
+    @slow_sender.post("/internal/v1/emit-receipt")
+    async def delayed_receipt():
+        """真正接收 mTLS HTTP RPC 後等超過固定八秒 Read Timeout。"""
+        with attempts.get_lock():
+            attempts.value += 1
+        await asyncio.sleep(9)
+        return {"unreachable": "no_native_response_must_escape"}
+
+    async def isolated_verified(_original):
+        """只為網路逾時注入固定 Receiver Pin，不假裝本例已驗 JWS。"""
+        return pin
+
+    monkeypatch.setattr(verifier, "verify_original", isolated_verified)
+    app = create_gateway_native_proxy_candidate_app(
+        verifier_client=verifier, sender_client=sender)
+    worker = None
+    try:
+        worker = _g6_start_sender_listener(
+            slow_sender, port=sender_port, sender_ca=sender_ca, sender_root=sender_root)
+        with TestClient(app, base_url="https://client.example") as client:
+            result = client.get("/store/carts", headers={
+                "x-request-id": "g6-physical-timeout", "x-trusted-session": "isolated-stub"})
+            assert result.status_code == 503
+            assert result.json() == {"detail": "gateway_delivery_unverifiable"}
+            assert b"unreachable" not in result.content
+        assert attempts.value == 1
+    finally:
+        _g6_stop_worker(worker)
