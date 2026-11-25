@@ -4,7 +4,7 @@
 
 | 階段 | 隔離實測 | 尚未完成的放行條件 |
 | --- | --- | --- |
-| G3b | ARM64 四個獨立 non-root mTLS 服務與專用 SCRAM、20/20 無簽章路徑拒絕；I-04 同一原生 Client HTTP 的真 Ed25519 JWS→Verifier→Executor→Validator→Publisher→Authorizer 跨七 TLS Listener 200／409 與 Replay 拒絕已在隔離測試通過 | 其餘 19 路由的 Client 原生 2xx／4xx、I-04 URL／競態矩陣、正式七服務獨立最小權限 Login／憑證輪替及安全審核 |
+| G3b | ARM64 四個獨立 non-root mTLS 服務與專用 SCRAM、20/20 無簽章路徑拒絕；I-01～I-04 八組原生 Client 200／409 由真 Ed25519 JWS→Verifier→Executor→Validator→Publisher→Authorizer 跨七 TLS Listener、唯一 PG Lease 與 Replay 拒絕隔離驗收通過 | 其餘 16 路由的 Client 原生 2xx／4xx、Inventory 其他 CAS／故障／URL 矩陣、正式七服務獨立最小權限 Login／憑證輪替及安全審核 |
 | G4 | Receipt-only Sender 綁定不可變 DB Pin，唯一 Lease；Gateway 原始 HTTP mTLS、授權 Envelope Hash 與 Client 原生 HTTP；隔離七 TLS／真 PG／JWS 重放測試已通過 | 正式服務仍封閉 503；正式 Sender／Gateway 部署、完整正式拓樸與 Client 端安全審核 |
 | G5 | 已知 Restore／Purge、不可逆 Lease、密碼學 Anchor 模擬與獨立 PostgreSQL Fence 的隔離回歸 | 正式 Restore 控制面／故障域啟動與可選外部 Fence Acceptance；單機不得宣稱防整機快照倒退 |
 | G6 | 真 JWS 全鏈經七 TLS／PG Lease／原生 200，JWS 重放阻擋；Sender TCP 停機、復原新 Receipt、COMMIT 後未知 ACK、Known Restore 與實際 Sender mTLS Read Timeout 五類隔離案例均 fail-closed；Gateway Client 下游斷線不重送 | Client 實體掉線／網路封包遺失／跨節點重啟與延遲綜合矩陣、可追溯放行與 Owner 簽核 |

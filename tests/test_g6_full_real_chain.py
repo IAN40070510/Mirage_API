@@ -1,6 +1,7 @@
 """G3b～G6 隔離真鏈：Client TLS→Gateway→六段 mTLS→PG 原生 HTTP。"""
 
 import hashlib
+import json
 import multiprocessing
 import os
 from pathlib import Path
@@ -153,9 +154,30 @@ def _g6_wait_ready(endpoint):
     pytest.fail(endpoint["name"] + " mTLS readiness timed out")
 
 
+def _g6_signed_client_request(client, signer_key, gateway_port, *,
+                              method, path, request_id, body=None):
+    """在 Client 發送前依精確 HTTPX URL／Headers／Body 簽 Ed25519 JWS。"""
+    headers = {"x-request-id": request_id}
+    kwargs = {}
+    if body is not None:
+        headers["content-type"] = "application/json"
+        kwargs["content"] = json.dumps(body, separators=(",", ":")).encode("utf-8")
+    outbound = client.build_request(
+        method, f"https://127.0.0.1:{gateway_port}{path}",
+        headers=headers, **kwargs,
+    )
+    jti = uuid4().hex
+    outbound.headers["x-trusted-session"] = signed(
+        signer_key, jti=jti,
+        fingerprint=fingerprint_httpx_request(outbound, request_id),
+        access_mode="inventory",
+    )
+    return outbound, jti
+
+
 def test_g6_full_real_jws_seven_tls_hops_native_http_and_replay(
         tmp_path, request, isolated_test_dsn):
-    """一份真 Client HTTP 經真 JWS／七個 TLS Listener／PG Grant 與 Lease，重放禁止。"""
+    """I-01～I-04 八種真 Client 2xx／4xx 經七 TLS／PG Grant/Lease，JWS 重放禁止。"""
     dsn = isolated_test_dsn
     login = _login(dsn)
     now = int(time.time())
@@ -179,7 +201,10 @@ def test_g6_full_real_jws_seven_tls_hops_native_http_and_replay(
     endpoint_specs = (
         ("executor", create_fixed_executor_app(executor=PostgresProtectedWorldExecutor(
             dsn, expected_login=login, world_store=world,
-            rejection_templates={"unknown_synthetic_sku": "synthetic-inventory-1"})),
+            rejection_templates={
+                "unknown_synthetic_sku": "synthetic-inventory-1",
+                "reservation_not_active": "synthetic-inventory-1",
+            })),
          serve_fixed_executor_mtls, "verifier_client_ca"),
         ("validator", create_native_validator_app(projector=projector),
          serve_native_validator_mtls, "verifier_client_ca"),
@@ -237,14 +262,9 @@ def test_g6_full_real_jws_seven_tls_hops_native_http_and_replay(
                     time.sleep(0.1)
             else:
                 pytest.fail("G6 true Client HTTPS listener did not become ready")
-            original = client.build_request(
-                "GET", f"https://127.0.0.1:{gateway_port}/synthetic/inventory/sku-1",
-                headers={"x-request-id": "g6-real-jws-1"},
-            )
-            fingerprint = fingerprint_httpx_request(original, "g6-real-jws-1")
-            jti = uuid4().hex
-            original.headers["x-trusted-session"] = signed(
-                signer_key, jti=jti, fingerprint=fingerprint, access_mode="inventory")
+            original, jti = _g6_signed_client_request(
+                client, signer_key, gateway_port, method="GET",
+                path="/synthetic/inventory/sku-1", request_id="g6-real-jws-1")
             native = client.send(original)
             if native.status_code != 200:
                 with psycopg.connect(dsn) as debug_connection:
@@ -261,16 +281,10 @@ def test_g6_full_real_jws_seven_tls_hops_native_http_and_replay(
             assert duplicate.json() == {"detail": "gateway_delivery_unverifiable"}
             assert b"available" not in duplicate.content
             # I-04 真業務 409 必須走同一條獨立投影→Grant→Sender，不能由 Gateway 造錯誤。
-            missing = client.build_request(
-                "GET", f"https://127.0.0.1:{gateway_port}/synthetic/inventory/not-in-world",
-                headers={"x-request-id": "g6-real-jws-native-409"},
-            )
-            missing_jti = uuid4().hex
-            missing.headers["x-trusted-session"] = signed(
-                signer_key, jti=missing_jti,
-                fingerprint=fingerprint_httpx_request(missing, "g6-real-jws-native-409"),
-                access_mode="inventory",
-            )
+            missing, missing_jti = _g6_signed_client_request(
+                client, signer_key, gateway_port, method="GET",
+                path="/synthetic/inventory/not-in-world",
+                request_id="g6-real-jws-native-409")
             missing_native = client.send(missing)
             assert missing_native.status_code == 409, missing_native.text
             assert missing_native.content == b'{"code":"unknown_synthetic_sku"}'
@@ -278,21 +292,94 @@ def test_g6_full_real_jws_seven_tls_hops_native_http_and_replay(
             missing_replay = client.send(missing)
             assert missing_replay.status_code == 503
             assert missing_replay.json() == {"detail": "gateway_delivery_unverifiable"}
+            # I-01：真世界預留 Commit → 獨立 Validator 的原生 200，不是 RPC 元資料。
+            reservation_attempt = str(uuid4())
+            reserve, reserve_jti = _g6_signed_client_request(
+                client, signer_key, gateway_port, method="POST",
+                path="/synthetic/inventory/reservations", request_id="g6-inventory-reserve",
+                body={"sku": "sku-1", "quantity": 2, "expected_version": 1,
+                      "idempotency_key": "g6-reserve-once",
+                      "commit_attempt_id": reservation_attempt},
+            )
+            reserved = client.send(reserve)
+            assert reserved.status_code == 200, reserved.text
+            reservation = reserved.json()
+            assert reservation["commit_attempt_id"] == reservation_attempt
+            assert reservation["state_version"] == 2
+            reservation_id = reservation["reservation"]["reservation_id"]
+            assert reservation["reservation"]["sku"] == "sku-1"
+            assert client.send(reserve).json() == {"detail": "gateway_delivery_unverifiable"}
+            # I-03：歷史 operation 真 200；缺少另一個 UUID4 的真業務 409。
+            history, history_jti = _g6_signed_client_request(
+                client, signer_key, gateway_port, method="GET",
+                path="/synthetic/operations/" + reservation_attempt,
+                request_id="g6-inventory-history-200",
+            )
+            history_response = client.send(history)
+            assert history_response.status_code == 200, history_response.text
+            assert history_response.json()["commit_attempt_id"] == reservation_attempt
+            absent_operation, absent_operation_jti = _g6_signed_client_request(
+                client, signer_key, gateway_port, method="GET",
+                path="/synthetic/operations/" + str(uuid4()),
+                request_id="g6-inventory-history-409",
+            )
+            absent_history = client.send(absent_operation)
+            assert absent_history.status_code == 409, absent_history.text
+            assert absent_history.content == b'{"code":"operation_not_found"}'
+            # I-02：真取消 200，另一個新 Receipt 的重複取消 409，不得生成假成功。
+            cancel_path = "/synthetic/inventory/reservations/" + reservation_id + "/cancel"
+            cancel, cancel_jti = _g6_signed_client_request(
+                client, signer_key, gateway_port, method="POST", path=cancel_path,
+                request_id="g6-inventory-cancel-200",
+                body={"expected_version": 2, "idempotency_key": "g6-cancel-once",
+                      "commit_attempt_id": str(uuid4())},
+            )
+            cancelled = client.send(cancel)
+            assert cancelled.status_code == 200, cancelled.text
+            assert cancelled.json()["state_version"] == 3
+            assert cancelled.json()["reservation"]["reservation_id"] == reservation_id
+            assert cancelled.json()["reservation"]["status"] == "cancelled"
+            cancel_again, cancel_again_jti = _g6_signed_client_request(
+                client, signer_key, gateway_port, method="POST", path=cancel_path,
+                request_id="g6-inventory-cancel-409",
+                body={"expected_version": 3, "idempotency_key": "g6-cancel-again",
+                      "commit_attempt_id": str(uuid4())},
+            )
+            already_cancelled = client.send(cancel_again)
+            assert already_cancelled.status_code == 409, already_cancelled.text
+            assert already_cancelled.content == b'{"code":"reservation_not_active"}'
+            # I-01 負面：未知 SKU 必須由受保護 Handler 拒絕、原生 409。
+            unknown_sku, unknown_sku_jti = _g6_signed_client_request(
+                client, signer_key, gateway_port, method="POST",
+                path="/synthetic/inventory/reservations", request_id="g6-reserve-unknown-409",
+                body={"sku": "not-in-world", "quantity": 1, "expected_version": 3,
+                      "idempotency_key": "g6-reserve-unknown",
+                      "commit_attempt_id": str(uuid4())},
+            )
+            unknown_result = client.send(unknown_sku)
+            assert unknown_result.status_code == 409, unknown_result.text
+            assert unknown_result.content == b'{"code":"unknown_synthetic_sku"}'
+            for used in (history, absent_operation, cancel, cancel_again, unknown_sku):
+                replay = client.send(used)
+                assert replay.status_code == 503
+                assert replay.json() == {"detail": "gateway_delivery_unverifiable"}
         with psycopg.connect(dsn) as connection:
+            all_jtis = (jti, missing_jti, reserve_jti, history_jti,
+                        absent_operation_jti, cancel_jti, cancel_again_jti, unknown_sku_jti)
             assert connection.execute(
-                "SELECT count(*) FROM replay_entries WHERE jti IN (%s,%s)",
-                (jti, missing_jti),
-            ).fetchone() == (2,)
+                "SELECT count(*) FROM replay_entries WHERE jti=ANY(%s)",
+                (list(all_jtis),),
+            ).fetchone() == (8,)
             assert connection.execute(
-                "SELECT count(*) FROM ingress_receipts WHERE jti IN (%s,%s)",
-                (jti, missing_jti),
-            ).fetchone() == (2,)
+                "SELECT count(*) FROM ingress_receipts WHERE jti=ANY(%s)",
+                (list(all_jtis),),
+            ).fetchone() == (8,)
             assert connection.execute(
                 "SELECT count(*) FROM protected_candidate_promotions"
-            ).fetchone() == (2,)
+            ).fetchone() == (8,)
             assert connection.execute(
                 "SELECT count(*) FROM protected_send_leases"
-            ).fetchone() == (2,)
+            ).fetchone() == (8,)
     finally:
         for worker in workers:
             if worker.pid is not None:
