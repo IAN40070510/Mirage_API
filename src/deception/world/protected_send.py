@@ -70,6 +70,18 @@ class ProtectedSendLease:
 
 
 @dataclass(frozen=True)
+class ProtectedReceiptSendPin:
+    """只由獨立 Sender 的受保護資料庫推導，供單一 Receipt 傳輸使用的 Pin。"""
+
+    admission_id: str
+    receipt_id: UUID
+    send_owner: str
+    request_fingerprint: str
+    transmission_deadline: int
+    envelope_bytes: bytes
+
+
+@dataclass(frozen=True)
 class ProtectedSendReconciliation:
     """唯讀 Lease 對帳證據；沒有任何狀態可以用來核發新的傳輸權。"""
 
@@ -85,6 +97,69 @@ class ProtectedSendReconciliation:
 
 class PostgresProtectedSender(_ProtectedConnection):
     """由獨立實體 Sender Login 消費已 Authorize 的 Snapshot，不重新判定政策。"""
+
+    def resolve_authorized_receipt(self, receipt_id: UUID) -> ProtectedReceiptSendPin | None:
+        """只按 Receipt 查出原 Authorizer 的 Pin，絕不讓 Gateway 指定回應內容。
+
+        只認可 Receipt-only 授權鏈及固定 Owner；此查詢完全唯讀，不能核發
+        Lease 或起送。真正的狀態、Snapshot、Purge、Restore 與 DB Deadline
+        必須由隨後的 start_send() 在同一筆一次性交易內重新核對。
+        """
+        if not isinstance(receipt_id, UUID) or receipt_id.version != 4:
+            raise ProtectedGrantError("protected_sender_receipt_invalid")
+        with self._connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """SELECT a.admission_id,a.admission,a.state,a.claim_owner,
+                              a.authorization_deadline,a.transmission_deadline,
+                              a.world_generation_id,s.send_owner,s.request_fingerprint,
+                              s.candidate_hash,s.envelope_bytes,s.transmission_deadline,
+                              s.world_generation_id,s.candidate_ref,
+                              b.receipt_id,b.candidate_ref,b.candidate_version,
+                              s.operation_id,b.operation_id,
+                              b.environment_id,b.deployment_id,b.session_id,
+                              b.world_generation_id,
+                              s.environment_id,s.deployment_id,s.session_id
+                       FROM protected_authorized_http_snapshots s
+                       JOIN response_admissions a ON a.admission_id=s.admission_id
+                       JOIN protected_grant_bindings b
+                         ON b.admission_id=a.admission_id AND b.receipt_id=s.receipt_id
+                       WHERE s.receipt_id=%s""", (receipt_id,),
+                )
+                row = cursor.fetchone()
+        if row is None or row[2] != AdmissionState.SEND_AUTHORIZED.value:
+            return None
+        try:
+            admission = ResponseAdmission.model_validate(row[1])
+            pinned = bytes(row[10])
+            hashes = _verified_envelope_hashes(pinned)
+        except (TypeError, ValueError):
+            raise ProtectedGrantError("protected_sender_receipt_pin_unverifiable") from None
+        owner = "protected-sender-" + receipt_id.hex
+        if (admission.admission_id != row[0]
+                or admission.authorization_revision != "protected-receipt-v1"
+                or admission.request_binding_digest != row[8]
+                or admission.candidate_hash != row[9]
+                or admission.candidate_hash != hashes[0]
+                or (admission.immutable_body_hash, admission.semantic_headers_hash)
+                   != hashes[1:]
+                or admission.candidate_ref != row[13]
+                or admission.world_generation_id != row[6]
+                or admission.world_generation_id != row[12]
+                or admission.authorization_deadline != row[4]
+                or admission.transmission_deadline != row[5]
+                or admission.transmission_deadline != row[11]
+                or row[3] != owner or row[7] != owner
+                or row[14] != receipt_id or row[15] != row[13]
+                or row[16] != 1 or row[17] != receipt_id or row[18] != receipt_id
+                or row[19:22] != row[23:26]
+                or row[22] != admission.world_generation_id):
+            raise ProtectedGrantError("protected_sender_receipt_binding_mismatch")
+        return ProtectedReceiptSendPin(
+            admission_id=row[0], receipt_id=receipt_id, send_owner=owner,
+            request_fingerprint=row[8], transmission_deadline=row[5],
+            envelope_bytes=pinned,
+        )
 
     @contextmanager
     def known_restore_delivery_window(self):

@@ -21,6 +21,16 @@ Server Certificate 和專屬 Caller Client CA，Uvicorn 嚴格要求 Client Cert
 真實 mTLS 握手／匿名 Client 拒絕的測試只驗傳輸，不等於部署級 ACL 簽核，
 也不影響原先四容器 G3b 正式服務拓樸。
 
+`create_receipt_proxy_sender_candidate_app()` 是**測試專用、未在 CLI 裝載**
+的另一個 App：它的 `POST /internal/v1/emit-receipt` 只接受 Receipt UUID4，
+不接受自選 HTTP Status／Headers／Body、Owner、Fingerprint、Deadline 或
+Scope，從獨立 Sender 的受保護資料庫解析原 Authorizer Pin 後，一次性
+寫出原生 ASGI HTTP。`GET /internal/ready` 仍只標示 sealed，原
+`POST /internal/v1/send` 仍固定 503。HTTP Body 已開始送出後任何傳輸
+失敗不可另發 503 或第二份 bytes。這個候選目前不包含 Gateway→Client
+下游代理，因此不能宣稱整個 G4 Client HTTP 已通，更不能宣稱 G5/G6
+Release Gate 通過。具體查核及限制見 [G4 Send 文件](protected-send.md)。
+
 ### G3b→G4 Receipt-only Authorizer 接線（可選的隔離驗收增量）
 
 只有在獨立 Validator 已取得精確原生候選、另一個具獨立 SCRAM 角色的
