@@ -607,9 +607,14 @@ def create_candidate_publisher_service(config: Mapping[str, str]) -> FastAPI:
 
 
 def create_sender_service(config: Mapping[str, str]) -> FastAPI:
-    """核對 D-74 部署 Profile，再以獨立 Sender Login 建立封閉的 G4 服務。"""
+    """核對部署 Profile 與可選主機側 Restore Marker，再建立封閉 Sender。"""
     from deception.world.protected_send import PostgresProtectedSender
+    from deception.world.protected_grant import ProtectedGrantError
+    from deception.security.restore_bootstrap import (
+        RestoreBootstrapError, read_expected_restore_event,
+    )
     from deception.security.restore_profile import load_restore_profile
+    import psycopg
 
     if any(config.get(key) for key in (
             "MIRAGE_POSTGRES_DSN", "MIRAGE_G3B_VERIFIER_DSN_FILE",
@@ -624,9 +629,21 @@ def create_sender_service(config: Mapping[str, str]) -> FastAPI:
     login = _required_config(config, "MIRAGE_G4_SENDER_LOGIN")
     _login_preflight(dsn, login, role="sender",
                      schema=_required_config(config, "MIRAGE_G3B_WORLD_SCHEMA"))
-    return create_fixed_sender_app(
-        sender=PostgresProtectedSender(dsn, expected_login=login),
-    )
+    sender = PostgresProtectedSender(dsn, expected_login=login)
+    # 此檔應由部署控制面存放在 World DB 備份域之外，保留還原後的預期
+    # UUID；若部署宣告此檔，缺檔、失配或 DB 還原掉 Marker 時拒絕 Listener。
+    # 未配置此檔仍沿用封閉 Sender，不能拿來宣稱可偵測全部 DB rollback。
+    if "MIRAGE_G5_EXPECTED_RESTORE_EVENT_FILE" in config:
+        try:
+            expected_event = read_expected_restore_event(
+                _required_config(config, "MIRAGE_G5_EXPECTED_RESTORE_EVENT_FILE"),
+            )
+            sender.require_known_restore_event(expected_event)
+        except (RestoreBootstrapError, ProtectedGrantError, psycopg.Error):
+            raise ProtectedRpcConfigurationError(
+                "g5_sender_expected_restore_marker_unverifiable",
+            ) from None
+    return create_fixed_sender_app(sender=sender)
 
 
 def from_environment() -> None:

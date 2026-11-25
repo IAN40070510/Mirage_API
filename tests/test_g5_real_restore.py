@@ -15,6 +15,7 @@ import pytest
 from deception.world import (
     PostgresKnownRestoreRecorder, PostgresProtectedSender,
 )
+from deception.world.protected_grant import ProtectedGrantError
 from deception.security.restore_bootstrap import main as restore_bootstrap_main
 from test_postgres_conformance import isolated_test_dsn
 from test_protected_grant import _login
@@ -132,6 +133,18 @@ def test_real_schema_dump_restore_quarantines_sender_before_any_new_lease(
             path.chmod(0o600)
             dsn_paths[name] = path
         restore_event = uuid4()
+        # World DB 的舊備份缺 Marker；主機側預期 UUID（位於獨立 tmp_path）
+        # 未被還原掉，因此 Sender 啟動檢查必須在此時拒絕。
+        external_event_file = tmp_path / "expected-restore-event"
+        external_event_file.write_text(str(restore_event), encoding="ascii")
+        external_event_file.chmod(0o600)
+        strict_sender = PostgresProtectedSender(
+            make_conninfo(restored_dsn, user=roles["sender"][0],
+                          password=roles["sender"][1]),
+            expected_login=roles["sender"][0],
+        )
+        with pytest.raises(ProtectedGrantError, match="expected_restore_marker_absent"):
+            strict_sender.require_known_restore_event(restore_event)
         args = [
             "--recorder-dsn-file", str(dsn_paths["recorder"]),
             "--recorder-login", roles["recorder"][0],
@@ -181,6 +194,9 @@ def test_real_schema_dump_restore_quarantines_sender_before_any_new_lease(
                 "restore_event_id": str(restore_event),
                 "whole_host_rollback_guarantee": False,
             }
+        strict_sender.require_known_restore_event(restore_event)
+        with pytest.raises(ProtectedGrantError, match="expected_restore_marker_absent"):
+            strict_sender.require_known_restore_event(uuid4())
         restored_login = _login(restored_dsn)
         sender = PostgresProtectedSender(restored_dsn, expected_login=restored_login)
         assert sender.start_send(

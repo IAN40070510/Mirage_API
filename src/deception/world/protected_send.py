@@ -98,6 +98,23 @@ class ProtectedSendReconciliation:
 class PostgresProtectedSender(_ProtectedConnection):
     """由獨立實體 Sender Login 消費已 Authorize 的 Snapshot，不重新判定政策。"""
 
+    def require_known_restore_event(self, restore_event_id: UUID) -> None:
+        """啟動 Listener 前以 Sender 實體 Login 查核主機側預期 Restore UUID。
+
+        當部署控制面在 World DB 外保留預期事件時，若備份把 Marker
+        還原掉，必須拒絕啟動；這仍不是整機回滾或檔案刪除偵測。
+        """
+        if not isinstance(restore_event_id, UUID) or restore_event_id.version != 4:
+            raise ProtectedGrantError("protected_sender_expected_restore_event_invalid")
+        with self._connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT 1 FROM protected_local_restore_events WHERE restore_event_id=%s",
+                    (restore_event_id,),
+                )
+                if cursor.fetchone() != (1,):
+                    raise ProtectedGrantError("protected_sender_expected_restore_marker_absent")
+
     def resolve_authorized_receipt(self, receipt_id: UUID) -> ProtectedReceiptSendPin | None:
         """只按 Receipt 查出原 Authorizer 的 Pin，絕不讓 Gateway 指定回應內容。
 

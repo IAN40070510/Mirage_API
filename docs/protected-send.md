@@ -98,6 +98,14 @@ python -m deception.security.restore_bootstrap \
 
 成功輸出只含 `quarantined`、`new_marker`、事件 UUID 與
 `whole_host_rollback_guarantee=false`；失敗只回報固定錯誤代碼，絕不印 DSN。
+受控還原工作完成後，可由部署控制面在 **World DB 備份域外**保留只含
+同一個小寫正規 UUIDv4 的本機檔，設定 Sender 的
+`MIRAGE_G5_EXPECTED_RESTORE_EVENT_FILE` 指向它。
+`create_sender_service` 會在建立 Listener 前透過獨立實體 Sender Login
+查同一 Marker：舊資料庫備份不含新 Marker 時，服務直接拒絕啟動；
+Marker 寫入後才允許原本**仍封閉 503** 的服務啟動。檔案缺失、非正規 UUID、
+權限過寬或查詢失敗一律拒絕。使用者自行刪除整個環境設定、未設定檔案或
+整機回滾時不保證能偵測，**這只是選配的 DB-only rollback 子控制**。
 這個子程序**不能自行證明**前述「已停流／已還原」布林聲明是真的，
 也不能防止操作者日後再把 DB 回滾至 Marker 前、不能偵測整機回滾，
 更沒有自動 GC／Snapshot reconcile 或恢復開放流程。Caller 必須將失敗、

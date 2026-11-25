@@ -7,6 +7,7 @@ import pytest
 
 from deception.security.restore_bootstrap import (
     RestoreBootstrapError, _read_dsn_file, main, quarantine_restored_world,
+    read_expected_restore_event,
 )
 
 
@@ -82,3 +83,27 @@ def test_restore_bootstrap_cli_reports_only_denied_code(tmp_path, capsys):
     result = capsys.readouterr().out
     assert json.loads(result)["status"] == "denied"
     assert "do-not-log-me" not in result
+
+
+def test_expected_restore_event_file_requires_canonical_uuid4(tmp_path):
+    """Sender 啟動外部檔僅接受精確 UUIDv4，缺失／可換鏈／寬鬆模式全部拒絕。"""
+    event_id = uuid4()
+    witness = tmp_path / "expected-restore-event"
+    witness.write_text(str(event_id) + "\n", encoding="ascii")
+    witness.chmod(0o600)
+    assert read_expected_restore_event(str(witness)) == event_id
+    witness.write_text(str(event_id).upper(), encoding="ascii")
+    with pytest.raises(RestoreBootstrapError, match="event_invalid"):
+        read_expected_restore_event(str(witness))
+    witness.write_text("00000000-0000-0000-0000-000000000000", encoding="ascii")
+    with pytest.raises(RestoreBootstrapError, match="event_invalid"):
+        read_expected_restore_event(str(witness))
+    witness.write_text(str(event_id), encoding="ascii")
+    witness.chmod(0o644)
+    with pytest.raises(RestoreBootstrapError, match="dsn_file_invalid"):
+        read_expected_restore_event(str(witness))
+    witness.chmod(0o600)
+    link = tmp_path / "expected-link"
+    link.symlink_to(witness)
+    with pytest.raises(RestoreBootstrapError, match="dsn_file_unavailable"):
+        read_expected_restore_event(str(link))

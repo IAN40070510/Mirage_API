@@ -153,12 +153,24 @@ that ordinary and legacy Sender remain quarantined after bootstrapping. The
 **pre-commit** ARM64 jobs `job_01M89CEBNQ00FMS45JHAH0P0WY` (1 pass),
 `job_01M89CGEPX00X3SY807Y01DRF1` (53 pass combined regression) and
 `job_01M89CJ65400KV54JB1A9MP0W7` (5 pass including negatives) used disposable
-DBs and left zero `mirage_g5_restore_%` databases. These must be followed by
-an exact-commit run and CI; ordinary CI deliberately skips the destructive
-real-Restore case without opt-in. **No software guard verifies that ingress was
-truly stopped**, nor is there a durable out-of-DB restore witness, production
-orchestrator or safe release/reconciliation. Thus SINGLE-NODE-03 remains PARTIAL
-and the release remains NO-GO.
+DBs and left zero `mirage_g5_restore_%` databases. Their exact-commit
+success is recorded in PR #34 at `73a84461` (58 actual ARM64 tests, four CI
+workflows successful, Python full suite 1559 passed/15 skipped). Ordinary CI
+deliberately skips the destructive real-Restore case without opt-in.
+
+The subsequent boot guard candidate optionally reads a host-side expected
+UUIDv4 file **outside the restored World DB**, and `create_sender_service`
+requires the **matching persisted event through its own physical Sender login
+before constructing even its sealed mTLS app**. A restored older DB with the
+host-side file still present, missing/wrong marker, unreadable/invalid host
+file or DB outage all fail closed at startup. Real PG17 `pg_restore` negative
+and positive tests use the same disposable roles; this remains an opt-in
+boot guard, **not an enforced or authoritative host-side witness**: removing
+the configuration or rolling back the whole VM may remove both sides.
+**No software guard verifies that ingress was truly stopped**, nor is there a
+production restart orchestrator, persistent mode pin, GC/Purge reconciliation
+or approved release mechanism. Thus `SINGLE-NODE-03` remains PARTIAL and
+the release remains NO-GO.
 
 ## Optional external Fence acceptance — mandatory only if enabled or claimed
 

@@ -133,6 +133,18 @@ def _read_dsn_file(path: str) -> str:
         raise RestoreBootstrapError("g5_restore_dsn_file_unavailable") from None
 
 
+def read_expected_restore_event(path: str) -> UUID:
+    """嚴格讀取主機側只含 UUIDv4 的預期事件檔，供 Sender 啟動前核對。"""
+    value = _read_dsn_file(path)
+    try:
+        event = UUID(value)
+    except (ValueError, AttributeError):
+        raise RestoreBootstrapError("g5_expected_restore_event_invalid") from None
+    if event.version != 4 or value != str(event):
+        raise RestoreBootstrapError("g5_expected_restore_event_invalid")
+    return event
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """執行明確兩項人工停流確認、受限 SCRAM ACL 預檢、落盤及讀回；失敗封閉。"""
     parser = argparse.ArgumentParser(description="Mirage isolated post-restore quarantine")
