@@ -21,6 +21,7 @@ release NO-GO。契約採納、實作與驗收分開記錄。
 | G3b 獨立服務角色與固定路由 | `src/deception/security/protected_services.py`、`deploy/security-lab/g3b-compose.yaml`、`tests/test_protected_services.py` | [Verifier／Inventory／Cart 專用 Secret、真 Login／ACL Preflight 與仍未完成的可信原生 HTTP 接線](protected-services.md) |
 | Medusa 可信 400／404 原生候選投影（G3b 增量） | `src/deception/world/protected_native_http.py`、`migrations/027_protected_medusa_rejections.sql` | [從獨立拒絕來源重建精確 JSON／Envelope Hash，尚非 Sender](protected-services.md#原生-http-回應投影子切面) |
 | 受保護一次性 Send Lease／ASGI（G4 增量） | `src/deception/world/protected_send.py`、`migrations/025_protected_send_leases.sql`、`tests/test_protected_send.py` | [精確 Authorized Snapshot Pin、單次 Lease、ASGI 首訊息與仍未接線的 Restore Fence](protected-send.md) |
+| G5 已知 Restore 後的操作型 Quarantine（單機增量） | `src/deception/security/restore_bootstrap.py`、`tests/test_g5_real_restore.py` | [停流確認、兩個實體 SCRAM 最小權限、Marker 落盤／獨立讀回及未涵蓋的正式啟動邊界](protected-send.md#g5-受控還原後-quarantine-入口) |
 | 獨立 HTTPX 請求摘要 | `src/deception/api/fingerprint.py` | [不依賴外部 Gateway 的客戶端摘要](trusted-session.md#獨立客戶端的請求摘要) |
 | 請求與驗證結果 Audit | `src/deception/world/request_audit.py`、`migrations/016_request_observations.sql` | [假名化觀察、原子 Grant 關聯與故障處理](request-audit.md) |
 | 共用事件提交與標準結果 | `src/deception/world/commit.py`、`event_store.py`、`migrations/015_world_operation_result_digests.sql` | [五類結果、原子事件與唯讀恢復](commit-results.md) |

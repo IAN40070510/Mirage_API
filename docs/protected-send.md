@@ -67,6 +67,42 @@ if lease is None:
 # 只有獨立 sender 的真 ASGI 範圍才可消費此 lease；不做未知 COMMIT 重試。
 ```
 
+## G5 受控還原後 Quarantine 入口
+
+`python -m deception.security.restore_bootstrap` 提供 **人工控制面的 post-restore
+落盤子程序**，不是 Restore 執行器、外部 Fence 或正式 Sender 解封工具。
+只有在部署控制面已停止新的入口與所有傳輸，並完成指定資料庫的還原，才能
+提供兩個明確的 `--ingress-stopped-confirmed`、`--restore-complete-confirmed`。
+入口先核對兩個**不同實體** PostgreSQL NOINHERIT SCRAM Login、相同
+資料庫／Schema／PG 連線選項、Recorder 僅能 INSERT Marker 與 Sender 僅能
+SELECT Marker（兩者均無 UPDATE／DELETE／CREATE）。其後由 Recorder 以
+交易鎖寫入 UUIDv4 的不可逆 Known Restore 事件，再以**另一條 Sender 實體
+連線**讀回同 ID；無權、失聯、缺表或不同目標全部拒絕。該事件 UUID
+需由部署控制面保存，遇 COMMIT ACK 不明只能使用**相同** UUID 重試。
+
+在**僅供隔離測試**的已停止入口環境，先由 Owner 以檔案秘密掛載供應
+`/run/secrets/restore-recorder-dsn`、`/run/secrets/restore-sender-dsn`
+（非 symlink、至多 4096 bytes、不得 world-readable／group-writable），
+兩份 DSN 需各自設定相同的固定 `search_path`：
+
+```bash
+python -m deception.security.restore_bootstrap \
+  --recorder-dsn-file /run/secrets/restore-recorder-dsn \
+  --recorder-login mirage_restore_recorder \
+  --sender-dsn-file /run/secrets/restore-sender-dsn \
+  --sender-login mirage_restore_sender \
+  --schema world_data \
+  --restore-event-id 2c22b2d8-045d-4b5f-8706-fc4e80c1778b \
+  --ingress-stopped-confirmed --restore-complete-confirmed
+```
+
+成功輸出只含 `quarantined`、`new_marker`、事件 UUID 與
+`whole_host_rollback_guarantee=false`；失敗只回報固定錯誤代碼，絕不印 DSN。
+這個子程序**不能自行證明**前述「已停流／已還原」布林聲明是真的，
+也不能防止操作者日後再把 DB 回滾至 Marker 前、不能偵測整機回滾，
+更沒有自動 GC／Snapshot reconcile 或恢復開放流程。Caller 必須將失敗、
+未知結果或無法停流一律視為 **NO-GO**。`SINGLE-NODE-03` 正式 Gate 仍 OPEN。
+
 ## 故障、驗證與限制
 
 `python -m pytest -q tests/test_protected_send.py` 包含正式

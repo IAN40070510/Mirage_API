@@ -55,8 +55,11 @@ spoofed same-name TEMP table cannot hide an actual event. This requires real
 least-privilege login, positive legacy SQL and adversarial TEMP-shadow tests.
 The deployer must suspend ingress before restore and persist the marker **after**
 restoring the database, before reopening Sender; restoring an older DB image after
-the marker could erase it. There is no verified release path, startup orchestrator,
-or protection against already-started network sends yet, so SINGLE-NODE-03 remains OPEN.
+the marker could erase it. A separate opt-in `restore_bootstrap.py` entrypoint now
+verifies this **manual** post-restore marker step under two distinct least-privilege
+logins, but there is still no verified **production** release path, startup
+orchestrator, or protection against already-started network sends; SINGLE-NODE-03
+remains OPEN.
 
 Missing external DSN/secret must not prevent standard single-node **configuration parsing**; configured external mode cannot downgrade to standard because an external field is missing or corrupt. **Remaining security blocker:** a deliberately changed environment that removes *all* external settings is not detectable from an environment-only declaration. An authoritative, durable mode pin outside the World restore domain, guarded transitions, liveness/freshness verification and persistent quarantine are still required before claiming full `SINGLE-NODE-05` or any external assurance. A configured external profile whose authority becomes unavailable MUST remain quarantined, without silent downgrade.
 
@@ -128,6 +131,34 @@ and Sender isolation *before* traffic. This experiment did **not** test VM
 rollback, boot/restart orchestration, GC/Purge reconciliation, host-wide
 snapshot detection, a separate failure domain or a production restore.
 `SINGLE-NODE-03`, the full G5 gate and final release remain **OPEN/NO-GO**.
+
+### Subsequent G5 post-restore bootstrap candidate — not an acceptance signature
+
+`src/deception/security/restore_bootstrap.py` adds an explicit operator-controlled
+`python -m deception.security.restore_bootstrap` command for the same normal
+single-node profile. It demands **both** ingress-stopped and restore-complete
+confirmations, a stable UUIDv4 event, two different physical `NOINHERIT` PostgreSQL
+logins pointing at exactly the same database/schema, and separate secret mounts.
+The Recorder must have only Marker `INSERT`; a readback Sender must have only
+Marker `SELECT`, with no role memberships, `CREATE`, `UPDATE` or `DELETE`.
+The CLI marks under the existing exclusive transaction lock and **reads the exact
+event back using the independent Sender login**; a repeated ID is idempotent.
+Invalid/missing confirmation, credential/target mismatch, unexpectedly elevated
+ACLs and role memberships all reject before insertion. Secrets are read from
+bounded, non-symlink regular files and never printed in CLI output.
+
+The new isolated PG17 `pg_dump -Fc`/`pg_restore` subcase also invokes the actual
+bootstrap CLI, checks deliberate role-ACL and membership attacks, and verifies
+that ordinary and legacy Sender remain quarantined after bootstrapping. The
+**pre-commit** ARM64 jobs `job_01M89CEBNQ00FMS45JHAH0P0WY` (1 pass),
+`job_01M89CGEPX00X3SY807Y01DRF1` (53 pass combined regression) and
+`job_01M89CJ65400KV54JB1A9MP0W7` (5 pass including negatives) used disposable
+DBs and left zero `mirage_g5_restore_%` databases. These must be followed by
+an exact-commit run and CI; ordinary CI deliberately skips the destructive
+real-Restore case without opt-in. **No software guard verifies that ingress was
+truly stopped**, nor is there a durable out-of-DB restore witness, production
+orchestrator or safe release/reconciliation. Thus SINGLE-NODE-03 remains PARTIAL
+and the release remains NO-GO.
 
 ## Optional external Fence acceptance — mandatory only if enabled or claimed
 

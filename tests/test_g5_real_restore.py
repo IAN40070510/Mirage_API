@@ -2,7 +2,9 @@
 
 import os
 import re
+import secrets
 import subprocess
+import json
 from uuid import uuid4
 
 import psycopg
@@ -13,6 +15,7 @@ import pytest
 from deception.world import (
     PostgresKnownRestoreRecorder, PostgresProtectedSender,
 )
+from deception.security.restore_bootstrap import main as restore_bootstrap_main
 from test_postgres_conformance import isolated_test_dsn
 from test_protected_grant import _login
 from test_protected_send import _authorized_pin
@@ -38,7 +41,7 @@ def _docker_pg17(args, *, input_bytes=None):
 
 
 def test_real_schema_dump_restore_quarantines_sender_before_any_new_lease(
-        isolated_test_dsn):
+        isolated_test_dsn, tmp_path, capsys):
     """真 pg_dump -Fc／pg_restore 至新命名 DB，先標記 Restore 再封閉新舊 Sender。
 
     僅限顯式 opt-in、隔離 CI PostgreSQL 及自動產生的一次性目標 DB；
@@ -84,6 +87,10 @@ def test_real_schema_dump_restore_quarantines_sender_before_any_new_lease(
             "SELECT 1 FROM pg_database WHERE datname=%s", (restored_name,),
         ).fetchone() is None
         admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(restored_name)))
+    roles = {
+        name: ("mirage_g5_" + name + "_" + uuid4().hex[:10], secrets.token_urlsafe(32))
+        for name in ("recorder", "sender")
+    }
     try:
         _docker_pg17([
             "pg_restore", "--exit-on-error", "--no-owner", "--no-acl",
@@ -99,11 +106,82 @@ def test_real_schema_dump_restore_quarantines_sender_before_any_new_lease(
                 "SELECT count(*) FROM protected_local_restore_events",
             ).fetchone() == (0,)
 
-        restored_login = _login(restored_dsn)
-        recorder = PostgresKnownRestoreRecorder(restored_dsn, expected_login=restored_login)
+        # 還原完成後由部署控制面使用兩把不同實體 NOINHERIT SCRAM Login；
+        # Recorder 只有 INSERT、獨立 Sender 只有 SELECT，不能共用 Owner。
+        with psycopg.connect(isolated_test_dsn, autocommit=True) as admin:
+            for role, password in roles.values():
+                admin.execute(sql.SQL(
+                    "CREATE ROLE {} LOGIN NOINHERIT NOSUPERUSER NOCREATEDB "
+                    "NOCREATEROLE NOBYPASSRLS PASSWORD {}"
+                ).format(sql.Identifier(role), sql.Literal(password)))
+        with psycopg.connect(restored_dsn, autocommit=True) as restored_admin:
+            for role, _ in roles.values():
+                restored_admin.execute(sql.SQL("GRANT USAGE ON SCHEMA {} TO {}").format(
+                    sql.Identifier(schema), sql.Identifier(role)))
+            restored_admin.execute(sql.SQL(
+                "GRANT INSERT ON protected_local_restore_events TO {}"
+            ).format(sql.Identifier(roles["recorder"][0])))
+            restored_admin.execute(sql.SQL(
+                "GRANT SELECT ON protected_local_restore_events TO {}"
+            ).format(sql.Identifier(roles["sender"][0])))
+        dsn_paths = {}
+        for name, (role, password) in roles.items():
+            path = tmp_path / (name + ".dsn")
+            path.write_text(make_conninfo(restored_dsn, user=role, password=password),
+                            encoding="utf-8")
+            path.chmod(0o600)
+            dsn_paths[name] = path
         restore_event = uuid4()
-        assert recorder.mark_known_restore(restore_event)
-        assert not recorder.mark_known_restore(restore_event)
+        args = [
+            "--recorder-dsn-file", str(dsn_paths["recorder"]),
+            "--recorder-login", roles["recorder"][0],
+            "--sender-dsn-file", str(dsn_paths["sender"]),
+            "--sender-login", roles["sender"][0],
+            "--schema", schema,
+            "--restore-event-id", str(restore_event),
+        ]
+        assert restore_bootstrap_main(args) == 1
+        assert json.loads(capsys.readouterr().out)["reason"] == (
+            "g5_restore_quiescence_confirmation_required")
+        confirmed = [*args, "--ingress-stopped-confirmed", "--restore-complete-confirmed"]
+        # 只要 Recorder 取得不該有的 UPDATE，或 Sender 取得可 SET ROLE
+        # 的 membership，即使操作員聲明停流也不得寫入 Marker。
+        with psycopg.connect(restored_dsn, autocommit=True) as restored_admin:
+            restored_admin.execute(sql.SQL(
+                "GRANT UPDATE ON protected_local_restore_events TO {}"
+            ).format(sql.Identifier(roles["recorder"][0])))
+        assert restore_bootstrap_main(confirmed) == 1
+        assert json.loads(capsys.readouterr().out)["reason"] == (
+            "g5_restore_marker_role_acl_invalid")
+        with psycopg.connect(restored_dsn, autocommit=True) as restored_admin:
+            restored_admin.execute(sql.SQL(
+                "REVOKE UPDATE ON protected_local_restore_events FROM {}"
+            ).format(sql.Identifier(roles["recorder"][0])))
+            restored_admin.execute(sql.SQL("GRANT {} TO {}").format(
+                sql.Identifier(roles["recorder"][0]),
+                sql.Identifier(roles["sender"][0]),
+            ))
+        assert restore_bootstrap_main(confirmed) == 1
+        assert json.loads(capsys.readouterr().out)["reason"] == (
+            "g5_restore_marker_role_membership_denied")
+        with psycopg.connect(restored_dsn, autocommit=True) as restored_admin:
+            restored_admin.execute(sql.SQL("REVOKE {} FROM {}").format(
+                sql.Identifier(roles["recorder"][0]),
+                sql.Identifier(roles["sender"][0]),
+            ))
+        with psycopg.connect(restored_dsn) as unmarked:
+            assert unmarked.execute(
+                "SELECT count(*) FROM protected_local_restore_events"
+            ).fetchone() == (0,)
+        for expected_new in (True, False):
+            assert restore_bootstrap_main(confirmed) == 0
+            report = json.loads(capsys.readouterr().out)
+            assert report == {
+                "status": "quarantined", "new_marker": expected_new,
+                "restore_event_id": str(restore_event),
+                "whole_host_rollback_guarantee": False,
+            }
+        restored_login = _login(restored_dsn)
         sender = PostgresProtectedSender(restored_dsn, expected_login=restored_login)
         assert sender.start_send(
             admission_id=admission.admission_id, receipt_id=seeded[3], owner=owner,
@@ -143,3 +221,8 @@ def test_real_schema_dump_restore_quarantines_sender_before_any_new_lease(
             admin.execute(sql.SQL("DROP DATABASE {} WITH (FORCE)").format(
                 sql.Identifier(restored_name),
             ))
+            for role, _ in roles.values():
+                if admin.execute(
+                    "SELECT 1 FROM pg_roles WHERE rolname=%s", (role,),
+                ).fetchone():
+                    admin.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(role)))
