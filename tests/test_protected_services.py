@@ -1931,6 +1931,8 @@ def test_g3b_real_container_ci_has_explicit_isolation_and_no_sender():
     assert "--network mirage-g3b-gateway-net" in code
     assert "--mode audit" in code
     assert "--profile g3b-isolated up --detach" in code
+    assert "--profile g3b-isolated down --volumes --remove-orphans" in code
+    assert "docker rm --force --volumes mirage-g3b-ci-db" in code
     assert "Wait for all four protected TLS listeners" in code
     assert "native-validator:8445" in code and "listener_ready" in code
     # GitHub PR 的 base branch 名可能含 staging 字樣；真正執行的 jobs 區段
@@ -1941,6 +1943,21 @@ def test_g3b_real_container_ci_has_explicit_isolation_and_no_sender():
         encoding="utf-8"))
     assert all(service["healthcheck"]["disable"] is True
                for service in compose["services"].values())
+
+
+def test_isolated_demo_ci_removes_postgres_and_output_volumes():
+    """CI 演示結束必清除本次 Compose 專案的 PG／輸出卷，不能留下測試資料。"""
+    root = Path(__file__).resolve().parents[1]
+    workflow = yaml.safe_load((root / ".github/workflows/container-smoke.yml").read_text(
+        encoding="utf-8"))
+    job = workflow["jobs"]["container-verification"]
+    assert job["runs-on"] == "ubuntu-latest"
+    cleanup = [step for step in job["steps"]
+               if step.get("name") == "Inspect and stop the isolated services"]
+    assert len(cleanup) == 1
+    assert cleanup[0]["if"] == "always()"
+    assert "docker compose down --volumes --remove-orphans" in cleanup[0]["run"]
+    assert "docker system prune" not in cleanup[0]["run"]
 
 
 def test_g3b_ci_signed_claims_are_pinned_and_short_lived():
