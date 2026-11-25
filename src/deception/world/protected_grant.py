@@ -187,6 +187,10 @@ class PostgresCandidatePromoter(_ProtectedConnection):
                 cursor.execute("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
                 if candidate[2] <= cursor.fetchone()[0]:
                     raise ProtectedGrantError("candidate_expired")
+                # 與 Receipt-only Authorizer 共用 DB Row Lock：不可在它完成
+                # 唯一 Promotion 複查與 Grant COMMIT 期間插入第二份候選。
+                if not _protected_lock(cursor, "receipt", {"receipt_id": str(receipt_id)}):
+                    raise ProtectedGrantError("candidate_receipt_disappeared")
                 cursor.execute(
                     """INSERT INTO protected_candidate_promotions (
                            environment_id, deployment_id, session_id, world_generation_id,
@@ -367,6 +371,7 @@ class PostgresProtectedAuthorizer(_ProtectedConnection):
             authorization_revision="protected-receipt-v1",
             authorization_deadline=authorization_deadline,
             transmission_deadline=transmit_deadline, evidence=evidence,
+            require_unique_receipt_promotion=True,
         )
         owner = "protected-sender-" + receipt_id.hex
         if self.claim(admission.admission_id, owner=owner) is not AdmissionOperationResult.SUCCESS:
@@ -379,7 +384,7 @@ class PostgresProtectedAuthorizer(_ProtectedConnection):
         self, *, operation_id: UUID, receipt_id: UUID, scope: WorldScope,
         candidate_ref: str, candidate_version: int, authorization_revision: str,
         authorization_deadline: int, transmission_deadline: int,
-        evidence: ProjectionEvidence,
+        evidence: ProjectionEvidence, require_unique_receipt_promotion: bool = False,
     ) -> ResponseAdmission:
         """只從已提交 Receipt 和已 Promotion 的不可變 Candidate 取得授權資料。
 
@@ -389,6 +394,8 @@ class PostgresProtectedAuthorizer(_ProtectedConnection):
         """
         if not isinstance(operation_id, UUID) or not isinstance(receipt_id, UUID):
             raise ProtectedGrantError("invalid_protected_operation_id")
+        if type(require_unique_receipt_promotion) is not bool:
+            raise ProtectedGrantError("protected_receipt_promotion_policy_invalid")
         if type(candidate_version) is not int or candidate_version != 1:
             raise ProtectedGrantError("unsupported_candidate_version")
         checked = ProjectionEvidence.model_validate(evidence.model_dump())
@@ -430,6 +437,13 @@ class PostgresProtectedAuthorizer(_ProtectedConnection):
                     raise ProtectedGrantError("session_generation_mismatch")
                 if not _protected_lock(cursor, "receipt", {"receipt_id": str(receipt_id)}):
                     raise ProtectedGrantError("receipt_missing")
+                if require_unique_receipt_promotion:
+                    cursor.execute(
+                        "SELECT count(*) FROM protected_candidate_promotions "
+                        "WHERE ingress_receipt_id=%s", (receipt_id,),
+                    )
+                    if cursor.fetchone() != (1,):
+                        raise ProtectedGrantError("protected_receipt_promotion_not_unique")
                 cursor.execute(
                     """SELECT issuer, key_id, environment_id, deployment_id, session_id,
                               session_epoch, request_fingerprint, token_expires_at

@@ -94,10 +94,12 @@ Request、Authorizer→Sender mTLS RPC、啟動／復原協定與 Release Fuse
 `PostgresProtectedAuthorizer.authorize_promoted_receipt_once()` 的輸入只是一個
 UUIDv4 Receipt；從持久化 Promotion 與 Registry 取得完整 Scope、唯一
 Candidate Ref、Projection Evidence 與不可變期限，拒絕同一 Receipt 有兩個
-Promotion 或 Registry 證據不符。Migration `033_unique_promoted_receipt.sql`
-進一步在 PostgreSQL 加入 `ingress_receipt_id` 非 NULL 範圍的唯一索引，
-不讓「查唯一 Promotion→Grant」之間的並發插入形成幻影；既有同 Receipt
-重複資料必須在 migration 時直接 FAIL，不會偷偷選一筆。
+Promotion 或 Registry 證據不符。同 Receipt 可以合法保留多份候選，
+不能新增全表 UNIQUE（實際隔離 CI 已證明會使正常 Cart／Read／Commit 退化）。
+現在改由 Promoter 與 Authorizer 共用受保護的 Receipt Row Lock；後者在
+同一 Grant Tx 鎖定 Receipt 後，重查 Promotion 唯一數量以阻斷查詢與
+Grant 間的並發幻影。測試刻意在首次查詢後插入第二份合法候選，
+確認不留下 Admission／Grant Binding。
 以原 Receipt UUID 固定一次性 Grant Operation
 ID，用不可變 Token/Promotion 到期時間確定授權期限及 Sender Owner；依序
 執行 Grant→Claim→Authorize，任何失敗不重試。真 PostgreSQL 測試串接

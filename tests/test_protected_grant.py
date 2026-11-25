@@ -177,8 +177,8 @@ def test_receipt_only_authorizer_pins_snapshot_and_sends_native_asgi(isolated_te
         authorizer.authorize_promoted_receipt_once(seeded[3])
 
 
-def test_receipt_only_authorizer_database_prevents_ambiguous_promotions(isolated_test_dsn):
-    """真 PostgreSQL 唯一索引禁止同 Receipt 另插 Promotion，沒有並發幻影可被授權。"""
+def test_receipt_only_authorizer_rejects_ambiguous_promotions(isolated_test_dsn):
+    """合法多候選可留存，但 Receipt-only 授權不能任選其中一份。"""
     import psycopg
 
     seeded = _seed(isolated_test_dsn)
@@ -191,21 +191,59 @@ def test_receipt_only_authorizer_database_prevents_ambiguous_promotions(isolated
         expires_at=now + 120,
     )
     promoter = PostgresCandidatePromoter(isolated_test_dsn, expected_login=_login(isolated_test_dsn))
-    with pytest.raises(psycopg.errors.UniqueViolation):
-        promoter.promote(
+    assert promoter.promote(
+        receipt_id=receipt_id, scope=selected, candidate_ref=other_ref,
+        request_fingerprint=digest("a"), envelope_hash=hashes[0],
+        immutable_body_hash=hashes[1], semantic_headers_hash=hashes[2],
+        evidence=evidence, source=source,
+    ) == 1
+    authorizer = PostgresProtectedAuthorizer(isolated_test_dsn, expected_login=_login(isolated_test_dsn))
+    with pytest.raises(ProtectedGrantError, match="protected_receipt_promotion_not_unique"):
+        authorizer.authorize_promoted_receipt_once(receipt_id)
+    with psycopg.connect(isolated_test_dsn) as connection:
+        assert connection.execute("SELECT count(*) FROM protected_grant_bindings").fetchone() == (0,)
+        assert connection.execute("SELECT count(*) FROM response_admissions").fetchone() == (0,)
+
+
+def test_receipt_only_authorizer_rechecks_phantom_promotion_under_receipt_lock(
+        isolated_test_dsn, monkeypatch):
+    """模擬查唯一候選後又插入另一份：鎖後 Grant 必重查，絕不能留下 Admission。"""
+    import psycopg
+
+    seeded = _seed(isolated_test_dsn)
+    assert _promote(isolated_test_dsn, seeded) == 1
+    selected, source, evidence, receipt_id, _, hashes, now = seeded
+    other_ref = uuid4().hex
+    PostgresCandidateStore(isolated_test_dsn).put(
+        selected, other_ref,
+        response_envelope(200, [("content-type", "application/json")], b'{"synthetic":true}'),
+        expires_at=now + 120,
+    )
+    original_grant = PostgresProtectedAuthorizer.grant
+    calls = []
+
+    def grant_after_concurrent_promotion(self, **kwargs):
+        """模擬 Receipt-only 首次 SELECT 已返回後、真正 Grant 開始前的另一筆提交。"""
+        calls.append(kwargs["receipt_id"])
+        promoter = PostgresCandidatePromoter(
+            isolated_test_dsn, expected_login=_login(isolated_test_dsn))
+        assert promoter.promote(
             receipt_id=receipt_id, scope=selected, candidate_ref=other_ref,
             request_fingerprint=digest("a"), envelope_hash=hashes[0],
             immutable_body_hash=hashes[1], semantic_headers_hash=hashes[2],
             evidence=evidence, source=source,
-        )
+        ) == 1
+        return original_grant(self, **kwargs)
+
+    monkeypatch.setattr(PostgresProtectedAuthorizer, "grant", grant_after_concurrent_promotion)
     authorizer = PostgresProtectedAuthorizer(isolated_test_dsn, expected_login=_login(isolated_test_dsn))
-    admission, owner = authorizer.authorize_promoted_receipt_once(receipt_id)
-    assert owner == "protected-sender-" + receipt_id.hex
-    assert admission.candidate_ref == seeded[4]
+    with pytest.raises(ProtectedGrantError, match="protected_receipt_promotion_not_unique"):
+        authorizer.authorize_promoted_receipt_once(receipt_id)
+    assert calls == [receipt_id]
     with psycopg.connect(isolated_test_dsn) as connection:
-        assert connection.execute("SELECT count(*) FROM protected_candidate_promotions").fetchone() == (1,)
-        assert connection.execute("SELECT count(*) FROM protected_grant_bindings").fetchone() == (1,)
-        assert connection.execute("SELECT count(*) FROM response_admissions").fetchone() == (1,)
+        assert connection.execute("SELECT count(*) FROM protected_candidate_promotions").fetchone() == (2,)
+        assert connection.execute("SELECT count(*) FROM protected_grant_bindings").fetchone() == (0,)
+        assert connection.execute("SELECT count(*) FROM response_admissions").fetchone() == (0,)
 
 
 def test_send_authorization_pins_immutable_http_envelope(isolated_test_dsn):
