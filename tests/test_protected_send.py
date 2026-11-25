@@ -1,6 +1,8 @@
 """G4 獨立 Sender 的精確 Payload Pin、一次性 Lease 與真 ASGI 發送前守衛。"""
 
 import asyncio
+import os
+import secrets
 import time
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
@@ -156,6 +158,50 @@ def test_sender_reconciliation_rejects_mismatched_deadline(isolated_test_dsn):
     )
     assert result == ProtectedSendReconciliation("UNVERIFIABLE", None, False)
     assert not result.retry_permitted
+
+
+def test_sender_reconciliation_uses_real_readonly_scram_login(isolated_test_dsn):
+    """實體獨立 SELECT-only SCRAM Login 能對帳，不能起送、修改 Admission 或扮成管理者。"""
+    if os.environ.get("MIRAGE_WORLD_ROLE_TEST_ISOLATED") != "true":
+        pytest.skip("requires disposable PostgreSQL cluster for login role creation")
+    import psycopg
+    from psycopg import sql
+    from psycopg.conninfo import conninfo_to_dict, make_conninfo
+
+    admission, owner, envelope, seeded = _authorized_pin(isolated_test_dsn)
+    admin_login = _login(isolated_test_dsn)
+    role = "mirage_reconcile_" + uuid4().hex[:12]
+    password = secrets.token_urlsafe(32)
+    schema = conninfo_to_dict(isolated_test_dsn)["options"].split("search_path=", 1)[1].split(" ", 1)[0]
+    with psycopg.connect(isolated_test_dsn, autocommit=True) as admin:
+        admin.execute(sql.SQL("CREATE ROLE {} LOGIN NOINHERIT NOSUPERUSER NOCREATEDB "
+                              "NOCREATEROLE NOBYPASSRLS PASSWORD {}").format(
+                                  sql.Identifier(role), sql.Literal(password)))
+        try:
+            admin.execute(sql.SQL("GRANT USAGE ON SCHEMA {} TO {}").format(
+                sql.Identifier(schema), sql.Identifier(role)))
+            admin.execute(sql.SQL("GRANT SELECT ON response_admissions,"
+                                  "protected_authorized_http_snapshots,protected_grant_bindings,"
+                                  "protected_send_leases TO {}").format(sql.Identifier(role)))
+            readonly_dsn = make_conninfo(isolated_test_dsn, user=role, password=password)
+            readonly = PostgresProtectedSender(readonly_dsn, expected_login=role)
+            selectors = dict(admission_id=admission.admission_id, receipt_id=seeded[3],
+                             owner=owner, request_fingerprint=admission.request_binding_digest)
+            observation = readonly.reconcile_send(**selectors)
+            assert observation == ProtectedSendReconciliation(
+                "NO_LEASE_OBSERVED", AdmissionState.SEND_AUTHORIZED, False)
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                readonly.start_send(**{**selectors, "expected_envelope": envelope})
+            with psycopg.connect(readonly_dsn) as connection:
+                with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                    connection.execute("UPDATE response_admissions SET state='SEND_STARTED' "
+                                       "WHERE admission_id=%s", (admission.admission_id,))
+            with psycopg.connect(readonly_dsn) as connection:
+                with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                    connection.execute(sql.SQL("SET ROLE {}").format(sql.Identifier(admin_login)))
+        finally:
+            admin.execute(sql.SQL("DROP OWNED BY {}").format(sql.Identifier(role)))
+            admin.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(role)))
 
 
 @pytest.mark.parametrize("outcome", [AdmissionState.SEND_FAILED,

@@ -100,6 +100,12 @@ Candidate Ref／期限與受保護 Snapshot；任何不一致回 `UNVERIFIABLE`�
 Admission 完整交叉綁定與故障注入為其後增量，須另看該版 SHA 的 CI，
 不將前一版的 PASS 挪用為新測試證據。
 
+下一輪 G6 最小權限增量另在一次性 PostgreSQL cluster 建立獨立
+`NOINHERIT`／`NOBYPASSRLS` 的 SCRAM 登入，只授予四個對帳來源表的
+`SELECT`，驗證 `reconcile_send()` 正向運作、`StartSend`／Admission `UPDATE`
+及 `SET ROLE` 權限提升全部失敗；測試結束 `DROP OWNED`／`DROP ROLE`。
+此子項在該版 CI 通過前保持 **PENDING**，亦不代替實際部署最小權限簽收。
+
 套件與授權：僅使用專案既有 `psycopg`、Starlette／ASGI、Python 標準庫與
 PostgreSQL 17；未加入新模型／商用外部服務。依賴授權沿用專案既有清單。
 
