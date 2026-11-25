@@ -69,6 +69,20 @@ if lease is None:
 
 ## G5 受控還原後 Quarantine 入口
 
+實際 PostgreSQL 17.6 受控還原回歸在 Marker 已落盤後，還會用已還原的
+`SEND_AUTHORIZED`/無 Lease 狀態執行 Sender 唯讀對帳，確認絕不發放重試權。
+`PostgresProtectedSender.summarize_known_restore_quarantine()` 進一步以獨立
+Sender 的實體 SELECT 權限，在**單一 PostgreSQL SQL Snapshot** 統計
+Restore Marker 數、Protected Snapshot 總數、授權但無 Lease、已起送／結果
+不明、終態、GC Purge Fence、總 Lease 和非預期狀態。輸出僅含數量，不包含
+Receipt／Lease 明文 ID；Marker 不存在直接拒絕，所有統計結果的
+`retry_permitted=False`。此功能只提供恢復決策所需的**局部只讀證據**，
+**不會**授權再次發送、解封或刪除任何 Snapshot。
+接著以同一真實 DB 執行 `PostgresProtectedSnapshotPurger.fence_snapshot()`，
+驗證唯一 GC ID 冪等、換 ID 拒絕、授權 Snapshot 原始 bytes 保留供稽核，
+且 StartSend 仍然拒絕。這只是被隔離副本上的**不可逆清理資格**案例，
+不是實際刪除 bytes、GC 保留期策略或生產環境的完整恢復驗收。
+
 `python -m deception.security.restore_bootstrap` 提供 **人工控制面的 post-restore
 落盤子程序**，不是 Restore 執行器、外部 Fence 或正式 Sender 解封工具。
 只有在部署控制面已停止新的入口與所有傳輸，並完成指定資料庫的還原，才能

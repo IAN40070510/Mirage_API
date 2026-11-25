@@ -29,6 +29,10 @@ G5 後續受控 post-restore 子程序：`src/deception/security/restore_bootstr
 
 G5 Sender 啟動前隔離子控制再新增 `MIRAGE_G5_EXPECTED_RESTORE_EVENT_FILE`：檔案留在 World DB 備份域外，若設定則 Sender 必須在封閉 mTLS App 建立前以自己的實體 Login 確認同一 UUIDv4 Marker；真 PG17 舊備份未含事件先拒絕、受控寫入後才可組裝封閉 Sender，錯 UUID 與異常 Secret 檔拒絕。ARM64 提交前 `job_01M89EDYPT00JQ1HZGC0S00TJS` **6 passed**（含真 Restore）、`job_01M89EERVW000JZ6C7YQ4ZM7G3` **6 passed**（Sender 組裝／配置負面）。仍須精確 SHA 重跑；未配置該檔、全機一起回滾或未真正停止流量都不能由這個選配子控制證明，G5／G6 Gate 保持 OPEN。
 
+G5 追加真還原後 GC／Purge 邊界：同一 `tests/test_g5_real_restore.py` 在獨立 PG17 恢復副本完成 Known Restore Marker 後，核對唯讀 `reconcile_send` 即使看不到 Lease 也 `retry_permitted=False`；針對舊備份留下的 `SEND_AUTHORIZED`，新增實體 Snapshot Purge Fence，原 GC UUID 重送冪等、異 ID 重綁拒絕、原始 Envelope 不改寫且無新 Send Lease。ARM64 隔離 `job_01M8ABADVY00ZQPFE8B0W2237Q` **1 passed**／還原測試 DB 殘留 **0**。這不等於清除 Snapshot bytes、完整 GC 保留期、崩潰後自動恢復或 G5 正式 Gate PASS。
+
+G5 恢復唯讀彙整：新增 `ProtectedRestoreQuarantineSummary`、`PostgresProtectedSender.summarize_known_restore_quarantine()`，**有 Marker 才能**在一條 SQL Snapshot 取得受保護授權總數、已授權無 Lease、已起送／結果不明、終態、GC Fence、Lease 和非預期狀態之計數；輸出不帶 Receipt/Lease ID，也永遠不可重送。ARM64 `job_01M8ABGMAR00N443VFMRZGZZKS` **2 passed**，包含沒有 Marker 先拒絕、既有已起送 Lease 分類，以及真還原／Purge 副本分類，暫存 DB 殘留 **0**。此為受控恢復的局部觀察資料，不能證明先前網路 bytes 沒送出，也不是自動恢復或正式放行。
+
 ## 已實作範圍
 
 | 階段 | 可使用能力 | 驗收邊界 |

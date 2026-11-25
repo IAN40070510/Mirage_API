@@ -95,8 +95,66 @@ class ProtectedSendReconciliation:
         return False
 
 
+@dataclass(frozen=True)
+class ProtectedRestoreQuarantineSummary:
+    """已知 Restore 的唯讀單一 SQL 快照統計，不表示任何可重新起送的權限。"""
+
+    known_restore_events: int
+    protected_snapshots: int
+    authorized_without_lease: int
+    started_or_unknown: int
+    terminal: int
+    purge_fenced: int
+    send_leases: int
+    other_states: int
+
+    @property
+    def retry_permitted(self) -> bool:
+        """單機恢復報表只有對帳用途；不能從舊備份推導安全重發。"""
+        return False
+
+
 class PostgresProtectedSender(_ProtectedConnection):
     """由獨立實體 Sender Login 消費已 Authorize 的 Snapshot，不重新判定政策。"""
+
+    def summarize_known_restore_quarantine(self) -> ProtectedRestoreQuarantineSummary:
+        """已知 Restore Marker 存在時，以單一 PostgreSQL Snapshot 統計待對帳狀態。
+
+        Sender 只用既有 SELECT ACL；所有列都保留於不可變資料庫，回傳
+        計數而非 Receipt/Lease UUID，不能為任何 Admission 恢復可發送權。
+        沒有 Marker、缺表或查詢失敗時必須拒絕，不得假裝世界是正常啟動。
+        """
+        with self._connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """SELECT
+                           (SELECT count(*) FROM protected_local_restore_events),
+                           count(*),
+                           count(*) FILTER (
+                             WHERE a.state='SEND_AUTHORIZED' AND l.admission_id IS NULL),
+                           count(*) FILTER (
+                             WHERE a.state='SEND_STARTED' OR (l.admission_id IS NOT NULL
+                               AND a.state NOT IN ('SEND_COMPLETED','SEND_FAILED',
+                                                   'SEND_PARTIAL_FAILURE'))),
+                           count(*) FILTER (
+                             WHERE a.state IN ('SEND_COMPLETED','SEND_FAILED',
+                                               'SEND_PARTIAL_FAILURE')),
+                           count(*) FILTER (WHERE p.admission_id IS NOT NULL),
+                           count(*) FILTER (WHERE l.admission_id IS NOT NULL),
+                           count(*) FILTER (
+                             WHERE a.state NOT IN ('SEND_AUTHORIZED','SEND_STARTED',
+                                                   'SEND_COMPLETED','SEND_FAILED',
+                                                   'SEND_PARTIAL_FAILURE'))
+                       FROM protected_authorized_http_snapshots s
+                       JOIN response_admissions a ON a.admission_id=s.admission_id
+                       LEFT JOIN protected_send_leases l ON l.admission_id=s.admission_id
+                       LEFT JOIN protected_authorized_snapshot_purge_fences p
+                         ON p.admission_id=s.admission_id"""
+                )
+                counts = cursor.fetchone()
+        if counts is None or counts[0] < 1:
+            raise ProtectedGrantError("protected_restore_summary_requires_quarantine")
+        return ProtectedRestoreQuarantineSummary(*counts)
 
     def require_known_restore_event(self, restore_event_id: UUID) -> None:
         """啟動 Listener 前以 Sender 實體 Login 查核主機側預期 Restore UUID。

@@ -20,6 +20,7 @@ from deception.world import (
     ProtectedGrantError, ProtectedLeaseTransmission, ProtectedPinnedASGIResponse,
     ProtectedSendLease,
     ProtectedSendReconciliation,
+    ProtectedRestoreQuarantineSummary,
 )
 from deception.world.transmission import TransmissionError, response_envelope, response_hashes
 from test_protected_grant import _grant, _login, _promote, _seed
@@ -417,6 +418,34 @@ def test_known_local_restore_blocks_future_send_lease_persistently(isolated_test
         assert connection.execute("SELECT state FROM response_admissions WHERE admission_id=%s",
                                   (admission.admission_id,)).fetchone() == ("SEND_AUTHORIZED",)
         assert connection.execute("SELECT count(*) FROM protected_send_leases").fetchone() == (0,)
+
+
+def test_known_restore_summary_requires_marker_and_never_rearms_unknown_send(isolated_test_dsn):
+    """Restore 對帳須先有真 Marker；既有已起送 Lease 即使 ACK 未知也不得再發。"""
+    admission, owner, envelope, seeded = _authorized_pin(isolated_test_dsn)
+    login = _login(isolated_test_dsn)
+    sender = PostgresProtectedSender(isolated_test_dsn, expected_login=login)
+    with pytest.raises(ProtectedGrantError, match="summary_requires_quarantine"):
+        sender.summarize_known_restore_quarantine()
+    lease = sender.start_send(
+        admission_id=admission.admission_id, receipt_id=seeded[3], owner=owner,
+        request_fingerprint=admission.request_binding_digest, expected_envelope=envelope,
+    )
+    assert lease is not None
+    assert PostgresKnownRestoreRecorder(
+        isolated_test_dsn, expected_login=login,
+    ).mark_known_restore(uuid4())
+    summary = sender.summarize_known_restore_quarantine()
+    assert summary == ProtectedRestoreQuarantineSummary(
+        known_restore_events=1, protected_snapshots=1,
+        authorized_without_lease=0, started_or_unknown=1, terminal=0,
+        purge_fenced=0, send_leases=1, other_states=0,
+    )
+    assert summary.retry_permitted is False
+    assert sender.start_send(
+        admission_id=admission.admission_id, receipt_id=seeded[3], owner=owner,
+        request_fingerprint=admission.request_binding_digest, expected_envelope=envelope,
+    ) is None
 
 
 def test_known_restore_commit_ack_lost_remains_quarantined_and_idempotent(isolated_test_dsn,

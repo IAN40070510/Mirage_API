@@ -128,9 +128,35 @@ This proves only the **controlled, manually sequenced, same-host restored-DB
 quarantine subcase**. The marker is not magically included in an older backup;
 real restore orchestration must guarantee quiesced ingress, marker durability
 and Sender isolation *before* traffic. This experiment did **not** test VM
-rollback, boot/restart orchestration, GC/Purge reconciliation, host-wide
+rollback, boot/restart orchestration, full GC/Purge reconciliation, host-wide
 snapshot detection, a separate failure domain or a production restore.
 `SINGLE-NODE-03`, the full G5 gate and final release remain **OPEN/NO-GO**.
+
+**2026-11-26 incremental restored-DB GC/Purge subcase:** the same opt-in
+PG17.6 `pg_dump -Fc` / `pg_restore` test now continues *after* the known-restore
+quarantine to query Sender's read-only reconciliation: a restored
+`SEND_AUTHORIZED` record with no visible Lease is **not** permission to retry.
+It then installs a real `protected_authorized_snapshot_purge_fences` row with
+one UUIDv4 GC operation, proves exact-ID replay is idempotent, rejects a
+different GC ID, preserves the immutable pinned Envelope bytes and original
+Authorization, and verifies **zero new Send Leases**. Disposable ARM64 lab
+job `job_01M8ABADVY00ZQPFE8B0W2237Q` passed one actual restored-DB case;
+temporary restored DB count **0**. This is an **isolated quarantine/Purge
+subcase only**, not GC byte deletion, concurrent distributed purge, a real
+crash/restart, the production retention policy or a formal G5 release PASS.
+
+The G5 Sender also now exposes **read-only, counter-only**
+`summarize_known_restore_quarantine()` for an isolated physical Sender login.
+It requires at least one immutable Restore marker, then uses a **single SQL
+snapshot** to classify pinned Authorizations without Lease, started/unknown
+sends, terminal sends, existing Leases, GC/Purge Fences and unclassified states.
+This result has no rearm operation and always reports `retry_permitted=false`;
+an empty Lease count after DB rollback never proves that no external bytes were
+sent. PostgreSQL experiment `job_01M8ABGMAR00N443VFMRZGZZKS` passed **2**
+real cases (unmarked DB rejected; previous started/unknown Lease classified;
+real restored/Purged DB classified) with **zero** generated databases left.
+Production recovery review, error-handling, retention and authoritative release
+governance are still **NOT ACCEPTED**.
 
 ### Subsequent G5 post-restore bootstrap candidate — not an acceptance signature
 

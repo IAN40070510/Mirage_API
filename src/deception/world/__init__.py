@@ -48,7 +48,8 @@ from .event_store import EventWorldStore, PostgresEventWorldStore
 from .protected_world import PostgresProtectedWorldExecutor
 from .protected_send import (PostgresKnownRestoreRecorder, PostgresProtectedSender,
                              PostgresProtectedSnapshotPurger,
-                             ProtectedSendLease, ProtectedSendReconciliation, ProtectedLeaseTransmission,
+                             ProtectedSendLease, ProtectedSendReconciliation,
+                             ProtectedRestoreQuarantineSummary, ProtectedLeaseTransmission,
                              ProtectedPinnedASGIResponse)
 
 __all__ = [
@@ -81,6 +82,7 @@ __all__ = [
     "PostgresProtectedSnapshotPurger",
     "ProtectedSendLease",
     "ProtectedSendReconciliation",
+    "ProtectedRestoreQuarantineSummary",
     "ProtectedLeaseTransmission",
     "ProtectedPinnedASGIResponse",
     "ProtectedGrantError",

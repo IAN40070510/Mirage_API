@@ -14,6 +14,7 @@ import pytest
 
 from deception.world import (
     PostgresKnownRestoreRecorder, PostgresProtectedSender,
+    PostgresProtectedSnapshotPurger, ProtectedRestoreQuarantineSummary,
 )
 from deception.world.protected_grant import ProtectedGrantError
 from deception.security.restore_bootstrap import main as restore_bootstrap_main
@@ -106,6 +107,11 @@ def test_real_schema_dump_restore_quarantines_sender_before_any_new_lease(
             assert restored.execute(
                 "SELECT count(*) FROM protected_local_restore_events",
             ).fetchone() == (0,)
+        unmarked_sender = PostgresProtectedSender(
+            restored_dsn, expected_login=_login(restored_dsn),
+        )
+        with pytest.raises(ProtectedGrantError, match="summary_requires_quarantine"):
+            unmarked_sender.summarize_known_restore_quarantine()
 
         # 還原完成後由部署控制面使用兩把不同實體 NOINHERIT SCRAM Login；
         # Recorder 只有 INSERT、獨立 Sender 只有 SELECT，不能共用 Owner。
@@ -221,11 +227,59 @@ def test_real_schema_dump_restore_quarantines_sender_before_any_new_lease(
                      admission.request_binding_digest, admission.candidate_hash,
                      admission.transmission_deadline),
                 )
+        # 舊備份中的 Admission 看似仍 SEND_AUTHORIZED 且看不到 Lease；
+        # Restore/ACK 不確定時不允許把「沒有 Lease」當作可以重發的依據。
+        observation = sender.reconcile_send(
+            admission_id=admission.admission_id, receipt_id=seeded[3], owner=owner,
+            request_fingerprint=admission.request_binding_digest,
+        )
+        assert not observation.retry_permitted
+        assert observation.lease_observed is False
+        # 在已知 Restore 的隔離域內執行單次 Snapshot GC Fence；原有
+        # 不可變 Snapshot 仍可審計，但執行資格不可透過另一個 GC ID 重綁。
+        purger = PostgresProtectedSnapshotPurger(
+            restored_dsn, expected_login=restored_login,
+        )
+        gc_id = uuid4()
+        assert purger.fence_snapshot(
+            admission_id=admission.admission_id, gc_operation_id=gc_id,
+            purge_reason="snapshot_corrupt",
+        )
+        assert purger.fence_snapshot(
+            admission_id=admission.admission_id, gc_operation_id=gc_id,
+            purge_reason="snapshot_corrupt",
+        )
+        with pytest.raises(ProtectedGrantError, match="purge_rebound"):
+            purger.fence_snapshot(
+                admission_id=admission.admission_id, gc_operation_id=uuid4(),
+                purge_reason="snapshot_corrupt",
+            )
+        assert sender.start_send(
+            admission_id=admission.admission_id, receipt_id=seeded[3], owner=owner,
+            request_fingerprint=admission.request_binding_digest,
+            expected_envelope=envelope,
+        ) is None
+        summary = sender.summarize_known_restore_quarantine()
+        assert summary == ProtectedRestoreQuarantineSummary(
+            known_restore_events=1, protected_snapshots=1,
+            authorized_without_lease=1, started_or_unknown=0, terminal=0,
+            purge_fenced=1, send_leases=0, other_states=0,
+        )
+        assert not summary.retry_permitted
         with psycopg.connect(restored_dsn) as verified:
             assert verified.execute(
                 "SELECT restore_event_id FROM protected_local_restore_events",
             ).fetchall() == [(restore_event,)]
             assert verified.execute("SELECT count(*) FROM protected_send_leases").fetchone() == (0,)
+            assert verified.execute(
+                "SELECT gc_operation_id,purge_reason "
+                "FROM protected_authorized_snapshot_purge_fences WHERE admission_id=%s",
+                (admission.admission_id,),
+            ).fetchone() == (gc_id, "snapshot_corrupt")
+            assert bytes(verified.execute(
+                "SELECT envelope_bytes FROM protected_authorized_http_snapshots "
+                "WHERE admission_id=%s", (admission.admission_id,),
+            ).fetchone()[0]) == envelope
             assert verified.execute(
                 "SELECT state FROM response_admissions WHERE admission_id=%s",
                 (admission.admission_id,),
