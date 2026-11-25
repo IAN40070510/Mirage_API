@@ -66,6 +66,8 @@ Session 逐欄比對，保留已驗證的 `native_projection.status_code`、
 Verifier 的十條原生候選 mTLS Client 路徑都收斂到這個 Receipt-only URL，
 各路徑仍獨立核對真實 Executor Operation／Envelope／來源、原始已驗簽 JWS
 的 Scope 與該操作的固定原生 JSON 語意；固定分型投影 RPC 只保留向後相容。
+Validator 將同步 PostgreSQL 查證放進受控執行緒池，不在 ASGI Event Loop
+上等待 DB／Row Lock；所有來源查核錯誤仍回 503，並無候選降級路徑。
 此接線**未建立** Verifier→Authorizer→Sender 的完整授權傳輸通路，
 不得視為 G4/G6 的 Client HTTP 發送驗收。
 

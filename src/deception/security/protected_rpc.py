@@ -1351,12 +1351,13 @@ def create_fixed_executor_app(*, executor) -> FastAPI:
 
 
 def create_native_validator_app(*, projector) -> FastAPI:
-    """在專用 Validator mTLS 入口重建受保護的 Medusa 原生拒絕候選。
+    """在專用 Validator mTLS 入口唯讀重建 20 種原生 HTTP 候選。
 
     只接受 Receipt，不接受 Caller 指定模板、Scope、Status 或 Payload。
     回傳的是內部候選交接資料，**不能**作為已授權的客戶端 HTTP 回應。
     """
     from deception.world.protected_native_http import PostgresProtectedNativeProjector
+    from starlette.concurrency import run_in_threadpool
 
     if not isinstance(projector, PostgresProtectedNativeProjector):
         raise ProtectedRpcConfigurationError("native_validator_requires_protected_projector")
@@ -1379,7 +1380,7 @@ def create_native_validator_app(*, projector) -> FastAPI:
     @app.post("/internal/v1/project-synthetic-rejection")
     @app.post("/internal/v1/project-medusa-rejection")
     async def project(request: Request) -> dict[str, object]:
-        """按固定 URL 選 Medusa 400/404 或 Synthetic 409，不接受 Caller 選模板。"""
+        """依已驗 Receipt 或相容固定路徑分派可信投影，隔離同步 DB 鎖等待。"""
         if request.scope.get("scheme") != "https":
             raise HTTPException(status_code=503, detail="native_validator_tls_required")
         received = bytearray()
@@ -1397,27 +1398,28 @@ def create_native_validator_app(*, projector) -> FastAPI:
             raise HTTPException(status_code=400, detail="native_validator_request_invalid") from exc
         try:
             if request.scope.get("path") == "/internal/v1/project-receipt":
-                projected = projector.project_verified_receipt(UUID(str(call.receipt_id)))
+                selected = projector.project_verified_receipt
             elif request.scope.get("path") == "/internal/v1/project-inventory-snapshot":
-                projected = projector.project_inventory_snapshot(UUID(str(call.receipt_id)))
+                selected = projector.project_inventory_snapshot
             elif request.scope.get("path") == "/internal/v1/project-inventory-operation":
-                projected = projector.project_inventory_operation(UUID(str(call.receipt_id)))
+                selected = projector.project_inventory_operation
             elif request.scope.get("path") == "/internal/v1/project-cart-read":
-                projected = projector.project_cart_read(UUID(str(call.receipt_id)))
+                selected = projector.project_cart_read
             elif request.scope.get("path") == "/internal/v1/project-medusa-creation":
-                projected = projector.project_medusa_creation(UUID(str(call.receipt_id)))
+                selected = projector.project_medusa_creation
             elif request.scope.get("path") == "/internal/v1/project-medusa-read":
-                projected = projector.project_medusa_read(UUID(str(call.receipt_id)))
+                selected = projector.project_medusa_read
             elif request.scope.get("path") == "/internal/v1/project-medusa-add-success":
-                projected = projector.project_medusa_add_success(UUID(str(call.receipt_id)))
+                selected = projector.project_medusa_add_success
             elif request.scope.get("path") == "/internal/v1/project-cart-creation":
-                projected = projector.project_cart_creation(UUID(str(call.receipt_id)))
+                selected = projector.project_cart_creation
             elif request.scope.get("path") == "/internal/v1/project-synthetic-success":
-                projected = projector.project_synthetic_success(UUID(str(call.receipt_id)))
+                selected = projector.project_synthetic_success
             elif request.scope.get("path") == "/internal/v1/project-synthetic-rejection":
-                projected = projector.project_synthetic_rejection(UUID(str(call.receipt_id)))
+                selected = projector.project_synthetic_rejection
             else:
-                projected = projector.project_medusa_rejection(UUID(str(call.receipt_id)))
+                selected = projector.project_medusa_rejection
+            projected = await run_in_threadpool(selected, call.receipt_id)
         except Exception as exc:
             raise HTTPException(status_code=503, detail="native_validator_source_unverifiable") from exc
         return {

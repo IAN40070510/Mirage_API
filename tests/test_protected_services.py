@@ -611,6 +611,7 @@ def test_g3b_native_validator_only_accepts_https_receipt_uuid4():
 def test_g3b_validator_receipt_dispatch_never_trusts_caller_route_or_bytes(monkeypatch):
     """單一 Receipt RPC 僅由資料庫 Proof 分派候選，禁用 Handler／Body／Status 自選。"""
     from fastapi.testclient import TestClient
+    from starlette import concurrency
 
     from deception.world.models import SecurityErrorSource, WorldScope
     from deception.world.protected_native_http import ProtectedNativeProjection
@@ -628,6 +629,15 @@ def test_g3b_validator_receipt_dispatch_never_trusts_caller_route_or_bytes(monke
                                    contract_revision="synthetic-carts-1"),
     )
     calls = []
+    threadpool_calls = []
+    real_threadpool = concurrency.run_in_threadpool
+
+    async def traced_threadpool(func, *args, **kwargs):
+        """確認原生 Validator 的唯讀 PostgreSQL 查核不佔用 ASGI Event Loop。"""
+        threadpool_calls.append((func, args, kwargs))
+        return await real_threadpool(func, *args, **kwargs)
+
+    monkeypatch.setattr(concurrency, "run_in_threadpool", traced_threadpool)
 
     def project_receipt(self, selected_receipt):
         """記錄 Validator 實際收到的 Receipt，不接受外部操作參數。"""
@@ -664,6 +674,8 @@ def test_g3b_validator_receipt_dispatch_never_trusts_caller_route_or_bytes(monke
         assert answer.json()["trusted_send"] == "disabled"
         assert "send_lease" not in answer.json() and "send_authorized" not in answer.json()
     assert calls == [receipt]
+    assert len(threadpool_calls) == 1
+    assert threadpool_calls[0][1] == (receipt,) and threadpool_calls[0][2] == {}
 
 
 def test_g3b_cart_order_read_200_validator_rejects_forged_native_payloads(monkeypatch):
