@@ -12,6 +12,8 @@
 
 **目前狀態：Proposed／Security Weakness OPEN／Mirage release NO-GO。獨立分支已開始原生協定修補；完整權限修復、驗收與正式發送啟用均未完成。**
 
+**2026-11-25 Owner 單機產品方向（D-74）**：Mirage 的標準部署是一台主機，且沒有外部 Restore Fence 仍應具備完整業務與可信發送功能（後者仍須先完成原生安全測試與 Release 簽核）。**外部 Fence 是選配強化模式**，提供整機／復原域回滾證據；純單機不能宣稱此額外保證。先前 Option B／BD-05 的外部 Head 強制條件只對啟用的強化模式適用；新的雙 Profile 功能與安全測試**尚未實作／驗收**。詳見 [單機／選配 Fence 架構與 Gate](single-node-restore-profiles.md)。
+
 **2026-11-22 隔離實作更新**：G3b 已有真 PostgreSQL／mTLS 雙程序 Verifier→Executor
 與限定 Medusa 400／404 來源測試（[固定 SHA／CI 清單](grant-binding-implementation-status.md)），
 但部署角色、Gateway 直連、全業務相容與正式 G3b 簽核仍 OPEN。
@@ -45,6 +47,7 @@
 | [G3 Grant Binding 實作紀錄](grant-binding-implementation-status.md) | 獨立分支實際修補切面、Role／Row Lock 新阻礙、真 PostgreSQL 未驗證及下一階段清單 | 6 |
 | [G3b 全 20 操作逐項簽收矩陣](g3b-operation-acceptance-matrix.md) | 分開標示固定 HTTP Proof、內部 Executor 與原生 2xx／4xx 相容，不將隔離 PASS 當正式發送資格 | 6 |
 | [Oracle 隔離權限驗收 Lab](isolated-oracle-lab.md) | 新建 Internal Network、專用 PostgreSQL、Verifier／Authorizer SCRAM Role Probes；不是正式服務或 G1/G2 完整通過證據 | 7 |
+| [單機標準模式／外部 Fence 選配 D-74](single-node-restore-profiles.md) | 單機完整功能、不可宣稱整機抗回滾的殘餘風險、Profile 防降級、兩套 G5 驗收矩陣（未實作／NOT_RUN） | 8 |
 | [Restore Anchor Option B 已核准契約](restore-anchor-option-b.md) | World DB 還原域之外的 Anchor 與不可回退最高 Head；核准方向不等於已部署 | 8 |
 | [BD-05 自動驗證解除 Quarantine](bd-05-restore-quarantine-release.md) | 證據全 PASS 自動放行；異常維持隔離，人工僅修復、不能繞過 | 8 |
 | [BD-11 Deadline 時間語意](bd-11-deadline-semantics.md) | 鎖後權威 DB 時間、COMMIT 線性化點、未知結果對帳；已決策但未驗收 | 8 |

@@ -2,6 +2,8 @@
 
 Status: **OWNER APPROVED / IMPLEMENTATION NOT COMPLETE / G5 NOT RUN**.
 
+> **D-74 scope update (2026-11-25):** Owner has selected a **full-feature, one-host standard Mirage profile** with **optional external Fence**. The absolute MUSTs, domain isolation and all acceptance cases below continue to govern the **external_fence enhanced profile when installed or advertised**; they are **not ordinary single-node startup requirements**. Standard mode does not claim whole-host rollback resistance and must independently pass all native role, transaction, ASGI/Send, Purge, detected-restore and Owner acceptance gates. Historical statements below remain as original Option B evidence, not proof that the new deployment profiles are implemented. See [D-74 profiles](single-node-restore-profiles.md). **Both profiles: NOT COMPLETE / NO-GO / Trusted Send OFF.**
+
 ## Trust boundary
 
 The Restore Anchor MUST be outside the World DB backup and restore domain. Its credentials, write authority, backup and retention policy MUST be independent from World DB Runtime, Verifier and Authorizer credentials. An isolated same-host laboratory store may validate the protocol but does not establish resistance to host-root compromise, host snapshot rollback, or a malicious Docker administrator.

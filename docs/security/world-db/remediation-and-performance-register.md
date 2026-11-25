@@ -8,6 +8,8 @@
 >
 > **結論**：`MIR-SEC-WORLD-001 = OPEN`；`Mirage release = NO-GO`；正式 Trusted Send／production DECEIVE **OFF**；未經安全驗收與核准不得啟用。獨立分支已有部分原生程式和隔離 Lab 測試，但**完整的受保護權限、真正的 HTTP 傳輸／Restore 閘門及端到端效能都未驗收**。
 
+> **2026-11-25 D-74 最新適用範圍**：Mirage 的完整標準產品為一台主機；外部 Restore Fence 為選配強化 Profile，不能被當成一般啟動依賴。以下歷史 SEC-14／G5 關於域外最高可信 Head 的測試只對啟用外部 Profile 的抗整機回滾保證適用；單機不得聲稱等價抗回滾，仍須完整 G3b/G4/G6、單機 G5 及 Owner Release 實證。新增 [雙 Profile 契約](single-node-restore-profiles.md) 狀態 NOT_IMPLEMENTED／NOT_RUN，Trusted Send OFF。
+
 ## 1. 範圍、優先次序及證據標記
 
 - **使用者需求優先次序**：① 回應功能有效、資料與世界狀態正確；② 使用者感受到的速度與可用性；③ 在前兩者之上繼續強化安全性。**既定 Release Gate 不得因優化速度而跳過**，例如未授權發送、恢復未知 COMMIT 後盲目重試、Restore 隔離失效。

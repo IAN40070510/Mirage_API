@@ -9,7 +9,16 @@
 > 本文歷史上要求 DBA／Security／Release Approver **四方人工簽核**的敘述，
 > 改由 Owner 在 G3b～G6 全部技術證據 PASS 後作可追溯最終核准；
 > 外部獨立人工審查為建議項。**獨立 DB Role／Validator／Fence、全部技術 Gate、
-> Mirage release 個別驗收仍必須遵守；採納制度不等於放行。**
+> Mirage release 個別驗收仍必須遵守；採納制度不等於放行。
+
+> **2026-11-25 D-74 新產品部署範圍（優先於本文歷史外部 Fence 必備敘述）**：
+> Mirage 維持單主機完整功能；外部 Restore Fence 為選配的跨整機／跨復原域
+> 防回滾強化 Profile。現行 Option B 與 BD-05 的外部最高 Head、跨庫對帳及
+> 自動證據解禁 MUST，在 **啟用 external_fence** 時全部保留；單機標準模式
+> 不宣稱能防止整台 VM 靜默回滾，仍需完整 G3b/G4/G6／單機 G5 安全驗收及
+> Owner 風險揭露與最終 Release 核准。完整界線與未測案例見
+> [D-74 Deployment Profiles](../security/world-db/single-node-restore-profiles.md)。
+> **本輪是契約範圍變更，尚非原生程式實作／可信發送核准。****
 
 | 欄位 | 值 |
 | --- | --- |
