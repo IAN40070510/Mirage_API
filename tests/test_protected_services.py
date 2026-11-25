@@ -194,7 +194,9 @@ def test_g4_sender_dedicated_secret_and_lease_are_sealed(tmp_path, monkeypatch):
     monkeypatch.setattr("deception.security.protected_services._login_preflight", preflight)
     config = {"MIRAGE_G4_SENDER_DSN_FILE": str(dsn),
               "MIRAGE_G4_SENDER_LOGIN": "sender_only",
-              "MIRAGE_G3B_WORLD_SCHEMA": "public"}
+              "MIRAGE_G3B_WORLD_SCHEMA": "public",
+              "MIRAGE_RESTORE_PROFILE": "standard_single_node",
+              "MIRAGE_RESTORE_PROFILE_VERSION": "1"}
     app = create_sender_service(config)
     assert seen == [(('postgresql://sender-only.invalid/g4', 'sender_only'),
                      {'role': 'sender', 'schema': 'public'})]
@@ -207,13 +209,13 @@ def test_g4_sender_dedicated_secret_and_lease_are_sealed(tmp_path, monkeypatch):
     monkeypatch.setattr(PostgresProtectedSender, "start_send", forbidden_send)
     with TestClient(app, base_url="https://sender.test") as caller:
         assert caller.get("/internal/ready").json() == {
-            "control_plane": "sender-sealed-until-restore-fence",
+            "control_plane": "sender-sealed-pending-security-acceptance",
             "trusted_send": "disabled"}
         for payload in ({}, {"trusted_send": "enabled", "force": True},
                         {"receipt_id": str(uuid4()), "payload": "forged"}):
             reply = caller.post("/internal/v1/send", json=payload)
             assert reply.status_code == 503
-            assert reply.json() == {"detail": "fixed_sender_restore_fence_required"}
+            assert reply.json() == {"detail": "fixed_sender_release_gates_not_met"}
         assert caller.post("/internal/v1/execute", json={}).status_code == 404
     with pytest.raises(ProtectedRpcConfigurationError, match="requires_protected_sender"):
         create_fixed_sender_app(sender=object())
@@ -224,6 +226,12 @@ def test_g4_sender_dedicated_secret_and_lease_are_sealed(tmp_path, monkeypatch):
             create_sender_service({**config, key: "not-a-sender-secret"})
     with pytest.raises(ProtectedRpcConfigurationError, match="unsafe_runtime_configuration"):
         create_sender_service({**config, "MIRAGE_TRUSTED_SEND_ENABLE": "true"})
+    from deception.security.restore_profile import RestoreProfileConfigurationError
+
+    with pytest.raises(RestoreProfileConfigurationError, match="downgrade_refused"):
+        create_sender_service({**config, "MIRAGE_FENCE_AUTHORITY_DSN": "postgresql://fence.invalid/test"})
+    with pytest.raises(RestoreProfileConfigurationError, match="configuration_incomplete"):
+        create_sender_service({**config, "MIRAGE_RESTORE_PROFILE": "external_fence"})
 
 
 def test_g4_sender_preflight_requires_column_only_state_update(monkeypatch):

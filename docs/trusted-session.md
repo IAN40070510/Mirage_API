@@ -129,3 +129,5 @@ HybridIdentityProvider 有 Medusa 憑證時驗證顧客，無憑證時才匿名�
 ## 獨立可信服務啟動入口
 
 `python -m uvicorn deception.domains.ecommerce.trusted_http:from_environment --factory --host 127.0.0.1 --port 8000 --no-proxy-headers` 使用部署環境建立服務。必要環境變數為 `MIRAGE_TRUSTED_SETTINGS_FILE`（只含受信公開金鑰與部署政策）、`MIRAGE_POSTGRES_DSN`（Mirage 專用 DB）及 `MIRAGE_DEMO_ORIGIN`（簽章路由的固定 origin）。`MIRAGE_ENABLE_BUSINESS=true` 才開啟合成交易，預設 false；`MIRAGE_AUTO_MIGRATE=true` 才於啟動時更新 schema，預設由部署流程另外執行，見[migration 操作](runtime-operations.md)。旗標只接受 true／false，設定錯誤會阻止啟動。
+
+**D-74 配置前置檢查（尚未開啟正式 Trusted Send）**：此正式入口另須明確設定 `MIRAGE_RESTORE_PROFILE=standard_single_node` 與 `MIRAGE_RESTORE_PROFILE_VERSION=1`，不需要外部 Fence；若選 `external_fence`，則必須提供完整獨立權威 DSN、namespace、epoch 與兩份不同的 Ed25519 公鑰檔案，詳見[單機／外部 Fence 模式契約](security/world-db/single-node-restore-profiles.md)。Profile 配置檢查不會解除目前的 `protected_world_services_not_wired` 安全封鎖；不宣稱已可正式部署或傳送可信回應。

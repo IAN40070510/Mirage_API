@@ -1391,13 +1391,13 @@ def create_fixed_sender_app(*, sender) -> FastAPI:
     @app.get("/internal/ready")
     async def ready() -> dict[str, str]:
         """只回報 Sender mTLS 服務存活，不聲稱可起送或完成 G5。"""
-        return {"control_plane": "sender-sealed-until-restore-fence",
+        return {"control_plane": "sender-sealed-pending-security-acceptance",
                 "trusted_send": "disabled"}
 
     @app.post("/internal/v1/send")
     async def send() -> None:
         """任何起送或偽造 Payload 嘗試都固定封閉，且不呼叫 Sender。"""
-        raise HTTPException(status_code=503, detail="fixed_sender_restore_fence_required")
+        raise HTTPException(status_code=503, detail="fixed_sender_release_gates_not_met")
 
     return app
 

@@ -1,6 +1,6 @@
 # Mirage single-node deployment and optional external Restore Fence — D-74
 
-> Owner product direction: **ACCEPTED 2026-11-25**. Implementation: **NOT COMPLETE**. Acceptance: **NOT RUN**. Release: **NO-GO**; Trusted Send and DECEIVE remain **OFF**.
+> Owner product direction: **ACCEPTED 2026-11-25**. Implementation: **PARTIAL — deployment profile configuration preflight only**. Acceptance: **NOT RUN for full feature/security gates**. Release: **NO-GO**; Trusted Send and DECEIVE remain **OFF**.
 
 ## Product and threat-model boundary
 
@@ -10,7 +10,7 @@ The external Fence is an **optional, explicitly selected high-assurance recovery
 
 **Unavoidable limit:** without authority that survives a complete host/disk/VM snapshot rollback, Mirage cannot prove that a consumed replay JTI, revoked credential, external effect key or purged Snapshot did not resurrect when the *entire host* goes back in time. Ordinary single-node functionality is not equivalent to that additional security guarantee. The standard profile must never advertise cross-host/whole-host rollback resistance.
 
-## Explicit deployment profiles (proposed configuration, not yet implemented)
+## Explicit deployment profiles (initial configuration preflight implemented; protected transport still sealed)
 
 | Property | `standard_single_node` | `external_fence` |
 | --- | --- | --- |
@@ -22,7 +22,19 @@ The external Fence is an **optional, explicitly selected high-assurance recovery
 | Unknown send/COMMIT, detected restore and local integrity failures | Fail closed; never blindly replay | Fail closed and reconcile with Fence |
 | On configured external authority outage | Not applicable | **Remain quarantined; no silent profile downgrade** |
 
-Profile selection must be explicit, versioned, auditable and startup-verified. The shown identifiers are **contract proposals**, not current environment variables, existing feature flags or evidence of running code. Missing external DSN/secret must not prevent standard single-node normal business startup. A configured external profile whose authority is missing, stale, retired or unreachable MUST NOT fall back to standard mode. Profile changes during active sends, after restore, or with unresolved publication intents require a controlled migration and fenced reconciliation.
+Profile selection must be explicit, versioned, auditable and startup-verified. `src/deception/security/restore_profile.py` now implements the **configuration-parse subset** at the formal `trusted_http.from_environment()` entrypoint. It validates exact version `1`, rejects unknown modes, requires complete external configuration and different 32-byte Ed25519 public-key pins, and rejects a standard-mode declaration if any `MIRAGE_FENCE_*` setting remains. The formal Trusted HTTP sender Release Fuse remains hard closed. This parsing alone does **not** persist a deployment mode pin, contact the Fence, prove an independent recovery domain, support mode migration, or make Trusted Send operational.
+
+The initial configuration names are:
+
+```dotenv
+# Full normal functionality is the intended eventual release target, not currently enabled.
+MIRAGE_RESTORE_PROFILE=standard_single_node
+MIRAGE_RESTORE_PROFILE_VERSION=1
+```
+
+`standard_single_node` requires **no** `MIRAGE_FENCE_*` fields or Fence installation. For the optional mode, set `MIRAGE_RESTORE_PROFILE=external_fence` and provide `MIRAGE_FENCE_AUTHORITY_DSN`, `MIRAGE_FENCE_NAMESPACE`, `MIRAGE_FENCE_EPOCH`, `MIRAGE_FENCE_PUBLISHER_PUBLIC_KEY_FILE`, and `MIRAGE_FENCE_HEAD_PUBLIC_KEY_FILE`. The public-key files currently use lowercase 64-hex-character representations of distinct Ed25519 public keys; their contents, not paths, are digested in the in-memory profile. Keep the DSN and any credentials outside documentation, command logs and images. No external adapter is enabled from these settings yet.
+
+Missing external DSN/secret must not prevent standard single-node **configuration parsing**; configured external mode cannot downgrade to standard because an external field is missing or corrupt. **Remaining security blocker:** a deliberately changed environment that removes *all* external settings is not detectable from an environment-only declaration. An authoritative, durable mode pin outside the World restore domain, guarded transitions, liveness/freshness verification and persistent quarantine are still required before claiming full `SINGLE-NODE-05` or any external assurance. A configured external profile whose authority becomes unavailable MUST remain quarantined, without silent downgrade.
 
 ## Standard single-node security acceptance — all mandatory
 
@@ -30,7 +42,7 @@ Profile selection must be explicit, versioned, auditable and startup-verified. T
 - **SINGLE-NODE-02:** Real PostgreSQL SCRAM/ACL, independent logical roles, protected Receipt, Grant/Binding, immutable Snapshot, single-use StartSend and actual ASGI first-byte/partial/unknown transport; prove unauthorized writes and duplicates are rejected.
 - **SINGLE-NODE-03:** Candidate GC, Snapshot Purge, active Send Lease, local crash/restart, World DB rollback/unknown commit, and idempotent reconciliation. A known or detected restore must enter a persistent deny state before further protected sends until the *single-node recovery policy* has verified integrity; absence of external evidence cannot be called a cross-host proof.
 - **SINGLE-NODE-04:** No external Fence installed: full normal API and trusted response flows pass their own gates; deployment reports `whole_host_rollback_guarantee=false`. No claim that an undetected full-VM snapshot rollback is detectable.
-- **SINGLE-NODE-05:** Explicit external mode with wrong/missing credentials or broken network cannot automatically start as standard mode; a profile change needs an auditable authorized transition, no active send lease, and consistent state.
+- **SINGLE-NODE-05:** Explicit external mode with wrong/missing credentials or broken network cannot automatically start as standard mode; a profile change needs an auditable authorized transition, no active send lease, and consistent state. **Partial code/test candidate:** fail-closed syntax, field and key checks; not yet durable pin, live Fence or controlled transitions.
 - **SINGLE-NODE-06:** G3b/G4/G6 full native regression, mixed binaries, rollback, concurrency, performance, release fuse and Owner acceptance for an exact SHA/environment. Optionality does not bypass any other security gate.
 
 ## Optional external Fence acceptance — mandatory only if enabled or claimed

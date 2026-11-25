@@ -375,8 +375,9 @@ def create_native_validator_service(config: Mapping[str, str]) -> FastAPI:
 
 
 def create_sender_service(config: Mapping[str, str]) -> FastAPI:
-    """只以 Sender 實體 Login／專用 Secret 建立尚未啟用傳輸的 G4 服務。"""
+    """核對 D-74 部署 Profile，再以獨立 Sender Login 建立封閉的 G4 服務。"""
     from deception.world.protected_send import PostgresProtectedSender
+    from deception.security.restore_profile import load_restore_profile
 
     if any(config.get(key) for key in (
             "MIRAGE_POSTGRES_DSN", "MIRAGE_G3B_VERIFIER_DSN_FILE",
@@ -384,6 +385,8 @@ def create_sender_service(config: Mapping[str, str]) -> FastAPI:
         raise ProtectedRpcConfigurationError("g3b_service_cross_role_secret_denied")
     if config.get("MIRAGE_TRUSTED_SEND_ENABLE") not in (None, "false"):
         raise ProtectedRpcConfigurationError("g3b_service_unsafe_runtime_configuration")
+    # Profile 只標示部署契約，絕不能藉此取消 Sender 的安全 Release Fuse。
+    load_restore_profile(config)
     dsn = _secret_file(config, "MIRAGE_G4_SENDER_DSN_FILE", max_bytes=4096)
     login = _required_config(config, "MIRAGE_G4_SENDER_LOGIN")
     _login_preflight(dsn, login, role="sender",

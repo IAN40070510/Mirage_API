@@ -135,12 +135,12 @@ def test_g4_sender_real_mtls_is_credential_isolated_and_never_starts_send(tmp_pa
             else:
                 pytest.fail("Sender mTLS listener failed to start")
             assert result.json() == {
-                "control_plane": "sender-sealed-until-restore-fence", "trusted_send": "disabled"}
+                "control_plane": "sender-sealed-pending-security-acceptance", "trusted_send": "disabled"}
             for json_body in ({}, {"lease_id": "forged", "send": True}):
                 result = trusted.post(f"https://127.0.0.1:{port}/internal/v1/send",
                                       json=json_body)
                 assert result.status_code == 503
-                assert result.json() == {"detail": "fixed_sender_restore_fence_required"}
+                assert result.json() == {"detail": "fixed_sender_release_gates_not_met"}
         anonymous_context = ssl.create_default_context(cafile=str(ca))
         with httpx.Client(verify=anonymous_context, trust_env=False, timeout=2.0) as anonymous:
             with pytest.raises(httpx.TransportError):

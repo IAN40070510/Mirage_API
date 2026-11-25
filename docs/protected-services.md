@@ -215,9 +215,16 @@ Sender 啟動前檢查物理 Login、`NOINHERIT`、無 Role 成員資格、固�
 建立或改寫快照權。多個角色的 DSN 同時出現時直接拒絕啟動。這些是**啟動時
 權限檢查合約**，不是已驗證的正式 ACL 授權清單。
 
-`GET /internal/ready` 僅回報 `sender-sealed-until-restore-fence`，
+`GET /internal/ready` 僅回報 `sender-sealed-pending-security-acceptance`，
 `POST /internal/v1/send` 不論輸入或 mTLS Caller 身分一律 503，**不呼叫
-StartSend、不建立 Lease、不輸出 HTTP Payload**。既有
+StartSend、不建立 Lease、不輸出 HTTP Payload**。
+Sender 啟動時還會解析 D-74 版本化部署宣告（`MIRAGE_RESTORE_PROFILE`、
+`MIRAGE_RESTORE_PROFILE_VERSION=1`），標準單機不需要 Fence；選配外部模式
+缺少權威設定或金鑰、或單機配置殘留 Fence 設定，一律 Fail-Closed。
+此部分只是模式配置校驗，尚未完成持久模式釘選、正式 Sender 或 Restore
+驗收。503 固定分類為 `fixed_sender_release_gates_not_met`，不再錯稱
+「沒有外部 Fence」本身是標準單機的禁止原因。這不改變硬性 Release Fuse。
+既有
 `PostgresProtectedSender.start_send()` 增加必填 UUIDv4 Receipt，對照
 Authorized Snapshot／Grant Binding 的同一 Receipt，阻止只有 Admission ID 的
 交叉起送；`ProtectedLeaseTransmission` 在 ASGI 起送前也核對 Lease 的 Receipt。
