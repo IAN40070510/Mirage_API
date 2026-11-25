@@ -344,8 +344,86 @@ Fence SQL／ACL `job_01M87YG7MY00C46GC3BWX60W8M`；World
 **判定：同主機的獨立 PostgreSQL Lab PASS／CLEAN；跨主機、不同回復域的
 正式 Restore Fence 未獲證明，G5 仍 OPEN／NO-GO，Trusted Send OFF。**
 
-**此項狀態仍是 G5 PARTIAL／NO-GO**：CI 只有兩個測試資料庫與用後即刪的
-隔離角色，尚未完成正式憑證隔離、不可回退的獨立最高 Head Authority、
+### 2026-11-25 第二台 Oracle 主機一次性真簽章 Restore Lab — PASS／已銷毀
+
+使用者指定**不同於既有 `138.2.107.99` 共享主機**的獨立 SSH 主機
+`161.33.154.211`（Ubuntu 24.04 ARM64），要求完成驗證後刪除測試檔。
+先由使用者透過 PuTTY 在該主機核對 ED25519 SSH Host Key
+`SHA256:ISzzPU/8h6Js7i4diXg/FIqp0ir59rI7wqeMKo6C3a8`；Gateway 固定指紋
+並以專用臨時公鑰驗證登入成功。測試前盤點為 **0 容器／3 內建網路／0
+資料卷／0 映像**，全新專案路徑不存在。不修改 MSDSS 主機、正式環境、
+套件、系統核心、SSH 主機金鑰或防火牆。
+
+以一次性 `mirage-g5-external-oneoff-20261125-b43e` 專案部署 World／Fence
+兩個 `postgres:17.6-alpine`，各有獨立 `internal: true` Docker 網路、具名
+資料卷、SCRAM 認證與不對外發布的 5432 埠；無權限的測試端只加入這兩個
+Lab 網路。所有隨機資料庫密碼在主機新建 0700 目錄產生，以 Docker Secret
+掛載，不採用 Windows `.ppk` 或 MSDSS Secret。部署源碼精確鎖定
+[`5286138`](https://github.com/IAN40070510/Mirage_API/commit/528613877323fab158417cda065946f50098268f)。
+該主機沒有 Docker Buildx 和 `docker compose` 外掛，因此在不安裝任何
+主機套件的前提下，以既有 legacy Docker builder 和獨立
+`docker-compose` v2.24.0 建置與管理；建置上下文只含四個必要原始檔、
+空白 package init 和 Dockerfile，未包含密鑰。
+
+- **原始 G5 Python + 獨立實體 PostgreSQL**：真 Publisher／Reader／Runtime
+  SCRAM、Ed25519 簽章、世代切換、連續事件、SQL Trigger 與 ACL，共
+  `10 passed in 0.99s`（`job_01M883HJP400X4AGC8Q4G6K64A`）。
+- **額外端到端 signed restore Probe**：使用真正 `SignedAnchorCheckpoint`
+  與 `PostgresAnchorPublisher` 發布序號 1，再 `pg_dump -Fc` World；World
+  前進至 2 且已簽署 Fence Head 也到 2 後，實際執行 `pg_restore --clean`
+  將 World 回退至 1。獨立 `verify_restore_anchor` 回傳
+  `RESTORE_BEHIND` 且 `release_authorized=False`；Fence Head 保留 2。
+  DBA 再追加權威世代 2，舊 Publisher 與 Reader 均拒絕。
+  初始簽章 `job_01M883P4HG00005C12VNHRJ1F7`、
+  `pg_dump` `job_01M883PGJP00NCE6QN57GZ8R8S`、
+  發布第二鏈節 `job_01M883PZJF00WEJ6VSGPMZNH2Y`、
+  `pg_restore` `job_01M883QCP100SKJXJSGJJGVQDR`、
+  還原／世代拒絕驗證 `job_01M883QP9600DJCXQ8DFRMP8ZJ`。
+- **網路及密碼負向測試**：World/Fence 容器互相無 DNS 解析，Host
+  PostgreSQL 連線全面使用 SCRAM，錯誤密碼遭拒（
+  `job_01M883R87100Z2JB5BCT4KPJJR`、
+  `job_01M883S15V00TZE7RVYKCW6AMH`、
+  `job_01M883RT7300DK2R7PC277XY4B`）。
+
+```text
+10 passed in 0.99s
+PASS_SIGNED_HEAD_SEQ1_RELEASE_DENIED
+PASS_SIGNED_HEAD_SEQ2_WORLD_SEQ2_RELEASE_DENIED
+PASS_REAL_SIGNED_RESTORE_BEHIND_QUARANTINE world=1 fence=2 gen=2
+PASS_RETIRED_EPOCH_PUBLISHER_READER_DENIED
+PASS_WORLD_CANNOT_RESOLVE_FENCE
+PASS_FENCE_CANNOT_RESOLVE_WORLD
+PASS_SCRAM_REQUIRED_AND_WRONG_PASSWORD_REJECTED
+```
+
+清理以獨立 Compose `down` 作業 `job_01M883SSM500PNDZY2CW359RMC`
+移除 3 個容器與 2 個網路；專用資料卷移除
+`job_01M883V0QF00SYQZYN097519WK`、
+`job_01M883VG1F00ZQNZTK89780XJE`；再按實際 parent chain，逐一
+移除 **8 個**新建測試／中間 Docker 映像，未使用廣域 prune。最後移除含
+Git clone、程式、一次性密碼、Compose 與 SQL 的整個專用目錄（dry-run
+確認 528 entries，`job_01M88428S3009E9FR144HED03M`）。資源再次
+盤點回到**0 容器／3 內建網路／0 資料卷／0 映像**，專案路徑不存在。
+
+臨時 Gateway Ed25519 公鑰只對 `/home/ubuntu/.ssh/authorized_keys` 的
+精確一行做原子移除（`job_01M8843S91008RDDVQ50FDCCTK`，保留原
+owner／group／0600 權限），下一次連線在
+`job_01M884424T00JR72ARW5FP5KB0` 得到
+`unable to authenticate`，並已刪除 Gateway 臨時主機註冊。
+Gateway 刪除主機時仍輸出 `manual_required`，因為公鑰先被撤銷使
+Gateway 無法**再次**登入驗證；前述精確替換和 SSH 拒絕是已取得的
+撤銷證據，使用者仍可由 PuTTY 自行補做 `authorized_keys` 最後確認。
+Windows 原有 `private.ppk` **沒有讀取、傳送或刪除**。
+
+**界線：**新主機與原有 MSDSS 主機確實分離，但本次合成 World 與 Fence
+仍位於**同一台新的測試主機**，且測後全部銷毀；這不等於正式 World
+Host ↔ 外部 Fence Authority 的跨主機連線、獨立備份域不可回退能力，
+也未涵蓋雙 DB Unknown ACK、BD-05 自動解禁及 Send/Purge 競態。
+**G5 仍 PARTIAL／NO-GO，Trusted Send OFF，非 Owner 簽核。**
+
+**此項狀態仍是 G5 PARTIAL／NO-GO**：CI 與一次性隔離主機測試通過真實
+密碼學與 PostgreSQL 合約，但尚未完成正式憑證隔離、不可回退的最高
+Head Authority、
 端到端事件語意覆蓋、World DB 發布意圖與雙向未知 ACK 對帳、BD-05
 Quarantine 原子自動解禁、正式 Restore／Send／Purge 競態。任何符合簽章的
 `HEAD_MATCHED` 仍固定 `release_authorized=False`，Sender 保持 Sealed。
