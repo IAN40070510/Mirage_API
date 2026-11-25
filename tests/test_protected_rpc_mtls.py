@@ -12,11 +12,13 @@ import httpx
 import pytest
 
 from deception.security.protected_rpc import (
-    FixedAuthorizerMTLSClient, ProtectedRpcConfigurationError,
+    FixedAuthorizerMTLSClient, FixedCandidatePublisherMTLSClient,
+    ProtectedRpcConfigurationError,
     create_direct_verifier_app, create_fixed_authorizer_app, create_fixed_executor_app,
-    create_fixed_sender_app, create_sealed_app, require_mtls_files,
+    create_fixed_candidate_publisher_app, create_fixed_sender_app,
+    create_sealed_app, require_mtls_files,
     serve_direct_verifier_mtls, serve_fixed_authorizer_mtls,
-    serve_fixed_executor_mtls, serve_fixed_sender_mtls,
+    serve_fixed_candidate_publisher_mtls, serve_fixed_executor_mtls, serve_fixed_sender_mtls,
     serve_sealed_mtls,
 )
 
@@ -236,6 +238,79 @@ def test_g4_authorizer_real_mtls_rejects_anonymous_and_client_forgery(tmp_path):
         )
         with pytest.raises(ProtectedRpcConfigurationError, match="result_unverifiable"):
             asyncio.run(client.authorize_receipt(uuid4()))
+    finally:
+        worker.terminate()
+        worker.join(timeout=5)
+        if worker.is_alive():
+            worker.kill()
+            worker.join(timeout=5)
+
+
+def test_g4_candidate_publisher_real_mtls_rejects_non_receipt_and_anonymous(tmp_path, monkeypatch):
+    """真 mTLS：Publisher 專用憑證、僅 Receipt、Hash pin，不提供 Sender 通道。"""
+    import asyncio
+    from deception.world.protected_grant import (
+        PostgresVerifiedReceiptPublisher, ProtectedPublishedCandidate,
+    )
+
+    ca, server_cert, server_key, client_cert, client_key = _issue_mtls_certificates(tmp_path)
+    receipt = uuid4()
+    expected_hash = "a" * 64
+
+    def publish_without_database(self, receipt_id):
+        """此測試只評估 TLS／HTTP 邊界；真實 SQL 由 PG17 隔離套件檢查。"""
+        if receipt_id != receipt:
+            raise ValueError("unexpected_unpinned_receipt")
+        return ProtectedPublishedCandidate(
+            receipt, "verified-native-" + receipt.hex, expected_hash, 1,
+            int(time.time()) + 60,
+        )
+
+    monkeypatch.setattr(PostgresVerifiedReceiptPublisher, "publish_receipt_once",
+                        publish_without_database)
+    publisher = object.__new__(PostgresVerifiedReceiptPublisher)
+    port = _unused_local_port()
+    worker = multiprocessing.Process(target=serve_fixed_candidate_publisher_mtls, kwargs={
+        "app": create_fixed_candidate_publisher_app(publisher=publisher),
+        "host": "127.0.0.1", "port": port, "server_cert": server_cert,
+        "server_key": server_key, "verifier_client_ca": ca,
+    })
+    worker.start()
+    try:
+        context = ssl.create_default_context(cafile=str(ca))
+        context.load_cert_chain(str(client_cert), str(client_key))
+        with httpx.Client(verify=context, trust_env=False, timeout=2.0) as trusted:
+            for _ in range(50):
+                try:
+                    ready = trusted.get(f"https://127.0.0.1:{port}/internal/ready")
+                    break
+                except httpx.ConnectError:
+                    if not worker.is_alive():
+                        pytest.fail("candidate publisher terminated before mTLS readiness")
+                    time.sleep(0.1)
+            else:
+                pytest.fail("candidate publisher failed to start")
+            assert ready.status_code == 200
+            assert ready.json()["trusted_send"] == "disabled"
+            assert trusted.post(
+                f"https://127.0.0.1:{port}/internal/v1/publish-receipt",
+                json={"receipt_id": str(receipt), "candidate_hash": expected_hash},
+            ).status_code == 400
+        with httpx.Client(verify=ssl.create_default_context(cafile=str(ca)),
+                          trust_env=False, timeout=2.0) as anonymous:
+            with pytest.raises(httpx.TransportError):
+                anonymous.get(f"https://127.0.0.1:{port}/internal/ready")
+        client = FixedCandidatePublisherMTLSClient(
+            origin=f"https://127.0.0.1:{port}", client_cert=client_cert,
+            client_key=client_key, server_ca=ca,
+        )
+        good = asyncio.run(client.publish_receipt(receipt,
+                                                 expected_candidate_hash=expected_hash))
+        assert good["candidate_ref"] == "verified-native-" + receipt.hex
+        assert good["trusted_send"] == "disabled"
+        with pytest.raises(ProtectedRpcConfigurationError, match="binding_mismatch"):
+            asyncio.run(client.publish_receipt(receipt,
+                                               expected_candidate_hash="b" * 64))
     finally:
         worker.terminate()
         worker.join(timeout=5)

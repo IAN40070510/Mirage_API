@@ -55,7 +55,6 @@ class PostgresCandidateStore:
                     WHERE environment_id = %s AND deployment_id = %s
                       AND session_id = %s AND world_generation_id = %s
                       AND candidate_ref = %s
-                    FOR SHARE
                     """,
                     (*self._scope_params(scope), candidate_ref),
                 )

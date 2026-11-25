@@ -95,7 +95,9 @@ SHA-256 與 `trusted_send=disabled`；
 證據檔 `MIRAGE_G4_PUBLISHER_EVIDENCE_FILE` 必須釘選三個平台的完整
 `ProjectionEvidence`，無檔、缺平台或配置跨角色 DSN 即拒絕啟動。
 Candidate Writer 只需 `INSERT/SELECT candidate_records`；Store 的既存候選
-比對改用 `FOR SHARE`，不需要 `UPDATE/DELETE` 權限。
+比對不使用需要 `UPDATE` 權限的 Row Lock，後續 Promoter 仍以受保護
+`protected_lock_reference` 鎖住同筆 Candidate、獨立重算封套雜湊後才建立
+不可變 Promotion，不需要 Writer `UPDATE/DELETE` 權限。
 
 Verifier 可選配四項**必須全部同時存在**的設定：
 `MIRAGE_G4_PUBLISHER_ORIGIN`（固定 HTTPS `https://candidate-publisher:8446`）、
