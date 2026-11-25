@@ -177,6 +177,34 @@ def test_known_restore_lock_serializes_concurrent_sender_start(isolated_test_dsn
                                   (admission.admission_id,)).fetchone() == ("SEND_AUTHORIZED",)
 
 
+def test_known_restore_database_trigger_blocks_legacy_sender_sql(isolated_test_dsn):
+    """即使舊 Sender 不做 Python Restore 查核，原本直接寫 Lease 的交易仍須回滾。"""
+    import psycopg
+
+    admission, owner, _, seeded = _authorized_pin(isolated_test_dsn)
+    recorder = PostgresKnownRestoreRecorder(
+        isolated_test_dsn, expected_login=_login(isolated_test_dsn))
+    assert recorder.mark_known_restore(uuid4())
+    with psycopg.connect(isolated_test_dsn) as connection:
+        with pytest.raises(psycopg.errors.InsufficientPrivilege, match="known restore quarantine"):
+            connection.execute(
+                "UPDATE response_admissions SET state='SEND_STARTED' WHERE admission_id=%s",
+                (admission.admission_id,),
+            )
+            connection.execute(
+                "INSERT INTO protected_send_leases ("
+                "admission_id,lease_id,receipt_id,send_owner,request_fingerprint,"
+                "candidate_hash,transmission_deadline) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+                (admission.admission_id, uuid4(), seeded[3], owner,
+                 admission.request_binding_digest, admission.candidate_hash,
+                 admission.transmission_deadline),
+            )
+    with psycopg.connect(isolated_test_dsn) as connection:
+        assert connection.execute("SELECT state FROM response_admissions WHERE admission_id=%s",
+                                  (admission.admission_id,)).fetchone() == ("SEND_AUTHORIZED",)
+        assert connection.execute("SELECT count(*) FROM protected_send_leases").fetchone() == (0,)
+
+
 def test_missing_local_restore_evidence_table_fails_closed(isolated_test_dsn):
     """本機隔離證據表缺失不能默認安全，StartSend 必拒絕且回滾全部起送動作。"""
     import psycopg

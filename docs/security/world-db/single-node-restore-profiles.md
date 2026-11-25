@@ -43,6 +43,11 @@ must have SELECT or starting a lease fails closed. The Recorder only needs
 INSERT, and an isolated PostgreSQL SCRAM role test denies its SELECT privilege,
 the Sender's INSERT privilege and cross-role SET ROLE. This is a narrowly scoped
 single-node mechanism, **not** an external Fence or whole-host rollback detector.
+Migration `031_known_restore_lease_db_fence.sql` additionally guards direct
+Lease INSERT at PostgreSQL trigger level, so an older Sender that omits the new
+Python check cannot commit a fresh Lease after a known event. This mixed-binary
+subcase requires independent PostgreSQL CI and does not cover already-started
+network sends or unprotected legacy egress paths.
 The deployer must suspend ingress before restore and persist the marker **after**
 restoring the database, before reopening Sender; restoring an older DB image after
 the marker could erase it. There is no verified release path, startup orchestrator,

@@ -112,6 +112,17 @@ lock、檢查此表；Recorder 取得同一鎖的排他型態才能插入事件�
 不指定 Arbiter 的 `ON CONFLICT DO NOTHING`，僅以受保護表唯一主鍵
 處理重複事件。此差異必須由下一版真 SCRAM CI 確認，不以純單元測試替代。
 
+**G6 舊版 Sender 混跑隔離（待本版 CI）**：新增
+`031_known_restore_lease_db_fence.sql`，不修改既有已套用 Migration。
+`protected_send_leases` 的 `BEFORE INSERT` Trigger 在固定資料庫 schema
+與相同 advisory transaction lock 下，再查不可變 Restore 事件；存在時
+即以 `42501` 拒絕。這讓不認識新 Python 檢查的舊 Sender SQL 也無法在
+已知 Restore 後提交新 Lease，前面的 Admission 狀態變更須整筆回滾。
+Trigger 缺表或缺 SELECT 時一樣拒絕，不能以 runtime flags 解除。
+此項只涵蓋同一資料庫的**新 Lease**，不攔截先前已起送的網路 bytes、
+已知事件遭 DB 還原覆寫、舊程序直接使用未受保護的外部發送通道，
+亦不等於 G6 全部混版／正式網路部署已驗收。
+
 此方法**只能偵測由部署控制面明確告知、且事件在目前 World DB 中仍可見的
 已知 Restore**。部署流程須先停止受信任入口，完成還原後、任何 Sender
 重啟前落盤事件；單靠資料庫內事件無法保證停機時程、不會被後續資料庫還原
