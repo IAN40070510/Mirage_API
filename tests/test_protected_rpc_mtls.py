@@ -24,6 +24,8 @@ def _issue_mtls_certificates(root: Path) -> tuple[Path, Path, Path, Path, Path]:
     subprocess.run([
         "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
         "-subj", "/CN=Mirage isolated control CA", "-addext", "basicConstraints=critical,CA:TRUE",
+        # OpenSSL 3.5+ 對 CA TLS 驗證會檢查 keyUsage；測試 CA 也須是完整 X.509 CA。
+        "-addext", "keyUsage=critical,keyCertSign,cRLSign",
         "-out", str(ca), "-keyout", str(ca_key),
     ], check=True, capture_output=True)
     output = []
@@ -54,6 +56,17 @@ def _unused_local_port() -> int:
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         return listener.getsockname()[1]
+
+
+def test_isolated_mtls_ca_declares_required_key_usage(tmp_path):
+    """測試 CA 同時具有 CA basicConstraints 與簽章用途，兼容嚴格 OpenSSL。"""
+    from cryptography import x509
+
+    ca, *_ = _issue_mtls_certificates(tmp_path)
+    certificate = x509.load_pem_x509_certificate(ca.read_bytes())
+    constraints = certificate.extensions.get_extension_for_class(x509.BasicConstraints).value
+    usage = certificate.extensions.get_extension_for_class(x509.KeyUsage).value
+    assert constraints.ca and usage.key_cert_sign and usage.crl_sign
 
 
 def test_protected_rpc_requires_distinct_nonempty_mtls_material(tmp_path):
