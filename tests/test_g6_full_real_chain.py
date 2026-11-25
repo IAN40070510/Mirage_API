@@ -157,9 +157,11 @@ def _g6_wait_ready(endpoint):
 def _g6_signed_client_request(client, signer_key, gateway_port, *,
                               method, path, request_id, body=None,
                               access_mode="inventory", session_id="session",
-                              resource_id=None):
+                              resource_id=None, extra_headers=None):
     """在 Client 發送前依精確 HTTPX URL／Headers／Body 簽 Ed25519 JWS。"""
     headers = {"x-request-id": request_id}
+    if extra_headers is not None:
+        headers.update(extra_headers)
     kwargs = {}
     if body is not None:
         headers["content-type"] = "application/json"
