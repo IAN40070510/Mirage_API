@@ -144,6 +144,17 @@ Sender→Gateway 完成**不代表 Gateway→Client 收到**。任何 Gateway �
 混充成功候選。這段 Gateway 真正的雙向代理、前後端 mTLS/Client 邊界、
 斷線後一次性對帳及 G5/G6 故障注入**尚未實作／未獲正式驗收**。
 
+**Gateway 代理候選增量**：`protected_gateway.py` 新增內部 mTLS Client
+與 Loopback-only HTTPS Gateway 實驗入口。它經 Verifier 授權鏈返回的
+`receipt_id + candidate_hash` 驅動 Sender 單次 POST；即使 Sender HTTP 503，
+也只有與授權 Hash 精確相符的 Body／有序 Headers／Status 才能當業務回應。
+驗證失敗只回固定 503，絕不拿 HTTP 回覆碼代替授權證據。
+測試會以三個獨立 TLS Listener、兩個 Client CA、不可重複 Receipt、
+不同 Client Cert 和真 PostgreSQL Lease 逐層驗收。原有正式 Sender
+`/internal/v1/send` 仍永久 503；**候選 Gateway 不得部署公網**。
+前段所述完整 Gateway→Client、G5/G6 Release Gate 的未完成狀態不變；
+候選傳輸綠燈不代表正式服務放行。
+
 **G5 已知 Restore／在途 ASGI 窗口（追加隔離子項，待 CI）**：
 `known_restore_delivery_window()` 在已提交 Lease **之後**取得 PG Session
 共享 advisory lock、重新查已知 Restore 標記，並保持該鎖直到本次 ASGI

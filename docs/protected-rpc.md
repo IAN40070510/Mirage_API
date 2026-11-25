@@ -31,6 +31,33 @@ Scope，從獨立 Sender 的受保護資料庫解析原 Authorizer Pin 後，一
 下游代理，因此不能宣稱整個 G4 Client HTTP 已通，更不能宣稱 G5/G6
 Release Gate 通過。具體查核及限制見 [G4 Send 文件](protected-send.md)。
 
+### Gateway 原生 HTTP 代理候選（未裝載正式 CLI）
+
+`src/deception/security/protected_gateway.py` 新增三個隔離元件：
+`FixedGatewayVerifierMTLSClient` 將 **Client 原始** HTTP method、raw path/query、
+Host、受信任 JWS Header、Body 及 Fingerprint Header 順序以專用雙向 TLS
+交給 Verifier；只接收完整 Receipt→Promotion→Authorizer 鏈且原 Fingerprint、
+Receipt、Owner 與候選 Hash 全相同的結果。`FixedGatewaySenderMTLSClient`
+再以**另一組** Client CA、單一 Receipt ID 起送，禁止第二次 RPC；
+它緩衝並限制原生 Body、排除 H11/Uvicorn transport-only headers，以完整
+status、ordered semantic headers、body bytes 重算 Envelope SHA-256，必須
+與前一段獨立 Authorizer 的 Candidate Hash 一致才能交給 Client。內部
+Sender 503 與合法業務 503 一律靠 Hash 區分，沒有「看到 503 就盲轉」的捷徑。
+
+`create_gateway_native_proxy_candidate_app()` 只接受 HTTPS Client Scope、唯一
+`X-Request-ID` 與唯一 `X-Trusted-Session`，不允許 `/internal/*` 業務路由；
+它保留 Sender 的原生 ASGI Status/Headers/Body，不重建業務內容。未知
+Verifier／Sender RPC、Hash 錯誤、任何異常均返回固定 503；**不重送 Receipt**。
+`serve_gateway_native_proxy_loopback_tls()` 限 `127.0.0.1`／`::1`，供隔離真 TLS
+實驗使用；**無任何 production CLI 或環境旗標**能啟動這個對外候選。
+
+這段目前只完成候選 Client TLS→Gateway→Verifier mTLS→Sender mTLS 的
+傳輸測試；假 Verifier 仍須用真獨立 Verifier 完成 JWS、原始 Fingerprint、
+Executor、Native Validator、Publisher 與 Authorizer 的同一請求整合。Sender
+仍是 G4 未解封 App；Sender→Gateway ACK 不等於 Client 已收到，Gateway
+離線、Client 斷線及整機 Restore／跨復原域未知結果均無第二次送出權。
+G5 單機預設不強制外部 Fence，但不能保障整機快照回滾偵測。
+
 ### G3b→G4 Receipt-only Authorizer 接線（可選的隔離驗收增量）
 
 只有在獨立 Validator 已取得精確原生候選、另一個具獨立 SCRAM 角色的
