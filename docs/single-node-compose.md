@@ -83,6 +83,33 @@ Compose 目前預設起內部七角色與 DB，`gateway` 除非指定
 Socket 健康檢查只證明 Listener 活著；`pg_isready` 只證明 DB 可連線，
 **都不代表 mTLS 身分、功能、ACL 或 G3b～G6 已 PASS**。
 
+### 獨立 PostgreSQL 生命週期實測（SINGLE-NODE-01 子項）
+
+`tests/test_single_node_lifecycle.py` 在**明確允許銷毀的隔離 Docker 主機**
+以密碼學亂數建立全新的 `mirage-sn-ci-*` Compose 專案，只啟動本份
+`compose.yaml` 的 `postgres`。它會檢查真 PostgreSQL 17 啟動與 DB 身分、
+不公開 Host port、專案唯一 `internal: true` 的 `database` 網段、
+Compose 自有具名 World volume，寫入測試 SQL 後重啟 Postgres 並核對資料
+仍存在。最終僅針對**本次亂數專案**執行 `down --volumes`，驗證該專案
+容器／卷已清掉；這個刪除操作**絕不可套用正式環境**。
+
+一般 CI 不執行此測試。只在經確認為本專用測試主機、確有
+`/usr/local/bin/docker-compose` 和 `/usr/bin/docker` 且
+`mirage-g3b-ci-db` 是專用拋棄式 PG Lab 的條件下，才可設：
+
+```bash
+MIRAGE_SINGLE_NODE_PG_LIFECYCLE_ISOLATED=true \
+MIRAGE_SINGLE_NODE_DISPOSABLE_COMPOSE_PROJECT=true \
+MIRAGE_G5_RESTORE_PG_TOOL_CONTAINER=mirage-g3b-ci-db \
+python3 -m pytest -q tests/test_single_node_lifecycle.py
+```
+
+這只驗證**一個真的 PostgreSQL 容器**的啟停、隔離與持久化；
+其餘八服務及選配 Gateway **沒有**一起啟動，不可由此宣稱
+`SINGLE-NODE-01` 整項 PASS 或 `SINGLE-NODE-02` 最小權限已完成。
+正式主機的 Schema、獨立 SCRAM／Secret、實際 mTLS、客戶端錯誤、
+GC／Restore、故障注入與 Owner 仍各有獨立 Gate。
+
 ### G5 停流／還原與錯誤處理
 
 `verifier`、`gateway` 和 `sender` 都有明確

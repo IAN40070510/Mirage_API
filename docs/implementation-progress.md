@@ -14,6 +14,15 @@ Inventory／Cart Executor、Validator、Candidate Publisher、Authorizer、Sende
 與靜態安全規格**，尚未完成正式 Secret provisioning、七服務實際啟動／
 網路故障矩陣或 Owner 放行，**G3b～G6 仍是 NO-GO**。
 
+**2026-11-26 SINGLE-NODE-01 資料庫真容器增量：**
+`tests/test_single_node_lifecycle.py` 在專用 ARM64 主機以
+`mirage-sn-ci-*` 隨機 Compose 專案啟動**本份** D-74 Compose 的 PostgreSQL，
+驗證 PG17／正確 DB 身分、無 Host Port、唯一內網、獨立 World Volume、
+重啟後 SQL 資料持續存在，並確認僅本次專案的容器／卷回收。
+測試需三個獨立 opt-in，普通 CI 為 skip；它不包含其餘八角色或 Gateway
+的真 TLS／SCRAM 初始化，**SINGLE-NODE-01 仍 PARTIAL，02～06 仍 OPEN**。
+完整執行與安全邊界見 [單機部署文件](single-node-compose.md#獨立-postgresql-生命週期實測single-node-01-子項)。
+
 | 階段 | 隔離實測 | 尚未完成的放行條件 |
 | --- | --- | --- |
 | G3b | ARM64 四個獨立 non-root mTLS 服務與專用 SCRAM、20/20 無簽章路徑拒絕；I-01～I-04 的 8 組、C-01～C-09 的 16 組、M-01～M-07 的 10 組原生 Client 200／指定 400／404／409，均由真 Ed25519 JWS→Verifier→Executor→Validator→Publisher→Authorizer 跨七 TLS Listener、唯一 PG Lease 與 Replay 拒絕隔離驗收；新增每服務**不同實體 SCRAM Login** 的七 TLS 隔離回歸，包含 Sender／Authorizer 缺少關鍵唯讀 ACL 的真 `REVOKE` 啟動拒絕 | **20 路由尚未完成全部指定錯誤／CAS／故障／URL 矩陣**，Medusa 非空初始品項、完整官方契約變體、正式容器七服務 Secret／網路／憑證輪替及安全審核 |
