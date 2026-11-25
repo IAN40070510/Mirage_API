@@ -90,6 +90,18 @@ Request、Authorizer→Sender mTLS RPC、啟動／復原協定與 Release Fuse
 未驗收前，固定 Sender HTTP 仍只能回 503。這是可驗證的真實 bytes 傳輸
 子功能，**不能**當成 G3b 客戶端原生回應或 G4 整體完成。
 
+**G5 已知 Restore／在途 ASGI 窗口（追加隔離子項，待 CI）**：
+`known_restore_delivery_window()` 在已提交 Lease **之後**取得 PG Session
+共享 advisory lock、重新查已知 Restore 標記，並保持該鎖直到本次 ASGI
+訊息傳輸返回；Recorder 的排他 transaction lock 會被擋住。若 Restore
+在 Lease 與窗口之間先提交，則不送出任何 ASGI 訊息，原 Lease 被記成
+`SEND_FAILED`，不能另開一把。若 Sender 的 ASGI 窗口先取得鎖，Recorder
+必須等窗口結束才可提交；避免在同一發送的 start/body 中間宣布已知 Restore。
+不能**先**持有 Session Lock 再呼叫 `start_send()`，因為排隊等待的
+Recorder 排他鎖可能與 Sender 第二連線共享 transaction lock 形成等待環。
+此機制不涵蓋 PG Session 在傳輸期間異常斷線、獨立未受保護的舊送出通道、
+已傳輸 bytes 的回滾、跨整機快照，或完整 Restore 啟動／復原 Release。
+
 隔離測試的 Sender 登入者為專用 schema 管理者，不等於真實
 `mirage_sender` 的最小權限 SCRAM／pg_hba／Secret 分離驗收。這裡的
 Snapshot 是同一 PostgreSQL 內的不可變 BYTEA，未證明任何外部

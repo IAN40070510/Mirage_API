@@ -225,6 +225,83 @@ def test_pinned_sender_denies_untrusted_transport_and_restore_before_first_asgi(
         ).fetchone() == ("SEND_AUTHORIZED",)
 
 
+def test_restore_committed_between_lease_and_asgi_window_denies_all_bytes(isolated_test_dsn,
+                                                                           monkeypatch):
+    """Lease COMMIT 後、ASGI 窗口前 Restore 先提交時，新起送只能記錄零 bytes 失敗。"""
+    import psycopg
+
+    admission, owner, envelope, seeded = _authorized_pin(isolated_test_dsn)
+    login = _login(isolated_test_dsn)
+    sender = PostgresProtectedSender(isolated_test_dsn, expected_login=login)
+    recorder = PostgresKnownRestoreRecorder(isolated_test_dsn, expected_login=login)
+    original_start = sender.start_send
+
+    def start_then_mark_restore(**kwargs):
+        """由真 Sender 完成 Lease COMMIT 後、傳輸窗口前刻意提交 Restore。"""
+        lease = original_start(**kwargs)
+        assert lease is not None
+        assert recorder.mark_known_restore(uuid4())
+        return lease
+
+    monkeypatch.setattr(sender, "start_send", start_then_mark_restore)
+    response = ProtectedPinnedASGIResponse(
+        sender=sender, admission_id=admission.admission_id, receipt_id=seeded[3],
+        owner=owner, request_fingerprint=admission.request_binding_digest,
+        expected_envelope=envelope,
+    )
+    messages = []
+
+    async def record(message):
+        """只要收到一個 HTTP ASGI 訊息，就證明 Restore 窗口未能阻擋起送。"""
+        messages.append(message)
+
+    with pytest.raises(ProtectedGrantError, match="protected_delivery_restore_quarantined"):
+        asyncio.run(response({"type": "http", "scheme": "https"}, None, record))
+    assert messages == []
+    with psycopg.connect(isolated_test_dsn) as connection:
+        assert connection.execute("SELECT count(*) FROM protected_send_leases").fetchone() == (1,)
+        assert connection.execute(
+            "SELECT state FROM response_admissions WHERE admission_id=%s",
+            (admission.admission_id,),
+        ).fetchone() == ("SEND_FAILED",)
+
+
+def test_restore_recorder_waits_for_actual_asgi_delivery_window(isolated_test_dsn):
+    """ASGI 傳輸窗口先取得 Session Lock 時，真 Recorder 不得在原生 bytes 中間提交。"""
+    import psycopg
+
+    admission, owner, envelope, seeded = _authorized_pin(isolated_test_dsn)
+    login = _login(isolated_test_dsn)
+    sender = PostgresProtectedSender(isolated_test_dsn, expected_login=login)
+    recorder = PostgresKnownRestoreRecorder(isolated_test_dsn, expected_login=login)
+    response = ProtectedPinnedASGIResponse(
+        sender=sender, admission_id=admission.admission_id, receipt_id=seeded[3],
+        owner=owner, request_fingerprint=admission.request_binding_digest,
+        expected_envelope=envelope,
+    )
+    observed = []
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pending = []
+
+        async def record(message):
+            """第一個訊息啟動並行 Restore，等候驗證其被 Session Lock 擋住。"""
+            observed.append(message["type"])
+            if len(observed) == 1:
+                pending.append(pool.submit(recorder.mark_known_restore, uuid4()))
+                await asyncio.sleep(0.15)
+                assert not pending[0].done()
+
+        asyncio.run(response({"type": "http", "scheme": "https"}, None, record))
+        assert observed == ["http.response.start", "http.response.body"]
+        assert pending[0].result(timeout=6) is True
+    with psycopg.connect(isolated_test_dsn) as connection:
+        assert connection.execute("SELECT count(*) FROM protected_local_restore_events").fetchone() == (1,)
+        assert connection.execute(
+            "SELECT state FROM response_admissions WHERE admission_id=%s",
+            (admission.admission_id,),
+        ).fetchone() == ("SEND_COMPLETED",)
+
+
 def test_known_local_restore_blocks_future_send_lease_persistently(isolated_test_dsn):
     """已知 Restore 事件一旦落盤，換 Sender 連線或重啟仍不得取得新的 Lease。"""
     import psycopg

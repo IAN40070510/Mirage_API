@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
 import hashlib
 import hmac
@@ -84,6 +85,36 @@ class ProtectedSendReconciliation:
 
 class PostgresProtectedSender(_ProtectedConnection):
     """由獨立實體 Sender Login 消費已 Authorize 的 Snapshot，不重新判定政策。"""
+
+    @contextmanager
+    def known_restore_delivery_window(self):
+        """在 ASGI 傳輸期間持有本機共享 Session Lock，讓 Restore 事件不能插隊。
+
+        此窗口**必須在 StartSend COMMIT 之後**取得，避免 Recorder 已排隊時
+        Sender 另一連線的 transaction lock 造成環狀等待。取得 Session Lock
+        後再查一次已提交 Restore 事件；若 Restore 先提交，零 bytes 拒絕。
+        Session Lock 在正常／例外結束時釋放，連線死亡時由 PG 自動釋放。
+        本控制只處理已知 Restore，不偵測 VM 整體回滾或已在別處發出的 bytes。
+        """
+        with closing(self._connection()) as connection:
+            # 身分 preflight 的 SELECT 已開啟 read transaction，先提交後使用
+            # autocommit，避免在網路傳輸期間長期保留 MVCC snapshot。
+            connection.commit()
+            connection.autocommit = True
+            with connection.cursor() as cursor:
+                cursor.execute("SET lock_timeout='3s'")
+                cursor.execute("SELECT pg_advisory_lock_shared(%s,%s)",
+                               (_RESTORE_LOCK_NAMESPACE, _RESTORE_LOCK_KEY))
+                try:
+                    cursor.execute("SELECT 1 FROM protected_local_restore_events LIMIT 1")
+                    if cursor.fetchone() is not None:
+                        raise ProtectedGrantError("protected_delivery_restore_quarantined")
+                    yield
+                finally:
+                    # 若連線中斷，close() 會在 PostgreSQL 端釋放 Session Lock；
+                    # Caller 一律把窗口異常視為不能重送的傳輸結果不明。
+                    cursor.execute("SELECT pg_advisory_unlock_shared(%s,%s)",
+                                   (_RESTORE_LOCK_NAMESPACE, _RESTORE_LOCK_KEY))
 
     def start_send(
         self, *, admission_id: str, receipt_id: UUID, owner: str, request_fingerprint: str,
@@ -468,24 +499,25 @@ class ProtectedPinnedASGIResponse:
             raise TransmissionError("protected_pinned_asgi_lease_refused")
         attempted = False
         try:
-            status, headers, body = _verified_envelope_fields(lease.envelope_bytes)
-            if (not 200 <= status <= 599 or status in {204, 205, 304}
-                    or any(name in {"connection", "keep-alive", "proxy-authenticate",
-                                    "proxy-authorization", "te", "trailer", "transfer-encoding",
-                                    "upgrade", "content-encoding"} for name, _ in headers)):
-                raise TransmissionError("protected_pinned_asgi_http_unsupported")
-            for message in (
-                {"type": "http.response.start", "status": status,
-                 "headers": [(name.encode("ascii"), value.encode("latin-1"))
-                             for name, value in headers]},
-                {"type": "http.response.body", "body": body},
-            ):
-                remaining = lease.transmission_deadline - self.clock()
-                if remaining <= 0:
-                    raise TransmissionError("protected_pinned_asgi_deadline_exceeded")
-                attempted = True
-                async with asyncio.timeout(remaining):
-                    await send(message)
+            with self.sender.known_restore_delivery_window():
+                status, headers, body = _verified_envelope_fields(lease.envelope_bytes)
+                if (not 200 <= status <= 599 or status in {204, 205, 304}
+                        or any(name in {"connection", "keep-alive", "proxy-authenticate",
+                                        "proxy-authorization", "te", "trailer", "transfer-encoding",
+                                        "upgrade", "content-encoding"} for name, _ in headers)):
+                    raise TransmissionError("protected_pinned_asgi_http_unsupported")
+                for message in (
+                    {"type": "http.response.start", "status": status,
+                     "headers": [(name.encode("ascii"), value.encode("latin-1"))
+                                 for name, value in headers]},
+                    {"type": "http.response.body", "body": body},
+                ):
+                    remaining = lease.transmission_deadline - self.clock()
+                    if remaining <= 0:
+                        raise TransmissionError("protected_pinned_asgi_deadline_exceeded")
+                    attempted = True
+                    async with asyncio.timeout(remaining):
+                        await send(message)
         except BaseException:
             result = self.sender.finish_send(
                 admission_id=lease.admission_id, owner=lease.send_owner,
