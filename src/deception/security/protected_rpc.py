@@ -1631,6 +1631,7 @@ def create_direct_verifier_app(
     executor_client: FixedExecutorMTLSClient | None = None,
     executor_clients: Mapping[str, FixedExecutorMTLSClient] | None = None,
     native_validator_client: FixedNativeValidatorMTLSClient | None = None,
+    candidate_publisher_client: FixedCandidatePublisherMTLSClient | None = None,
 ) -> FastAPI:
     """在獨立 Gateway mTLS 入口由實際 HTTP 訊息建立受保護 Operation Receipt。
 
@@ -1649,6 +1650,9 @@ def create_direct_verifier_app(
         raise ProtectedRpcConfigurationError("direct_verifier_executor_routes_ambiguous")
     if native_validator_client is not None and not isinstance(native_validator_client, FixedNativeValidatorMTLSClient):
         raise ProtectedRpcConfigurationError("direct_verifier_native_validator_invalid")
+    if (candidate_publisher_client is not None
+            and not isinstance(candidate_publisher_client, FixedCandidatePublisherMTLSClient)):
+        raise ProtectedRpcConfigurationError("direct_verifier_publisher_client_invalid")
     if executor_clients is not None and (
             not isinstance(executor_clients, Mapping) or not executor_clients
             or any(platform not in {"synthetic-inventory", "synthetic-carts", "medusa-native-cart"}
@@ -1930,6 +1934,24 @@ def create_direct_verifier_app(
             except Exception as exc:
                 raise HTTPException(status_code=503,
                                     detail="direct_verifier_synthetic_projection_unverifiable") from exc
+        promotion = None
+        if candidate_publisher_client is not None:
+            # Publisher 不得取得 Caller 自填的候選資料，且只能在另一個獨立
+            # Validator 已完成全封套驗證後接受 Receipt。Hash 不匹配即拒絕。
+            if (not isinstance(projection, dict)
+                    or projection.get("delivery") != "candidate_only_no_send_authorization"
+                    or not isinstance(projection.get("envelope_hash"), str)
+                    or re.fullmatch(r"[0-9a-f]{64}", projection["envelope_hash"]) is None):
+                raise HTTPException(status_code=503,
+                                    detail="direct_verifier_publisher_projection_missing")
+            try:
+                promotion = await candidate_publisher_client.publish_receipt(
+                    receipt_id, expected_candidate_hash=projection["envelope_hash"],
+                )
+            except Exception as exc:
+                # 不猜 Promotion 是否 COMMIT，絕不重用 JTI 或再次發出 Publisher RPC。
+                raise HTTPException(status_code=503,
+                                    detail="direct_verifier_publisher_unverifiable") from exc
         # 不能在 HTTP 回應暴露已驗證 claims 或受保護 DB Secret；此結果非 Sender。
         result: dict[str, object] = {"receipt_id": str(receipt_id),
                                      "operation_id": operation.operation_id}
@@ -1937,6 +1959,8 @@ def create_direct_verifier_app(
             result["executor_result"] = outcome
         if projection is not None:
             result["native_projection"] = projection
+        if promotion is not None:
+            result["candidate_promotion"] = promotion
         return result
 
     return app
@@ -2118,6 +2142,29 @@ def serve_fixed_authorizer_mtls(
     )
     if config.ssl_cert_reqs is not ssl.CERT_REQUIRED:
         raise ProtectedRpcConfigurationError("fixed_authorizer_mtls_not_required")
+    uvicorn.Server(config).run()
+
+
+def serve_fixed_candidate_publisher_mtls(
+    *, app: FastAPI, host: str, port: int, server_cert: Path,
+    server_key: Path, verifier_client_ca: Path,
+) -> None:
+    """Publisher 的專屬 mTLS Listener；無憑證或異角色 Client 在網路層拒絕。"""
+    if not isinstance(app, FastAPI):
+        raise ProtectedRpcConfigurationError("fixed_publisher_app_required")
+    require_mtls_files(server_cert=server_cert, server_key=server_key,
+                       client_ca=verifier_client_ca)
+    if not isinstance(host, str) or not host or type(port) is not int or not 1 <= port <= 65535:
+        raise ProtectedRpcConfigurationError("fixed_publisher_bind_invalid")
+    config = uvicorn.Config(
+        app, host=host, port=port,
+        ssl_certfile=str(server_cert), ssl_keyfile=str(server_key),
+        ssl_ca_certs=str(verifier_client_ca), ssl_cert_reqs=ssl.CERT_REQUIRED,
+        ssl_version=ssl.PROTOCOL_TLS_SERVER, http="h11", log_level="warning",
+        proxy_headers=False, access_log=False,
+    )
+    if config.ssl_cert_reqs is not ssl.CERT_REQUIRED:
+        raise ProtectedRpcConfigurationError("fixed_publisher_mtls_not_required")
     uvicorn.Server(config).run()
 
 

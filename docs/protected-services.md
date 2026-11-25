@@ -84,9 +84,35 @@ Candidate，再透過獨立物理 Login 的 `PostgresCandidatePromoter` 鎖定 R
 SHA-256 與 `trusted_send=disabled`；
 額外欄位或錯綁均拒絕。ACK 不明不自動
 重試，Candidate 已保存但 Promotion 失敗也不能冒充 Grant。此為可驗證的
-**接線 primitive／RPC App**；正式獨立 Publisher 角色 Secret、部署網路、
-Verifier 到 Publisher 的 mTLS 導流以及與 Authorizer/Sender 的整路徑整合，
-仍需分別取得實體 CI／正式驗收，不能因此解除既有 Sender Release Fuse。
+**接線 primitive／RPC App**；不能因此解除既有 Sender Release Fuse。
+
+後續新增 `create_candidate_publisher_service`／`MIRAGE_G3B_SERVICE_ROLE=publisher`
+與 [G4 Publisher 隔離 Compose 範本](../deploy/security-lab/g4-publisher-compose.yaml)：
+啟動時必須同時讀三個*不同*物理 Login 的獨立 Secret，依序使用只讀
+`validator`、低信任 `candidate_writer` 與可信 `promoter`，逐個核對
+`NOINHERIT`、schema、必要／禁止的 SQL 權限及 `protected_lock_reference`
+函式授權。三個連線的資料庫參數除了 `user`／`password` 必須一致；
+證據檔 `MIRAGE_G4_PUBLISHER_EVIDENCE_FILE` 必須釘選三個平台的完整
+`ProjectionEvidence`，無檔、缺平台或配置跨角色 DSN 即拒絕啟動。
+Candidate Writer 只需 `INSERT/SELECT candidate_records`；Store 的既存候選
+比對改用 `FOR SHARE`，不需要 `UPDATE/DELETE` 權限。
+
+Verifier 可選配四項**必須全部同時存在**的設定：
+`MIRAGE_G4_PUBLISHER_ORIGIN`（固定 HTTPS `https://candidate-publisher:8446`）、
+`MIRAGE_G4_VERIFIER_PUBLISHER_CERT_FILE`、
+`MIRAGE_G4_VERIFIER_PUBLISHER_KEY_FILE`、
+`MIRAGE_G4_PUBLISHER_SERVER_CA_FILE`。配置時必須先取得獨立 Native
+Validator 驗證過的封套及 `delivery=candidate_only_no_send_authorization`，
+才用 Receipt-only mTLS 向 Publisher 單次提交；只接受相同 Envelope SHA
+及固定 Ref／Version 的 Promotion。若 Validator 未接線、Publisher ACK 未知
+或 Hash 不合，外部控制面回 503，不能重送 JTI、重新 Promotion 或
+跳過核對；**若未配置則維持原有不做 Promotion 的隔離行為**。
+
+此 Compose 範本只提供獨立容器，內部三組 DB 帳密仍由同一個 Publisher
+進程持有，不可錯認為三個互不信任的進程；必須在真實獨立測試 PG、專用
+CA／Secret 和隔離網路完成整路徑實測。此設計尚未把 Promotion 接到
+Authorizer→Sender 的完整 Client HTTP 送出，更不提供沒有外部 Fence 的
+跨整機回滾安全保證；G4/G5/G6 結案仍有正式驗收缺口。
 
 M-03 已知 Variant 的受保護 Executor Commit 已接線供隔離驗證：原始
 `POST /store/carts/{id}/line-items` 必須有與 JWS Fingerprint 完全一致的

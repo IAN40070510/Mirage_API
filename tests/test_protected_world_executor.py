@@ -551,7 +551,8 @@ def test_inventory_get_receipt_admits_real_protected_read_without_native_http(
             projector.project_inventory_operation(uuid4())
 
 
-def test_native_receipt_publisher_promotes_with_distinct_real_scram_logins(isolated_test_dsn):
+def test_native_receipt_publisher_promotes_with_distinct_real_scram_logins(
+        isolated_test_dsn, tmp_path):
     """真 PG 的唯讀 Validator→可信 Candidate→獨立 Promoter→Receipt-only Grant 全鏈。
 
     僅在拋棄式 PostgreSQL Role Lab 執行，允許測試後移除專用角色；不送
@@ -562,6 +563,8 @@ def test_native_receipt_publisher_promotes_with_distinct_real_scram_logins(isola
     import psycopg
     from psycopg import sql
     from psycopg.conninfo import conninfo_to_dict, make_conninfo
+    from deception.security.protected_rpc import ProtectedRpcConfigurationError
+    from deception.security.protected_services import create_candidate_publisher_service
 
     dsn, now = isolated_test_dsn, int(time.time())
     binding = SessionBinding(environment_id="publisher-lab", deployment_id="isolated",
@@ -619,7 +622,7 @@ def test_native_receipt_publisher_promotes_with_distinct_real_scram_logins(isola
     PostgresProjectionRegistry(dsn).ensure_registered_batch((profiles["synthetic-inventory"],))
     schema = conninfo_to_dict(dsn)["options"].split("search_path=", 1)[1].split(" ", 1)[0]
     users = {kind: ("mirage_pub_" + kind + "_" + uuid4().hex[:10], secrets.token_urlsafe(32))
-             for kind in ("validator", "promoter")}
+             for kind in ("validator", "writer", "promoter")}
     with psycopg.connect(dsn, autocommit=True) as admin:
         try:
             for login, password in users.values():
@@ -630,20 +633,29 @@ def test_native_receipt_publisher_promotes_with_distinct_real_scram_logins(isola
                 admin.execute(sql.SQL("GRANT USAGE ON SCHEMA {} TO {}").format(
                     sql.Identifier(schema), sql.Identifier(login)))
             validator = sql.Identifier(users["validator"][0])
+            writer = sql.Identifier(users["writer"][0])
             promoter = sql.Identifier(users["promoter"][0])
+            admin.execute(sql.SQL(
+                "GRANT INSERT,SELECT ON candidate_records TO {}"
+            ).format(writer))
             admin.execute(sql.SQL(
                 "GRANT SELECT ON ingress_receipts,protected_http_operation_bindings,"
                 "protected_world_read_sources,read_admissions,world_snapshots,"
                 "world_operations,world_commit_receipts,session_heads,session_world_bindings,"
                 "generation_controls,trusted_key_revocations,synthetic_resources,"
                 "protected_world_commit_sources,protected_world_rejection_sources,"
-                "protected_medusa_rejection_sources TO {}"
+                "protected_medusa_rejection_sources,protected_cart_creations,"
+                "guest_cart_creations,native_response_contexts TO {}"
             ).format(validator))
             admin.execute(sql.SQL(
                 "GRANT SELECT ON candidate_records,read_admissions,world_operations,"
                 "protected_world_read_sources,protected_world_commit_sources,"
                 "projection_registry,projection_profile_revocations,ingress_receipts,"
-                "protected_http_operation_bindings TO {}"
+                "protected_http_operation_bindings,protected_world_rejection_sources,"
+                "protected_medusa_rejection_sources,protected_cart_creations,"
+                "guest_cart_creations,synthetic_resources,session_heads,"
+                "session_world_bindings,generation_controls,world_snapshots,"
+                "world_commit_receipts,trusted_key_revocations TO {}"
             ).format(promoter))
             admin.execute(sql.SQL(
                 "GRANT INSERT,SELECT ON protected_candidate_promotions TO {}"
@@ -653,13 +665,34 @@ def test_native_receipt_publisher_promotes_with_distinct_real_scram_logins(isola
             ).format(promoter))
             val_dsn = make_conninfo(dsn, user=users["validator"][0],
                                     password=users["validator"][1])
+            writer_dsn = make_conninfo(dsn, user=users["writer"][0],
+                                       password=users["writer"][1])
             prom_dsn = make_conninfo(dsn, user=users["promoter"][0],
                                      password=users["promoter"][1])
+            config = {"MIRAGE_G3B_WORLD_SCHEMA": schema,
+                      "MIRAGE_G4_PUBLISHER_READER_LOGIN": users["validator"][0],
+                      "MIRAGE_G4_PUBLISHER_WRITER_LOGIN": users["writer"][0],
+                      "MIRAGE_G4_PUBLISHER_PROMOTER_LOGIN": users["promoter"][0],
+                      "MIRAGE_TRUSTED_SEND_ENABLE": "false"}
+            for kind, dsn_value in (("READER", val_dsn), ("WRITER", writer_dsn),
+                                    ("PROMOTER", prom_dsn)):
+                secret = tmp_path / (kind.lower() + "-dsn")
+                secret.write_text(dsn_value, encoding="utf-8")
+                config["MIRAGE_G4_PUBLISHER_" + kind + "_DSN_FILE"] = str(secret)
+            pinned_file = tmp_path / "pinned-evidence.json"
+            pinned_file.write_text(json.dumps({name: evidence.model_dump(mode="json")
+                                               for name, evidence in profiles.items()}),
+                                   encoding="utf-8")
+            config["MIRAGE_G4_PUBLISHER_EVIDENCE_FILE"] = str(pinned_file)
+            assert create_candidate_publisher_service(config).state is not None
+            with pytest.raises(ProtectedRpcConfigurationError, match="g4_publisher_login_reused"):
+                create_candidate_publisher_service({**config,
+                    "MIRAGE_G4_PUBLISHER_WRITER_LOGIN": users["promoter"][0]})
             projector = PostgresProtectedNativeProjector(
                 val_dsn, expected_login=users["validator"][0],
             )
             publisher = PostgresVerifiedReceiptPublisher(
-                projector=projector, candidate_store=PostgresCandidateStore(dsn),
+                projector=projector, candidate_store=PostgresCandidateStore(writer_dsn),
                 promoter=PostgresCandidatePromoter(prom_dsn,
                                                    expected_login=users["promoter"][0]),
                 evidence_by_platform=profiles,

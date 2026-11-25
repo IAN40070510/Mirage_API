@@ -21,7 +21,8 @@ from deception.security.protected_rpc import (
 )
 from deception.security.protected_services import (
     _json_secret, _login_preflight, _verifier_key_registry, create_executor_service,
-    create_authorizer_service, create_native_validator_service, create_sender_service,
+    create_authorizer_service, create_candidate_publisher_service,
+    create_native_validator_service, create_sender_service,
     create_verifier_service, from_environment,
 )
 from deception.world.protected_grant import ProtectedGrantError
@@ -620,6 +621,34 @@ def test_g3b_cross_role_secret_is_denied_before_db_connection():
                 continue
             with pytest.raises(ProtectedRpcConfigurationError, match="cross_role_secret_denied"):
                 maker({key: "postgresql://leaked.invalid/db"})
+
+
+def test_g4_publisher_cross_role_secret_denied_and_compose_is_sealed():
+    """Publisher 不繼承 Runtime DSN；專用網路、三個 Secret 且零主機對外埠。"""
+    for key in ("MIRAGE_POSTGRES_DSN", "MIRAGE_G3B_VERIFIER_DSN_FILE",
+                "MIRAGE_G3B_EXECUTOR_DSN_FILE", "MIRAGE_G3B_VALIDATOR_DSN_FILE",
+                "MIRAGE_G4_AUTHORIZER_DSN_FILE", "MIRAGE_G4_SENDER_DSN_FILE"):
+        with pytest.raises(ProtectedRpcConfigurationError, match="cross_role_secret_denied"):
+            create_candidate_publisher_service({key: "postgresql://not-allowed.invalid/db"})
+    with pytest.raises(ProtectedRpcConfigurationError, match="cross_role_secret_denied"):
+        create_candidate_publisher_service({"MIRAGE_TRUSTED_SEND_ENABLE": "true"})
+    root = Path(__file__).resolve().parents[1]
+    compose = yaml.safe_load((root / "deploy/security-lab/g4-publisher-compose.yaml")
+                             .read_text(encoding="utf-8"))
+    assert set(compose["services"]) == {"candidate-publisher"}
+    publisher = compose["services"]["candidate-publisher"]
+    assert "ports" not in publisher and publisher["read_only"] is True
+    assert "ALL" in publisher["cap_drop"]
+    assert publisher["profiles"] == ["g4-publisher-isolated"]
+    assert publisher["networks"] == ["g3b_execution", "g3b_database"]
+    assert publisher["environment"]["MIRAGE_TRUSTED_SEND_ENABLE"] == "false"
+    assert "MIRAGE_POSTGRES_DSN" not in publisher["environment"]
+    assert set(publisher["secrets"]) == {
+        "g4_publisher_reader_dsn", "g4_publisher_writer_dsn",
+        "g4_publisher_promoter_dsn", "g4_publisher_evidence",
+        "g4_publisher_server_cert", "g4_publisher_server_key",
+        "g4_publisher_verifier_ca",
+    }
 
 
 def test_g3b_isolated_compose_does_not_publish_executor_or_share_dsn():
