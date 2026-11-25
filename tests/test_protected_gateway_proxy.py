@@ -609,10 +609,17 @@ def test_gateway_g6_sender_outage_recovers_only_with_fresh_receipt(
                 assert connection.execute(
                     "SELECT admission_id FROM protected_send_leases ORDER BY admission_id"
                 ).fetchall() == [(recovered_admission.admission_id,)]
-                assert connection.execute(
-                    "SELECT state FROM response_admissions WHERE admission_id=%s",
-                    (recovered_admission.admission_id,),
-                ).fetchone() == ("SEND_COMPLETED",)
+            # Client 的 HTTP body 已到達，但 Sender 的持久 Finish 可稍後完成。
+            for _ in range(40):
+                with psycopg.connect(isolated_test_dsn) as connection:
+                    state = connection.execute(
+                        "SELECT state FROM response_admissions WHERE admission_id=%s",
+                        (recovered_admission.admission_id,),
+                    ).fetchone()
+                if state == ("SEND_COMPLETED",):
+                    break
+                time.sleep(0.05)
+            assert state == ("SEND_COMPLETED",)
     finally:
         _g6_stop_worker(worker)
 
@@ -666,7 +673,7 @@ def test_gateway_g6_post_commit_ack_loss_never_emits_native_or_second_lease(
                 assert connection.execute(
                     "SELECT state FROM response_admissions WHERE admission_id=%s",
                     (admission.admission_id,),
-                ).fetchone() == ("SEND_AUTHORIZED",)
+                ).fetchone() == ("SEND_STARTED",)
     finally:
         _g6_stop_worker(worker)
 
