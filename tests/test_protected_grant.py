@@ -151,7 +151,9 @@ def test_receipt_only_authorizer_pins_snapshot_and_sends_native_asgi(isolated_te
     response = ProtectedPinnedASGIResponse(
         sender=sender, admission_id=admission.admission_id,
         receipt_id=seeded[3], owner=owner,
-        request_fingerprint=admission.request_binding_digest, expected_envelope=expected,
+        request_fingerprint=admission.request_binding_digest,
+        expected_transmission_deadline=admission.transmission_deadline,
+        expected_envelope=expected,
     )
     messages = []
 

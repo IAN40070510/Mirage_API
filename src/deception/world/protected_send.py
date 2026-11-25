@@ -466,6 +466,7 @@ class ProtectedPinnedASGIResponse:
     receipt_id: UUID
     owner: str
     request_fingerprint: str
+    expected_transmission_deadline: int
     expected_envelope: bytes
     clock: Callable[[], int] = current_time
     _used: bool = field(default=False, init=False)
@@ -482,7 +483,8 @@ class ProtectedPinnedASGIResponse:
         self._used = True
         if scope.get("type") != "http" or scope.get("scheme") != "https":
             raise TransmissionError("protected_pinned_asgi_tls_required")
-        if not isinstance(self.expected_envelope, bytes):
+        if (not isinstance(self.expected_envelope, bytes)
+                or type(self.expected_transmission_deadline) is not int):
             raise TransmissionError("protected_pinned_asgi_envelope_invalid")
         lease = self.sender.start_send(
             admission_id=self.admission_id, receipt_id=self.receipt_id,
@@ -490,10 +492,13 @@ class ProtectedPinnedASGIResponse:
             expected_envelope=self.expected_envelope,
         )
         if (not isinstance(lease, ProtectedSendLease)
+                or not isinstance(lease.lease_id, UUID) or lease.lease_id.version != 4
                 or lease.admission_id != self.admission_id
                 or lease.receipt_id != self.receipt_id or lease.send_owner != self.owner
                 or lease.request_fingerprint != self.request_fingerprint
                 or not hmac.compare_digest(lease.envelope_bytes, self.expected_envelope)
+                or type(lease.transmission_deadline) is not int
+                or lease.transmission_deadline != self.expected_transmission_deadline
                 or not hmac.compare_digest(hashlib.sha256(lease.envelope_bytes).hexdigest(),
                                            lease.candidate_hash)):
             raise TransmissionError("protected_pinned_asgi_lease_refused")

@@ -85,6 +85,13 @@ Pin 的原始 Envelope v1** 嚴格解碼為兩個原生 ASGI 訊息。它不從 
 hop-by-hop headers、沒有 HTTPS scope、重入、錯 Pin、期限或已知 Restore
 全部拒絕。真 PostgreSQL 加非同步 ASGI 回呼測試會在收到首個訊息時直接
 查看已提交的 Lease；Body 故障須保留 `SEND_PARTIAL_FAILURE` 且永不重發。
+`expected_transmission_deadline` 必須從受保護 Admission 取得，不能由原始
+Client／Runtime 指定；此 ASGI 元件現在還會在任何 `http.response.start`
+之前，比對已提交 Lease 回傳的 UUIDv4 身分與**精確**傳輸期限，拒絕
+非 UUIDv4、縮短／延長期限及布林型期限。聚焦無資料庫回歸
+`test_pinned_asgi_rejects_invalid_lease_identity_and_deadline_before_any_bytes`
+涵蓋異常零輸出與正常傳輸；完整持久化／實體角色／跨程序行為仍須真 PG
+和部署級驗收，不得用此單元測試宣稱 G4 整階段 PASS。
 此內部元件**尚未掛上對外 `/internal/v1/send`**；Caller 憑證、原始
 Request、Authorizer→Sender mTLS RPC、啟動／復原協定與 Release Fuse
 未驗收前，固定 Sender HTTP 仍只能回 503。這是可驗證的真實 bytes 傳輸

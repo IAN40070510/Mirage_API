@@ -742,7 +742,9 @@ def test_native_receipt_publisher_promotes_with_distinct_real_scram_logins(
             outgoing = ProtectedPinnedASGIResponse(
                 sender=PostgresProtectedSender(dsn, expected_login=_real_login(dsn)),
                 admission_id=admission.admission_id, receipt_id=receipt, owner=owner,
-                request_fingerprint=proof.request_fingerprint, expected_envelope=expected,
+                request_fingerprint=proof.request_fingerprint,
+                expected_transmission_deadline=admission.transmission_deadline,
+                expected_envelope=expected,
             )
             messages = []
 
