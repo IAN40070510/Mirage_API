@@ -84,7 +84,7 @@ def test_sender_reconciliation_is_readonly_and_never_reauthorizes_send(isolated_
                      owner=owner, request_fingerprint=admission.request_binding_digest)
     before = sender.reconcile_send(**selectors)
     assert before == ProtectedSendReconciliation(
-        "NO_LEASE_OBSERVED", AdmissionState.SEND_AUTHORIZED, None)
+        "NO_LEASE_OBSERVED", AdmissionState.SEND_AUTHORIZED, False)
     assert not before.retry_permitted
     for forged in ({"owner": "forged"}, {"receipt_id": uuid4()},
                    {"request_fingerprint": "b" * 64}, {"admission_id": "missing-admission"}):
@@ -97,7 +97,7 @@ def test_sender_reconciliation_is_readonly_and_never_reauthorizes_send(isolated_
     assert lease is not None
     started = sender.reconcile_send(**selectors)
     assert started == ProtectedSendReconciliation(
-        "STARTED_DELIVERY_UNKNOWN", AdmissionState.SEND_STARTED, lease.lease_id)
+        "STARTED_DELIVERY_UNKNOWN", AdmissionState.SEND_STARTED, True)
     assert not started.retry_permitted
     assert sender.start_send(**{**selectors, "expected_envelope": envelope}) is None
     assert sender.finish_send(admission_id=admission.admission_id, owner=owner,
@@ -105,7 +105,7 @@ def test_sender_reconciliation_is_readonly_and_never_reauthorizes_send(isolated_
                               attempted=True) is AdmissionOperationResult.SUCCESS
     terminal = sender.reconcile_send(**selectors)
     assert terminal == ProtectedSendReconciliation(
-        "TERMINAL_RECORDED", AdmissionState.SEND_COMPLETED, lease.lease_id)
+        "TERMINAL_RECORDED", AdmissionState.SEND_COMPLETED, True)
     assert not terminal.retry_permitted
     with psycopg.connect(isolated_test_dsn) as connection:
         assert connection.execute("SELECT count(*) FROM protected_send_leases").fetchone() == (1,)
@@ -113,6 +113,26 @@ def test_sender_reconciliation_is_readonly_and_never_reauthorizes_send(isolated_
             "SELECT sequence FROM response_audit WHERE admission_id=%s ORDER BY sequence",
             (admission.admission_id,),
         ).fetchall() == [(0,), (1,), (2,)]
+
+
+@pytest.mark.parametrize("outcome", [AdmissionState.SEND_FAILED,
+                                     AdmissionState.SEND_PARTIAL_FAILURE])
+def test_sender_reconciliation_records_failed_and_partial_terminal_without_retry(isolated_test_dsn, outcome):
+    """ASGI 傳輸失敗／部分送出後的持久終態只能回報，不可重新取得 Lease。"""
+    admission, owner, envelope, seeded = _authorized_pin(isolated_test_dsn)
+    sender = PostgresProtectedSender(isolated_test_dsn, expected_login=_login(isolated_test_dsn))
+    selectors = dict(admission_id=admission.admission_id, receipt_id=seeded[3],
+                     owner=owner, request_fingerprint=admission.request_binding_digest)
+    lease = sender.start_send(**{**selectors, "expected_envelope": envelope})
+    assert lease is not None
+    assert sender.finish_send(admission_id=admission.admission_id, owner=owner,
+                              lease_id=lease.lease_id, outcome=outcome,
+                              attempted=outcome is AdmissionState.SEND_PARTIAL_FAILURE,
+                              ) is AdmissionOperationResult.SUCCESS
+    observation = sender.reconcile_send(**selectors)
+    assert observation == ProtectedSendReconciliation("TERMINAL_RECORDED", outcome, True)
+    assert not observation.retry_permitted
+    assert sender.start_send(**{**selectors, "expected_envelope": envelope}) is None
 
 
 def test_irreversible_snapshot_purge_fence_denies_new_send_without_rewriting_grant(isolated_test_dsn):

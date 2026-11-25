@@ -37,7 +37,7 @@ class ProtectedSendReconciliation:
 
     observation: str
     state: AdmissionState | None
-    lease_id: UUID | None
+    lease_observed: bool
 
     @property
     def retry_permitted(self) -> bool:
@@ -161,7 +161,7 @@ class PostgresProtectedSender(_ProtectedConnection):
                 or not isinstance(request_fingerprint, str)
                 or not re.fullmatch(r"[0-9a-f]{64}", request_fingerprint)):
             raise ProtectedGrantError("protected_send_reconciliation_request_invalid")
-        unknown = ProtectedSendReconciliation("UNVERIFIABLE", None, None)
+        unknown = ProtectedSendReconciliation("UNVERIFIABLE", None, False)
         with self._connection() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
@@ -189,7 +189,7 @@ class PostgresProtectedSender(_ProtectedConnection):
                     return unknown
                 if row[8] is None:
                     if state is AdmissionState.SEND_AUTHORIZED:
-                        return ProtectedSendReconciliation("NO_LEASE_OBSERVED", state, None)
+                        return ProtectedSendReconciliation("NO_LEASE_OBSERVED", state, False)
                     return unknown
                 if (not isinstance(row[8], UUID) or row[8].version != 4
                         or row[9] != receipt_id or row[10] != owner
@@ -197,11 +197,11 @@ class PostgresProtectedSender(_ProtectedConnection):
                         or row[13] != row[2]):
                     return unknown
                 if state is AdmissionState.SEND_STARTED:
-                    return ProtectedSendReconciliation("STARTED_DELIVERY_UNKNOWN", state, row[8])
+                    return ProtectedSendReconciliation("STARTED_DELIVERY_UNKNOWN", state, True)
                 if state in (AdmissionState.SEND_COMPLETED, AdmissionState.SEND_FAILED,
                              AdmissionState.SEND_PARTIAL_FAILURE):
                     # 這是 DB 終態，不代表遠端 Client 已收到所有 bytes。
-                    return ProtectedSendReconciliation("TERMINAL_RECORDED", state, row[8])
+                    return ProtectedSendReconciliation("TERMINAL_RECORDED", state, True)
                 return unknown
 
     def finish_send(self, *, admission_id: str, owner: str, lease_id: UUID,

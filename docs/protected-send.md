@@ -42,7 +42,8 @@ transmission_factory=...)` 接到既有 `ValidatedHTTPResponse`：在真正發�
   request_fingerprint)` 用 Sender 專屬物理連線同時核對 Admission、
   Authorized Snapshot 及 Lease 的不可變綁定。傳回 `NO_LEASE_OBSERVED`、
   `STARTED_DELIVERY_UNKNOWN`、`TERMINAL_RECORDED` 或 `UNVERIFIABLE`，
-  終態另附實際 DB State。**所有結果的 `retry_permitted=False`**；
+  終態另附實際 DB State 與 `lease_observed`，但不回傳可被拿來偽造
+  `finish_send()` 的原始 Lease UUID。**所有結果的 `retry_permitted=False`**；
   `NO_LEASE_OBSERVED` 不能證明其他復原域、失聯的 COMMIT 或實際網路
   發送不存在，`TERMINAL_RECORDED` 也不能證明 Client 全部收到。
 
