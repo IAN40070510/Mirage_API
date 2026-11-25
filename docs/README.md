@@ -23,6 +23,7 @@ release NO-GO。契約採納、實作與驗收分開記錄。
 | 受保護一次性 Send Lease／ASGI（G4 增量） | `src/deception/world/protected_send.py`、`migrations/025_protected_send_leases.sql`、`tests/test_protected_send.py` | [精確 Authorized Snapshot Pin、單次 Lease、ASGI 首訊息與仍未接線的 Restore Fence](protected-send.md) |
 | G5 已知 Restore 後的操作型 Quarantine（單機增量） | `src/deception/security/restore_bootstrap.py`、`tests/test_g5_real_restore.py` | [停流確認、兩個實體 SCRAM 最小權限、Marker 落盤／獨立讀回及未涵蓋的正式啟動邊界](protected-send.md#g5-受控還原後-quarantine-入口) |
 | G5 Docker 受控停流／Restore 順序（隔離候選） | `src/deception/security/controlled_restore.py`、`tests/test_controlled_restore.py` | [完整 Docker ID／opt-in Label 驗證、失敗即停及停流證據限制](protected-send.md#g5-docker-受控還原順序候選) |
+| 標準單機 Docker Compose（D-74 候選） | `deploy/single-node/compose.yaml`、`src/deception/security/single_node_gateway.py`、`tools/check_single_node_compose.py` | [一台 Ubuntu 的九容器信任拓樸、隔離 Gateway、Secret、啟動與 NO-GO 邊界](single-node-compose.md) |
 | 獨立 HTTPX 請求摘要 | `src/deception/api/fingerprint.py` | [不依賴外部 Gateway 的客戶端摘要](trusted-session.md#獨立客戶端的請求摘要) |
 | 請求與驗證結果 Audit | `src/deception/world/request_audit.py`、`migrations/016_request_observations.sql` | [假名化觀察、原子 Grant 關聯與故障處理](request-audit.md) |
 | 共用事件提交與標準結果 | `src/deception/world/commit.py`、`event_store.py`、`migrations/015_world_operation_result_digests.sql` | [五類結果、原子事件與唯讀恢復](commit-results.md) |

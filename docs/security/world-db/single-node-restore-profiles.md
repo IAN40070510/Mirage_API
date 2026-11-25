@@ -210,6 +210,26 @@ processes, in-flight packets, concurrent Docker operators or whole-host
 rollback. It does not replace a deployment-wide authoritative quiescence lock;
 `SINGLE-NODE-03` remains PARTIAL and final G5/G6 release NO-GO.
 
+### Standard single-node Compose profile selection (2026-11-26 candidate)
+
+The selected normal deployment mechanism is **one Docker Compose application**,
+not a required second server or Fence authority. The new
+[`deploy/single-node/compose.yaml`](../../../deploy/single-node/compose.yaml)
+defines World PostgreSQL, the seven currently supported protected service
+containers and an **explicit opt-in, loopback-only, still-sealed Gateway
+candidate**. All protected services use distinct non-root UID/Secret sets,
+fixed internal networks and `restart: "no"` for fail-closed known restore.
+Only the Gateway has an opt-in host port, pinned to `127.0.0.1`; PostgreSQL
+and Sender never publish host ports. The Gateway and Sender explicitly declare
+`standard_single_node` v1 and `MIRAGE_TRUSTED_SEND_ENABLE=false`.
+
+This candidate must pass real least-privilege provisioning, mTLS startup,
+native HTTP and Restore/GC/network/Owner acceptance **before any public
+deployment or Trusted Send release**. Current Docker file-backed Secret UID/
+GID/mode restrictions need explicit host ACL verification. See
+[`docs/single-node-compose.md`](../../single-node-compose.md). It does not
+change `SINGLE-NODE-01` through `-06` from PARTIAL/OPEN.
+
 ## Optional external Fence acceptance — mandatory only if enabled or claimed
 
 - **FENCE-OPTION-01:** Independent authority and storage/backup/restore domain; pin namespace, epoch, real SCRAM logins and Ed25519 identity. Same-host Docker lab is insufficient for whole-host rollback claim.

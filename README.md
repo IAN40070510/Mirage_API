@@ -389,6 +389,14 @@ OWASP 分類是設計弱點情境的依據。管理者在啟動時選定已實�
 
 ## 快速使用
 
+**正式架構選擇（D-74）：Docker Compose 標準單機部署，外部 Restore Fence 選配。**
+目前 [`deploy/single-node/compose.yaml`](deploy/single-node/compose.yaml) 是
+受保護九容器拓樸與本機 Gateway 隔離候選；不同於下方展示 Compose，
+**尚未完成正式放行、沒有公網 Gateway 預設入口**。
+各服務目的、Secret 分權、部署前必要條件與保留的 G3b～G6 Gate 見
+[標準單機部署說明](docs/single-node-compose.md)，不得把下方 Demo 啟動
+當作 Trusted Send 正式驗收。
+
 在專案根目錄執行：
 
 ```powershell

@@ -2,6 +2,18 @@
 
 ## 2026-11-25 G3b～G6 安全 Gate 增量（未正式結案）
 
+**2026-11-26 D-74 正式架構選擇：單機 Docker Compose。**
+`deploy/single-node/compose.yaml` 把一台 Ubuntu 的 PostgreSQL、Verifier、
+Inventory／Cart Executor、Validator、Candidate Publisher、Authorizer、Sender
+與 opt-in 隔離 Gateway 組成同一專案；Sender/DB 不發佈 Host 埠，Gateway
+僅 `127.0.0.1`、需顯式 `isolated-gateway` Profile。所有角色有獨立
+容器 UID、Secret、內網、最小權限要求，Sender/Ingress `restart=no` 並
+預留受控 Restore 標籤；沒有任何強制外部 Fence 安裝。
+`tools/check_single_node_compose.py` 與 `tests/test_single_node_compose.py`
+新增惡意公開埠、DSN 跨角色、Restart、身份複用等拒絕測試；這是**候選部署
+與靜態安全規格**，尚未完成正式 Secret provisioning、七服務實際啟動／
+網路故障矩陣或 Owner 放行，**G3b～G6 仍是 NO-GO**。
+
 | 階段 | 隔離實測 | 尚未完成的放行條件 |
 | --- | --- | --- |
 | G3b | ARM64 四個獨立 non-root mTLS 服務與專用 SCRAM、20/20 無簽章路徑拒絕；I-01～I-04 的 8 組、C-01～C-09 的 16 組、M-01～M-07 的 10 組原生 Client 200／指定 400／404／409，均由真 Ed25519 JWS→Verifier→Executor→Validator→Publisher→Authorizer 跨七 TLS Listener、唯一 PG Lease 與 Replay 拒絕隔離驗收；新增每服務**不同實體 SCRAM Login** 的七 TLS 隔離回歸，包含 Sender／Authorizer 缺少關鍵唯讀 ACL 的真 `REVOKE` 啟動拒絕 | **20 路由尚未完成全部指定錯誤／CAS／故障／URL 矩陣**，Medusa 非空初始品項、完整官方契約變體、正式容器七服務 Secret／網路／憑證輪替及安全審核 |
