@@ -118,7 +118,13 @@ lock、檢查此表；Recorder 取得同一鎖的排他型態才能插入事件�
 與相同 advisory transaction lock 下，再查不可變 Restore 事件；存在時
 即以 `42501` 拒絕。這讓不認識新 Python 檢查的舊 Sender SQL 也無法在
 已知 Restore 後提交新 Lease，前面的 Admission 狀態變更須整筆回滾。
-Trigger 缺表或缺 SELECT 時一樣拒絕，不能以 runtime flags 解除。
+Trigger 缺表時一樣拒絕，不能以 runtime flags 解除。後續追加
+`032_known_restore_trigger_privilege_isolation.sql`：將無參數 Trigger 函式
+改為 `SECURITY DEFINER`，同時維持 `pg_catalog, trusted_schema, pg_temp`
+的固定搜尋路徑與 PUBLIC EXECUTE 撤銷。這讓舊 Sender 即使沒有新事件表
+的 SELECT 權，**無 Restore 時仍能通過原本的 Lease INSERT**；已標記
+之後仍由 DB 拒絕，且舊程序建立的同名 TEMP 表不能遮蔽真正的隔離事件。
+新增真 SCRAM 舊版 SQL 正負與 TEMP Shadow 測試，**待確切 SHA CI 驗收**。
 此項只涵蓋同一資料庫的**新 Lease**，不攔截先前已起送的網路 bytes、
 已知事件遭 DB 還原覆寫、舊程序直接使用未受保護的外部發送通道，
 亦不等於 G6 全部混版／正式網路部署已驗收。

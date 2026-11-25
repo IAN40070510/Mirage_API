@@ -205,6 +205,81 @@ def test_known_restore_database_trigger_blocks_legacy_sender_sql(isolated_test_d
         assert connection.execute("SELECT count(*) FROM protected_send_leases").fetchone() == (0,)
 
 
+def test_known_restore_trigger_allows_legacy_login_until_marker_and_ignores_temp_shadow(isolated_test_dsn):
+    """舊 SCRAM Sender 不具 Marker SELECT 仍可正常起送，Restore 後同名 TEMP 表無法繞過 DB Fence。"""
+    if os.environ.get("MIRAGE_WORLD_ROLE_TEST_ISOLATED") != "true":
+        pytest.skip("requires disposable PostgreSQL cluster for login role creation")
+    import psycopg
+    from psycopg import sql
+    from psycopg.conninfo import conninfo_to_dict, make_conninfo
+
+    first, owner, _, seeded_first = _authorized_pin(isolated_test_dsn)
+    second, _, _, seeded_second = _authorized_pin(isolated_test_dsn)
+    admin_login = _login(isolated_test_dsn)
+    role = "mirage_legacy_sender_" + uuid4().hex[:12]
+    password = secrets.token_urlsafe(32)
+    schema = conninfo_to_dict(isolated_test_dsn)["options"].split("search_path=", 1)[1].split(" ", 1)[0]
+    with psycopg.connect(isolated_test_dsn, autocommit=True) as admin:
+        admin.execute(sql.SQL("CREATE ROLE {} LOGIN NOINHERIT NOSUPERUSER "
+                              "NOCREATEDB NOCREATEROLE NOBYPASSRLS PASSWORD {}").format(
+                                  sql.Identifier(role), sql.Literal(password)))
+        try:
+            admin.execute(sql.SQL("GRANT USAGE ON SCHEMA {} TO {}").format(
+                sql.Identifier(schema), sql.Identifier(role)))
+            admin.execute(sql.SQL("GRANT SELECT ON response_admissions TO {}").format(
+                sql.Identifier(role)))
+            admin.execute(sql.SQL("GRANT UPDATE (state) ON response_admissions TO {}").format(
+                sql.Identifier(role)))
+            admin.execute(sql.SQL("GRANT INSERT ON protected_send_leases,response_audit TO {}").format(
+                sql.Identifier(role)))
+            legacy_dsn = make_conninfo(isolated_test_dsn, user=role, password=password)
+            with psycopg.connect(legacy_dsn) as connection:
+                assert connection.execute(
+                    "SELECT has_table_privilege('protected_local_restore_events','SELECT')"
+                ).fetchone() == (False,)
+                connection.execute("UPDATE response_admissions SET state='SEND_STARTED' "
+                                   "WHERE admission_id=%s", (first.admission_id,))
+                connection.execute(
+                    "INSERT INTO protected_send_leases ("
+                    "admission_id,lease_id,receipt_id,send_owner,request_fingerprint,"
+                    "candidate_hash,transmission_deadline) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+                    (first.admission_id, uuid4(), seeded_first[3], owner,
+                     first.request_binding_digest, first.candidate_hash,
+                     first.transmission_deadline),
+                )
+                connection.execute(
+                    "INSERT INTO response_audit (admission_id,sequence,event_name,final_response_hash) "
+                    "VALUES (%s,0,'send_started',%s)", (first.admission_id, first.candidate_hash),
+                )
+            recorder = PostgresKnownRestoreRecorder(isolated_test_dsn,
+                                                     expected_login=admin_login)
+            assert recorder.mark_known_restore(uuid4())
+            with psycopg.connect(legacy_dsn) as connection:
+                connection.execute("CREATE TEMP TABLE protected_local_restore_events "
+                                   "(restore_event_id UUID)")
+                with pytest.raises(psycopg.errors.InsufficientPrivilege,
+                                   match="known restore quarantine"):
+                    connection.execute("UPDATE response_admissions SET state='SEND_STARTED' "
+                                       "WHERE admission_id=%s", (second.admission_id,))
+                    connection.execute(
+                        "INSERT INTO protected_send_leases ("
+                        "admission_id,lease_id,receipt_id,send_owner,request_fingerprint,"
+                        "candidate_hash,transmission_deadline) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+                        (second.admission_id, uuid4(), seeded_second[3], owner,
+                         second.request_binding_digest, second.candidate_hash,
+                         second.transmission_deadline),
+                    )
+            with psycopg.connect(isolated_test_dsn) as connection:
+                assert connection.execute("SELECT count(*) FROM protected_send_leases").fetchone() == (1,)
+                assert connection.execute(
+                    "SELECT state FROM response_admissions WHERE admission_id=%s",
+                    (second.admission_id,),
+                ).fetchone() == ("SEND_AUTHORIZED",)
+        finally:
+            admin.execute(sql.SQL("DROP OWNED BY {}").format(sql.Identifier(role)))
+            admin.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(role)))
+
+
 def test_missing_local_restore_evidence_table_fails_closed(isolated_test_dsn):
     """本機隔離證據表缺失不能默認安全，StartSend 必拒絕且回滾全部起送動作。"""
     import psycopg

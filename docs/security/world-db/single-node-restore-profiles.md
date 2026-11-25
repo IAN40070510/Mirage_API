@@ -48,6 +48,11 @@ Lease INSERT at PostgreSQL trigger level, so an older Sender that omits the new
 Python check cannot commit a fresh Lease after a known event. This mixed-binary
 subcase requires independent PostgreSQL CI and does not cover already-started
 network sends or unprotected legacy egress paths.
+Migration `032_known_restore_trigger_privilege_isolation.sql` pins that no-argument
+trigger to a fixed trusted schema under a SECURITY DEFINER function. Thus an old
+Sender login need not receive SELECT on the newly introduced event table, but a
+spoofed same-name TEMP table cannot hide an actual event. This requires real
+least-privilege login, positive legacy SQL and adversarial TEMP-shadow tests.
 The deployer must suspend ingress before restore and persist the marker **after**
 restoring the database, before reopening Sender; restoring an older DB image after
 the marker could erase it. There is no verified release path, startup orchestrator,
