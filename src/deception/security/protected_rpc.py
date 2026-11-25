@@ -1632,6 +1632,7 @@ def create_direct_verifier_app(
     executor_clients: Mapping[str, FixedExecutorMTLSClient] | None = None,
     native_validator_client: FixedNativeValidatorMTLSClient | None = None,
     candidate_publisher_client: FixedCandidatePublisherMTLSClient | None = None,
+    authorizer_client: FixedAuthorizerMTLSClient | None = None,
 ) -> FastAPI:
     """在獨立 Gateway mTLS 入口由實際 HTTP 訊息建立受保護 Operation Receipt。
 
@@ -1653,6 +1654,10 @@ def create_direct_verifier_app(
     if (candidate_publisher_client is not None
             and not isinstance(candidate_publisher_client, FixedCandidatePublisherMTLSClient)):
         raise ProtectedRpcConfigurationError("direct_verifier_publisher_client_invalid")
+    if (authorizer_client is not None
+            and (not isinstance(authorizer_client, FixedAuthorizerMTLSClient)
+                 or candidate_publisher_client is None)):
+        raise ProtectedRpcConfigurationError("direct_verifier_authorizer_chain_invalid")
     if executor_clients is not None and (
             not isinstance(executor_clients, Mapping) or not executor_clients
             or any(platform not in {"synthetic-inventory", "synthetic-carts", "medusa-native-cart"}
@@ -1952,6 +1957,24 @@ def create_direct_verifier_app(
                 # 不猜 Promotion 是否 COMMIT，絕不重用 JTI 或再次發出 Publisher RPC。
                 raise HTTPException(status_code=503,
                                     detail="direct_verifier_publisher_unverifiable") from exc
+        authorization = None
+        if authorizer_client is not None:
+            # 只能在獨立 Validator 已證明完整 Native Envelope，且另一個實體
+            # Publisher 完成持久化 Promotion 後授權。Authorizer 只接收 Receipt，
+            # 不採納 Runtime 或 Client 的 Candidate／Deadline／Owner 指示。
+            try:
+                authorization = await authorizer_client.authorize_receipt(receipt_id)
+            except Exception as exc:
+                # Grant COMMIT ACK 失聯時不准重送：Receipt 可能已被消費。
+                raise HTTPException(status_code=503,
+                                    detail="direct_verifier_authorization_unverifiable") from exc
+            if (not isinstance(authorization, dict)
+                    or authorization.get("receipt_id") != str(receipt_id)
+                    or authorization.get("request_fingerprint") != fingerprint_request(normalized)
+                    or authorization.get("candidate_hash") != promotion["candidate_hash"]
+                    or authorization.get("trusted_send") != "disabled"):
+                raise HTTPException(status_code=503,
+                                    detail="direct_verifier_authorization_binding_mismatch")
         # 不能在 HTTP 回應暴露已驗證 claims 或受保護 DB Secret；此結果非 Sender。
         result: dict[str, object] = {"receipt_id": str(receipt_id),
                                      "operation_id": operation.operation_id}
@@ -1961,6 +1984,8 @@ def create_direct_verifier_app(
             result["native_projection"] = projection
         if promotion is not None:
             result["candidate_promotion"] = promotion
+        if authorization is not None:
+            result["receipt_authorization"] = authorization
         return result
 
     return app

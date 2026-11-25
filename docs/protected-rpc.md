@@ -21,6 +21,26 @@ Server Certificate 和專屬 Caller Client CA，Uvicorn 嚴格要求 Client Cert
 真實 mTLS 握手／匿名 Client 拒絕的測試只驗傳輸，不等於部署級 ACL 簽核，
 也不影響原先四容器 G3b 正式服務拓樸。
 
+### G3b→G4 Receipt-only Authorizer 接線（可選的隔離驗收增量）
+
+只有在獨立 Validator 已取得精確原生候選、另一個具獨立 SCRAM 角色的
+Publisher 已提交 Promotion 後，Verifier 才可呼叫固定
+`FixedAuthorizerMTLSClient.authorize_receipt(receipt_id)`。Caller 不提供
+Status、Headers、Body、Owner、Scope 或 Deadline。回傳的 Receipt、原始
+Request Fingerprint、Candidate Hash 必須與本次受信任鏈全部相同；
+任何 COMMIT ACK 不明或錯配固定拒絕，不重送 Grant。
+
+這個連結由部署端**額外**配置 `MIRAGE_G4_AUTHORIZER_ORIGIN`、
+`MIRAGE_G4_VERIFIER_AUTHORIZER_CERT_FILE`、
+`MIRAGE_G4_VERIFIER_AUTHORIZER_KEY_FILE` 與
+`MIRAGE_G4_AUTHORIZER_SERVER_CA_FILE`；必須同時有完整 Publisher
+mTLS 配置，且 Authorizer 與 Publisher 的 Verifier Client Cert/Key 不可
+使用相同實體檔案或相同憑證公鑰。任何一項設定已出現卻為空值或不完整，
+都必須拒絕啟動，不能藉 falsy 空字串退回 Candidate-only。完全未提供這組
+設定才保留舊的內部 Candidate-only 流程。
+目前只有單元隔離鏈驗證，四服務部署尚未接這個選用 Caller、Sender 仍封閉；
+不能把內部 `receipt_authorization` JSON 當成原生 Client HTTP 或正式放行。
+
 ### G3b Direct Verifier HTTP 入口（隔離增量）
 
 `create_direct_verifier_app()` 與 `serve_direct_verifier_mtls()` 為獨立 Verifier
