@@ -102,6 +102,33 @@ local PostgreSQL tests cannot prove an undetected whole-host snapshot rollback,
 and an accepted standard profile must explicitly disclose that limitation.
 The production release fuse, Trusted Send and DECEIVE remain OFF.
 
+### 2026-11-25 G5 actual PostgreSQL restore experiment — bounded evidence
+
+On dedicated disposable ARM64 PostgreSQL 17.6, the opt-in
+`tests/test_g5_real_restore.py` performed an actual `pg_dump -Fc` of an
+isolated migrated source schema and `pg_restore` into a **separately named,
+random temporary database in the same disposable PostgreSQL cluster**. The
+backup was taken before a known-restore marker existed; the restored copy
+therefore contained a protected `SEND_AUTHORIZED` Receipt but **no marker**.
+Before any restored Sender startup or permitted traffic, the experiment
+persisted the marker twice (idempotently), then verified the new Sender
+issued **zero** Send Leases and an older Sender's direct SQL was denied by
+the database's known-restore trigger. Four independent runs passed:
+`job_01M89BEPRS009SYR2E1N2CV6Y6` (one) and
+`job_01M89BFA0W00APSBDM74NY4RYF` (three); JUnit files
+`g5-real-pgdump-restore-experiment.xml` and
+`g5-real-pgdump-restore-repeat-2.xml` through `-4.xml`, under
+`/tmp/mirage-g3b-g6-20261125.AsFBoE/`. Cleanup inspection reported
+**zero** generated `mirage_g5_restore_%` databases remaining.
+
+This proves only the **controlled, manually sequenced, same-host restored-DB
+quarantine subcase**. The marker is not magically included in an older backup;
+real restore orchestration must guarantee quiesced ingress, marker durability
+and Sender isolation *before* traffic. This experiment did **not** test VM
+rollback, boot/restart orchestration, GC/Purge reconciliation, host-wide
+snapshot detection, a separate failure domain or a production restore.
+`SINGLE-NODE-03`, the full G5 gate and final release remain **OPEN/NO-GO**.
+
 ## Optional external Fence acceptance — mandatory only if enabled or claimed
 
 - **FENCE-OPTION-01:** Independent authority and storage/backup/restore domain; pin namespace, epoch, real SCRAM logins and Ed25519 identity. Same-host Docker lab is insufficient for whole-host rollback claim.
