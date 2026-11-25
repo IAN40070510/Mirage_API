@@ -38,6 +38,34 @@ def _authorized_pin(dsn):
     return admission, owner, envelope, seeded
 
 
+def _lose_commit_ack_after_database_commit(monkeypatch, actor):
+    """先確實提交真 PostgreSQL 交易，再讓呼叫端收到模擬的 COMMIT ACK 遺失。"""
+    import psycopg
+
+    original_connection = actor._connection
+
+    class LostCommitAcknowledgement:
+        """攔截單次受保護連線的 context exit，保留已成功提交的資料。"""
+
+        def __enter__(self):
+            """開啟受保護的真連線，由原方法完成物理登入身分檢查。"""
+            self.connection = original_connection()
+            return self.connection
+
+        def __exit__(self, error_type, error, traceback):
+            """對成功操作先 COMMIT 再故意遺失 ACK；失敗操作正常回滾。"""
+            try:
+                if error_type is not None:
+                    self.connection.rollback()
+                    return False
+                self.connection.commit()
+                raise psycopg.OperationalError("simulated_commit_ack_lost")
+            finally:
+                self.connection.close()
+
+    monkeypatch.setattr(actor, "_connection", LostCommitAcknowledgement)
+
+
 def test_single_send_lease_claims_exact_snapshot_and_never_rearms(isolated_test_dsn):
     """只有完整 Receipt／owner／fingerprint／bytes 相符可起送，完成後不可重拿 Lease。"""
     import psycopg
@@ -101,6 +129,34 @@ def test_known_local_restore_blocks_future_send_lease_persistently(isolated_test
     with psycopg.connect(isolated_test_dsn) as connection:
         assert connection.execute("SELECT state FROM response_admissions WHERE admission_id=%s",
                                   (admission.admission_id,)).fetchone() == ("SEND_AUTHORIZED",)
+        assert connection.execute("SELECT count(*) FROM protected_send_leases").fetchone() == (0,)
+
+
+def test_known_restore_commit_ack_lost_remains_quarantined_and_idempotent(isolated_test_dsn,
+                                                                           monkeypatch):
+    """真實事件已 COMMIT 但 Recorder 收到失敗時，同 ID 重查仍不得解除隔離。"""
+    import psycopg
+
+    admission, owner, envelope, seeded = _authorized_pin(isolated_test_dsn)
+    login = _login(isolated_test_dsn)
+    event_id = uuid4()
+    recorder = PostgresKnownRestoreRecorder(isolated_test_dsn, expected_login=login)
+    _lose_commit_ack_after_database_commit(monkeypatch, recorder)
+    with pytest.raises(psycopg.OperationalError, match="simulated_commit_ack_lost"):
+        recorder.mark_known_restore(event_id)
+    with psycopg.connect(isolated_test_dsn) as connection:
+        assert connection.execute(
+            "SELECT restore_event_id FROM protected_local_restore_events"
+        ).fetchall() == [(event_id,)]
+    restarted = PostgresKnownRestoreRecorder(isolated_test_dsn, expected_login=login)
+    assert not restarted.mark_known_restore(event_id)
+    sender = PostgresProtectedSender(isolated_test_dsn, expected_login=login)
+    assert sender.start_send(
+        admission_id=admission.admission_id, receipt_id=seeded[3], owner=owner,
+        request_fingerprint=admission.request_binding_digest, expected_envelope=envelope,
+    ) is None
+    with psycopg.connect(isolated_test_dsn) as connection:
+        assert connection.execute("SELECT count(*) FROM protected_local_restore_events").fetchone() == (1,)
         assert connection.execute("SELECT count(*) FROM protected_send_leases").fetchone() == (0,)
 
 
@@ -381,6 +437,36 @@ def test_sender_reconciliation_is_readonly_and_never_reauthorizes_send(isolated_
             "SELECT sequence FROM response_audit WHERE admission_id=%s ORDER BY sequence",
             (admission.admission_id,),
         ).fetchall() == [(0,), (1,), (2,)]
+
+
+def test_sender_commit_ack_lost_after_actual_lease_commit_never_resends(isolated_test_dsn,
+                                                                          monkeypatch):
+    """起送交易已真正提交但客戶端遺失 COMMIT ACK，只能觀察不明並保持一次性。"""
+    import psycopg
+
+    admission, owner, envelope, seeded = _authorized_pin(isolated_test_dsn)
+    sender = PostgresProtectedSender(isolated_test_dsn, expected_login=_login(isolated_test_dsn))
+    selectors = dict(admission_id=admission.admission_id, receipt_id=seeded[3],
+                     owner=owner, request_fingerprint=admission.request_binding_digest)
+    _lose_commit_ack_after_database_commit(monkeypatch, sender)
+    with pytest.raises(psycopg.OperationalError, match="simulated_commit_ack_lost"):
+        sender.start_send(**selectors, expected_envelope=envelope)
+    restarted = PostgresProtectedSender(isolated_test_dsn, expected_login=_login(isolated_test_dsn))
+    observation = restarted.reconcile_send(**selectors)
+    assert observation == ProtectedSendReconciliation(
+        "STARTED_DELIVERY_UNKNOWN", AdmissionState.SEND_STARTED, True)
+    assert not observation.retry_permitted
+    assert restarted.start_send(**selectors, expected_envelope=envelope) is None
+    with psycopg.connect(isolated_test_dsn) as connection:
+        assert connection.execute(
+            "SELECT state FROM response_admissions WHERE admission_id=%s",
+            (admission.admission_id,),
+        ).fetchone() == ("SEND_STARTED",)
+        assert connection.execute("SELECT count(*) FROM protected_send_leases").fetchone() == (1,)
+        assert connection.execute(
+            "SELECT sequence,event_name FROM response_audit WHERE admission_id=%s",
+            (admission.admission_id,),
+        ).fetchall() == [(0, "send_started")]
 
 
 @pytest.mark.parametrize("field", ["admission_id", "request_binding_digest", "candidate_hash",

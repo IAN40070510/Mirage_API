@@ -94,7 +94,7 @@ Fingerprint 只得到 `UNVERIFIABLE`；即使觀察不到 Lease 也不可重起�
 Candidate Ref／期限與受保護 Snapshot；任何不一致回 `UNVERIFIABLE`。
 這只改善故障診斷，不處理跨庫權威、客戶端 ACK、正式服務接線與 Restore。
 
-### D-74 已知 Restore 本機隔離事件（新隔離子項，待本版 CI）
+### D-74 已知 Restore 本機隔離事件（隔離 PostgreSQL 子項 PASS）
 
 `030_local_known_restore_quarantine.sql` 建立不可更新、不可刪除的
 `protected_local_restore_events`；受信任部署 Recorder 以實體獨立 PostgreSQL
@@ -110,9 +110,9 @@ lock、檢查此表；Recorder 取得同一鎖的排他型態才能插入事件�
 首輪測試發現 PostgreSQL 對**指定 Conflict Arbiter** 的寫法還要求額外
 讀取權，實體 Recorder 因而 `permission denied`（不是 PASS）；已改為
 不指定 Arbiter 的 `ON CONFLICT DO NOTHING`，僅以受保護表唯一主鍵
-處理重複事件。此差異必須由下一版真 SCRAM CI 確認，不以純單元測試替代。
+處理重複事件。此差異已由真 SCRAM CI 確認，不以純單元測試替代。
 
-**G6 舊版 Sender 混跑隔離（待本版 CI）**：新增
+**G6 舊版 Sender 混跑隔離（隔離 PostgreSQL 子項 PASS）**：新增
 `031_known_restore_lease_db_fence.sql`，不修改既有已套用 Migration。
 `protected_send_leases` 的 `BEFORE INSERT` Trigger 在固定資料庫 schema
 與相同 advisory transaction lock 下，再查不可變 Restore 事件；存在時
@@ -124,13 +124,27 @@ Trigger 缺表時一樣拒絕，不能以 runtime flags 解除。後續追加
 的固定搜尋路徑與 PUBLIC EXECUTE 撤銷。這讓舊 Sender 即使沒有新事件表
 的 SELECT 權，**無 Restore 時仍能通過原本的 Lease INSERT**；已標記
 之後仍由 DB 拒絕，且舊程序建立的同名 TEMP 表不能遮蔽真正的隔離事件。
-新增真 SCRAM 舊版 SQL 正負與 TEMP Shadow 測試，**待確切 SHA CI 驗收**。
+新增真 SCRAM 舊版 SQL 正負與 TEMP Shadow 測試，已於
+[SHA `57c5405`](https://github.com/IAN40070510/Mirage_API/commit/57c5405c2344c8b40d4cf02e7bb2b05343f16921)
+的 [真 PostgreSQL #45545595971](https://github.com/IAN40070510/Mirage_API/actions/runs/45545595971)
+通過 `196 passed`，另有真 mTLS `6 passed`、獨立 Fence PG `12 passed`；
+[完整 Python #45545595975](https://github.com/IAN40070510/Mirage_API/actions/runs/45545595975)
+`1498 passed, 14 skipped`，兩組一次性容器 CI 成功。
 首次混版擴充 CI 在建立第二個 Admission 時，因測試 Helper 重複登記同一
 Contract 的 revision=1 而正確報 `registry_revision_not_monotonic`；已讓
 連續案例使用不同正式 Contract Hash，沒有放寬 Registry 單調性規則。
 此項只涵蓋同一資料庫的**新 Lease**，不攔截先前已起送的網路 bytes、
 已知事件遭 DB 還原覆寫、舊程序直接使用未受保護的外部發送通道，
 亦不等於 G6 全部混版／正式網路部署已驗收。
+
+**G6 COMMIT-ACK 遺失故障注入（新增、待確切 SHA CI）**：對兩個真 PostgreSQL
+操作新增交易 context 邊界注入：先 `COMMIT` 成功、再讓應用收到模擬的
+`OperationalError`。其一是獨立 Recorder 的已知 Restore 事件：重啟後沿原
+UUID 重查不新增事件，所有後續 Lease 拒絕；其二是 Sender 的 StartSend：
+原 Lease、`SEND_STARTED` 與 Audit 已提交，但呼叫端沒有取得 Lease 回傳，
+只能以獨立 Sender 唯讀對帳得到 `STARTED_DELIVERY_UNKNOWN`，不可再次起送。
+兩個測試以隔離實際資料庫驗證持久狀態；此法**模擬 ACK 遺失的呼叫端可見
+結果**，不宣稱已注入真實 TCP 封包遺失或跨復原域雙提交故障。
 
 此方法**只能偵測由部署控制面明確告知、且事件在目前 World DB 中仍可見的
 已知 Restore**。部署流程須先停止受信任入口，完成還原後、任何 Sender
