@@ -116,6 +116,33 @@ Receipt→Promotion→Grant Binding→Authorized Snapshot→Send Lease→原生 
 但尚無完整 Validator→Candidate 提交、Verifier→Authorizer→Sender 最終
 Client HTTP 接線；不接受 Runtime 指定 Header/Body 作為授權證據。
 
+### Receipt-only Sender→Gateway 代理候選（未解封）
+
+獨立 Sender 新增唯讀 `resolve_authorized_receipt(receipt_id)`：從受保護的
+`ingress_receipts`、`protected_grant_bindings`、`response_admissions` 與
+`protected_authorized_http_snapshots` 交叉比對，要求 Receipt UUID4、原
+`protected-receipt-v1` 授權版本、固定 Send Owner、Fingerprint、Candidate
+Ref/Hash、三份 Envelope Hash、Generation、Deadline 及 `operation_id=receipt_id`。
+查 Pin 不會生成 Lease；真正傳送仍須 `start_send()` 的獨立原子交易再次驗證
+已知 Restore／Purge Fence、Deadline 與唯一 Lease，任何否決皆零原生 bytes。
+
+`create_receipt_proxy_sender_candidate_app()` 另有隔離用 ASGI
+`POST /internal/v1/emit-receipt`，只允許 `{"receipt_id":"<UUID4>"}`；
+拒絕額外欄位、重複 JSON 鍵、過大請求、無 HTTPS ASGI Scope 及錯路由。
+**正式 `create_sender_service()` 並未裝載這個候選 App，正式 Sender 仍 503。**
+這個 HTTPS Scope 只是一道 fail-closed 檢查，不等於 mTLS 物理身分驗證；
+候選部署仍須 Sender 專屬 Client CA、TLS handshake、網路 ACL 和 SCRAM Login。
+
+若 Gate 通過，唯一可接受的架構是可信 Gateway 終止 Client TLS、把 Receipt
+以專屬 mTLS 送給 Sender，由 Sender 取 DB Pin 原生輸出 status／headers／body，
+Gateway 原封代理給原 Client。Sender 在起送前已提交唯一 Lease，且
+Sender→Gateway 完成**不代表 Gateway→Client 收到**。任何 Gateway 下游
+傳輸失敗、逾時、斷線、Client ACK 不明或 Sender 回應已開始的故障都必須
+保持 unknown/partial，不得重送 Receipt 或補發第二個業務 HTTP；Gateway
+不能快取、重組、替換已釘選的原生狀態／Headers／Body，也不能把內部 503
+混充成功候選。這段 Gateway 真正的雙向代理、前後端 mTLS/Client 邊界、
+斷線後一次性對帳及 G5/G6 故障注入**尚未實作／未獲正式驗收**。
+
 **G5 已知 Restore／在途 ASGI 窗口（追加隔離子項，待 CI）**：
 `known_restore_delivery_window()` 在已提交 Lease **之後**取得 PG Session
 共享 advisory lock、重新查已知 Restore 標記，並保持該鎖直到本次 ASGI

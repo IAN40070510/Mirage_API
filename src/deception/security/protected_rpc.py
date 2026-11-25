@@ -1625,6 +1625,115 @@ def create_fixed_sender_app(*, sender) -> FastAPI:
     return app
 
 
+class _ReceiptOnlyProxySenderASGI:
+    """測試候選：只接受 mTLS Gateway 的 Receipt，讓 Sender 本身輸出 ASGI bytes。"""
+
+    def __init__(self, sender) -> None:
+        """保存獨立 Sender 物件，不接收 Runtime 指定的 Body／Scope／Deadline。"""
+        self._sender = sender
+
+    @staticmethod
+    async def _deny(send, status: int, reason: str) -> None:
+        """只向內部代理回固定失敗；不得包含資料庫細節或原生業務內容。"""
+        body = json.dumps({"detail": reason}, separators=(",", ":")).encode("ascii")
+        await send({"type": "http.response.start", "status": status,
+                    "headers": [(b"content-type", b"application/json")]})
+        await send({"type": "http.response.body", "body": body})
+
+    async def __call__(self, scope, receive, send) -> None:
+        """先嚴格解碼 Receipt，再一次起送 DB Pin；失敗絕不轉為第二次發送。
+
+        這是**未在正式 CLI 裝載**的隔離 ASGI 候選。Sender 發給 Gateway
+        並不等於 Client 已收到，Gateway 後續轉送失敗不得重試本 Receipt。
+        """
+        from starlette.concurrency import run_in_threadpool
+        from deception.world.protected_send import (
+            ProtectedPinnedASGIResponse, ProtectedReceiptSendPin,
+        )
+
+        path = b"/internal/v1/emit-receipt"
+        if scope.get("type") != "http" or scope.get("scheme") != "https":
+            await self._deny(send, 503, "proxy_sender_tls_required")
+            return
+        if (scope.get("method") != "POST" or scope.get("path") != path.decode("ascii")
+                or scope.get("raw_path", path) != path or scope.get("query_string")):
+            await self._deny(send, 404, "proxy_sender_route_denied")
+            return
+        received = bytearray()
+        while True:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                return
+            if message["type"] != "http.request" or not isinstance(message.get("body"), bytes):
+                await self._deny(send, 400, "proxy_sender_request_invalid")
+                return
+            chunk = message["body"]
+            if len(received) + len(chunk) > 1024:
+                await self._deny(send, 413, "proxy_sender_request_too_large")
+                return
+            received.extend(chunk)
+            if not message.get("more_body", False):
+                break
+        try:
+            parsed = json.loads(received, object_pairs_hook=unique_object,
+                                parse_constant=reject_constant)
+            if not isinstance(parsed, dict) or set(parsed) != {"receipt_id"}:
+                raise ValueError("proxy_sender_fields_invalid")
+            receipt = FixedAuthorizerCall.model_validate_json(received).receipt_id
+        except (ValueError, TypeError):
+            await self._deny(send, 400, "proxy_sender_request_invalid")
+            return
+        try:
+            pin = await run_in_threadpool(self._sender.resolve_authorized_receipt, receipt)
+            if (not isinstance(pin, ProtectedReceiptSendPin) or pin.receipt_id != receipt
+                    or pin.send_owner != "protected-sender-" + receipt.hex):
+                raise ValueError("proxy_sender_pin_unavailable")
+        except Exception:
+            await self._deny(send, 503, "proxy_sender_pin_unverifiable")
+            return
+        response = ProtectedPinnedASGIResponse(
+            sender=self._sender, admission_id=pin.admission_id,
+            receipt_id=receipt, owner=pin.send_owner,
+            request_fingerprint=pin.request_fingerprint,
+            expected_transmission_deadline=pin.transmission_deadline,
+            expected_envelope=pin.envelope_bytes,
+        )
+        # 只要 start 訊息已嘗試交付，後續失敗便不能補送 HTTP 503；
+        # 底層 Response 將 Lease 標成 partial/unknown 並終止這條連線。
+        started = False
+
+        async def track_send(message):
+            """標記首個 HTTP start 是否已交付 ASGI server，禁止第二份回應。"""
+            nonlocal started
+            if message.get("type") == "http.response.start":
+                started = True
+            await send(message)
+
+        try:
+            await response(scope, receive, track_send)
+        except Exception:
+            if started:
+                raise
+            await self._deny(send, 503, "proxy_sender_delivery_unverifiable")
+
+
+def create_receipt_proxy_sender_candidate_app(*, sender) -> FastAPI:
+    """建立未裝載於正式 CLI 的 Receiver→Sender 原生回應隔離測試 App。
+
+    正式 create_sender_service() 仍只使用固定封閉 App；G5 及 G6 未驗收
+    前不存在可用環境變數或 HTTP 旗標來啟動這個新候選路由。
+    """
+    from deception.world.protected_send import PostgresProtectedSender
+
+    if not isinstance(sender, PostgresProtectedSender):
+        raise ProtectedRpcConfigurationError("proxy_sender_requires_protected_sender")
+    app = create_fixed_sender_app(sender=sender)
+    # Starlette Mount 只能匹配根下的子路徑；掛在固定前綴並由 ASGI 嚴格
+    # 檢查完整 path，可避免精確端點被 Starlette 改寫成 404/307。
+    app.mount("/internal/v1", _ReceiptOnlyProxySenderASGI(sender))
+    return app
+
+
 def create_direct_verifier_app(
     *, verifier, postgres_dsn: str, environment_id: str, deployment_id: str,
     expected_issuer: str, expected_audience: str,
