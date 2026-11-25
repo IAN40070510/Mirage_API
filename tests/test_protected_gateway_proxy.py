@@ -1,5 +1,6 @@
 """G4 隔離候選：Client→Gateway→Verifier／Sender 雙 mTLS 原生回應與拒絕鏈。"""
 
+import asyncio
 import hashlib
 import multiprocessing
 from pathlib import Path
@@ -16,7 +17,8 @@ from deception.api.fingerprint import fingerprint_request
 from deception.api.ingress import NormalizedRequest, normalize_request, resolve_request_id
 from deception.security.protected_gateway import (
     FixedGatewaySenderMTLSClient, FixedGatewayVerifierMTLSClient,
-    GatewayNativeProxyUnverifiable, create_gateway_native_proxy_candidate_app,
+    GatewayAuthorizedReceipt, GatewayNativeHTTP, GatewayNativeProxyUnverifiable,
+    create_gateway_native_proxy_candidate_app,
     serve_gateway_native_proxy_loopback_tls,
 )
 from deception.security.protected_rpc import (
@@ -229,6 +231,97 @@ def test_gateway_candidate_fails_closed_on_invalid_receipt_chain(tmp_path, monke
     assert response.status_code == 503
     assert response.json() == {"detail": "gateway_delivery_unverifiable"}
     assert attempts == []
+
+
+def test_gateway_client_disconnect_after_start_never_reinvokes_sender(tmp_path, monkeypatch):
+    """原生 Start 已交付後 Client 下游寫入失敗，Gateway 不補發第二次 Sender RPC。"""
+    (verifier, sender), _ = _gateway_clients(tmp_path, verifier_port=52407, sender_port=52408)
+    receipt = uuid4()
+    calls = []
+
+    async def verified(*_args):
+        """提供同一個已驗證不可變 Receipt，不讓 Caller 自填授權。"""
+        calls.append("verified")
+        return GatewayAuthorizedReceipt(receipt, "a" * 64)
+
+    async def emitted(pin):
+        """模擬 Sender 的一次性原生 bytes，不含任何可重起送介面。"""
+        assert pin.receipt_id == receipt
+        calls.append("sender-started-once")
+        return GatewayNativeHTTP(200, ((b"content-type", b"application/json"),), b'{"ok":true}')
+
+    monkeypatch.setattr(verifier, "verify_original", verified)
+    monkeypatch.setattr(sender, "emit_receipt_once", emitted)
+    app = create_gateway_native_proxy_candidate_app(
+        verifier_client=verifier, sender_client=sender)
+    messages = []
+
+    async def receive():
+        """一次性完整 GET HTTP Request，不含 Client 偽造的回應欄位。"""
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def disconnect_on_body(message):
+        """確認原生 Status 曾嘗試起送，然後在 Body 寫入時斷線。"""
+        messages.append(message)
+        if message["type"] == "http.response.body":
+            raise OSError("client disconnected")
+
+    scope = {
+        "type": "http", "http_version": "1.1", "method": "GET", "scheme": "https",
+        "path": "/store/carts", "raw_path": b"/store/carts", "query_string": b"",
+        "root_path": "", "server": ("client.example", 443), "client": ("127.0.0.1", 0),
+        "headers": [(b"host", b"client.example"), (b"x-request-id", b"req-disconnect"),
+                    (b"x-trusted-session", b"signed")],
+    }
+    with pytest.raises(OSError, match="client disconnected"):
+        asyncio.run(app(scope, receive, disconnect_on_body))
+    assert [message["type"] for message in messages] == [
+        "http.response.start", "http.response.body"]
+    assert calls == ["verified", "sender-started-once"]
+
+
+def test_gateway_real_mtls_native_business_503_is_not_internal_sender_503(tmp_path, monkeypatch):
+    """真 Sender 合法業務 503 能以 Hash 通過；後續內部 503 缺 Pin 必拒絕。"""
+    sender_port = _unused_local_port()
+    (_, sender), (_, sender_ca, _, sender_root) = _gateway_clients(
+        tmp_path, verifier_port=52409, sender_port=sender_port)
+    receipt = uuid4()
+    pg_sender, pin, _ = _candidate_sender(monkeypatch, receipt, status=503)
+    sender_app = create_receipt_proxy_sender_candidate_app(sender=pg_sender)
+    worker = multiprocessing.Process(target=serve_fixed_sender_mtls, kwargs={
+        "app": sender_app, "host": "127.0.0.1", "port": sender_port,
+        "server_cert": sender_root / "server.pem",
+        "server_key": sender_root / "server.key", "sender_client_ca": sender_ca,
+    })
+    worker.start()
+    try:
+        context = ssl.create_default_context(cafile=str(sender_ca))
+        context.load_cert_chain(str(sender_root / "client.pem"),
+                                str(sender_root / "client.key"))
+        with httpx.Client(verify=context, trust_env=False, timeout=1) as probe:
+            for _ in range(50):
+                try:
+                    probe.get(f"https://127.0.0.1:{sender_port}/internal/ready")
+                    break
+                except httpx.ConnectError:
+                    assert worker.is_alive()
+                    time.sleep(0.1)
+            else:
+                pytest.fail("native 503 Sender TLS listener did not start")
+        pinned = GatewayAuthorizedReceipt(receipt, hashlib.sha256(pin.envelope_bytes).hexdigest())
+        native = asyncio.run(sender.emit_receipt_once(pinned))
+        assert native.status_code == 503
+        assert native.raw_headers == ((b"content-type", b"application/json"),
+                                      (b"x-native-pin", b"yes"))
+        assert native.body == b'{"native":"preserved"}'
+        # 測試故意重播同 Receipt：第二份「內部 503」絕不可能碰巧符合原生 Hash。
+        with pytest.raises(GatewayNativeProxyUnverifiable, match="gateway_sender_hash_mismatch"):
+            asyncio.run(sender.emit_receipt_once(pinned))
+    finally:
+        worker.terminate()
+        worker.join(timeout=5)
+        if worker.is_alive():
+            worker.kill()
 
 
 def test_gateway_three_real_tls_hops_use_one_real_postgres_send_lease(
