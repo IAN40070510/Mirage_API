@@ -574,7 +574,10 @@ def test_receipt_only_authorizer_real_scram_least_privilege(isolated_test_dsn):
                 "GRANT SELECT ON protected_candidate_promotions,ingress_receipts,"
                 "projection_registry,session_heads,session_world_bindings,"
                 "generation_controls,trusted_key_revocations,projection_profile_revocations,"
-                "response_admissions,protected_grant_bindings TO {}"
+                "response_admissions,protected_grant_bindings,"
+                "protected_http_operation_bindings,protected_cart_creations,"
+                "guest_cart_creations,synthetic_resources,world_snapshots,"
+                "world_commit_receipts TO {}"
             ).format(identity))
             admin.execute(sql.SQL(
                 "GRANT INSERT ON response_admissions,protected_grant_bindings,"
