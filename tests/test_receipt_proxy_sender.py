@@ -4,13 +4,18 @@ import asyncio
 from contextlib import nullcontext
 import hashlib
 import json
+import multiprocessing
+from pathlib import Path
+import ssl
 import time
 from uuid import UUID, uuid4
 
 import pytest
+import httpx
 from fastapi.testclient import TestClient
 
-from deception.security.protected_rpc import create_receipt_proxy_sender_candidate_app
+from deception.security.protected_rpc import (create_receipt_proxy_sender_candidate_app,
+                                               serve_fixed_sender_mtls)
 from deception.world import (AdmissionOperationResult, AdmissionState,
                              PostgresProtectedAuthorizer, PostgresProtectedSender,
                              ProtectedSendLease)
@@ -18,6 +23,7 @@ from deception.world.protected_send import ProtectedReceiptSendPin
 from deception.world.transmission import response_envelope
 from test_postgres_conformance import isolated_test_dsn
 from test_protected_grant import _login, _promote, _seed
+from test_protected_rpc_mtls import _issue_mtls_certificates, _unused_local_port
 
 
 def _candidate_sender(monkeypatch, receipt_id: UUID, *, status: int = 409):
@@ -139,6 +145,53 @@ def test_proxy_candidate_unknown_commit_never_retries_or_emits_native_bytes(monk
     assert result.status_code == 503
     assert result.json() == {"detail": "proxy_sender_delivery_unverifiable"}
     assert state["starts"] == 1 and state["finishes"] == []
+
+
+def test_proxy_candidate_real_mtls_required_for_native_response(monkeypatch, tmp_path: Path):
+    """真 TLS handshake 只允許專用 CA Client；匿名連線無法取得 Sender 原生 bytes。"""
+    ca, cert, key, client_cert, client_key = _issue_mtls_certificates(tmp_path)
+    receipt = uuid4()
+    sender, _, state = _candidate_sender(monkeypatch, receipt)
+    app = create_receipt_proxy_sender_candidate_app(sender=sender)
+    port = _unused_local_port()
+    worker = multiprocessing.Process(target=serve_fixed_sender_mtls, kwargs={
+        "app": app, "host": "127.0.0.1", "port": port,
+        "server_cert": cert, "server_key": key, "sender_client_ca": ca,
+    })
+    worker.start()
+    try:
+        context = ssl.create_default_context(cafile=str(ca))
+        context.load_cert_chain(str(client_cert), str(client_key))
+        with httpx.Client(verify=context, trust_env=False, timeout=2) as trusted:
+            for _ in range(50):
+                try:
+                    response = trusted.post(f"https://127.0.0.1:{port}/internal/v1/emit-receipt",
+                                            json={"receipt_id": str(receipt)})
+                    break
+                except httpx.ConnectError:
+                    assert worker.is_alive(), "sender TLS worker terminated"
+                    time.sleep(0.1)
+            else:
+                pytest.fail("candidate sender mTLS listener did not start")
+            assert response.status_code == 409
+            assert response.content == b'{"native":"preserved"}'
+            assert response.headers["x-native-pin"] == "yes"
+            repeat = trusted.post(f"https://127.0.0.1:{port}/internal/v1/emit-receipt",
+                                  json={"receipt_id": str(receipt)})
+            assert repeat.status_code == 503
+        anonymous = ssl.create_default_context(cafile=str(ca))
+        with httpx.Client(verify=anonymous, trust_env=False, timeout=2) as client:
+            with pytest.raises(httpx.TransportError):
+                client.post(f"https://127.0.0.1:{port}/internal/v1/emit-receipt",
+                            json={"receipt_id": str(receipt)})
+        # Forked worker 的 Lease state 只存在於子程序，不拿父程序 counter 當證據。
+        assert state["starts"] == 0
+    finally:
+        worker.terminate()
+        worker.join(timeout=5)
+        if worker.is_alive():
+            worker.kill()
+            worker.join(timeout=5)
 
 
 def test_proxy_candidate_partial_transport_failure_never_emits_second_start(monkeypatch):
