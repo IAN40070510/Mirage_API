@@ -492,6 +492,16 @@ Creator→Derived Creation Source `SELECT` 都必須在啟動前拒絕；
 這是**單主機拋棄式 PG Schema 的隔離角色驗收**，不是正式 Docker
 Secret Mount／網路來源／正式 Release Fuse PASS。
 
+**C-03 真併行 CAS 候選**：`tests/test_g6_cart_full_real_chain.py` 在
+另一個真 Creator→Derived Cart 的相同版本 1，同時提交兩張不同
+JWS／JTI／Receipt／Commit Attempt 的有效加購請求。唯一合法勝者
+取得原生 Client 200／世界版本 2，失敗方只能回固定 503；真 PG
+`world_operations`／`protected_world_commit_sources` 對這兩個 Attempt
+都只能有一筆，`protected_candidate_promotions`／
+`protected_send_leases` 不能產生第二份授權發送。兩張原始 JWS
+再使用均須拒絕，獨立 GET 重建的 Cart 必須等於唯一勝者；這是
+單一隔離競態子項，不代表其他 CAS／網路抖動／壓力矩陣結案。
+
 ## 安全簽收門檻
 
 1. **入口拓樸**：Gateway 以獨立 CA／Client Certificate 直連 Verifier，

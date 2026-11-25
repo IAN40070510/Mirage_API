@@ -19,6 +19,8 @@
 
 `7ada6fd` 三平台固定 SHA ARM64 合併回歸：`job_01M8939FXM001KK15ZBTSGNCTK`、**30 passed**、JUnit `/tmp/mirage-g3b-g6-20261125.AsFBoE/g3b-all20-exact-7ada6fd.xml`；I/C/M 共 34 個指定原生回應、相互隔離的短期 JWS／PG Promotion／Send Lease 與逐筆 Replay 拒絕。G5 標準單機獨立回歸：`job_01M893DRJW00Z7GF0MPMZR6H75`、**53 passed**、JUnit `/tmp/mirage-g3b-g6-20261125.AsFBoE/g5-standard-roles-exact-7ada6fd.xml`。兩者均只在可拋棄 PostgreSQL／loopback TLS Lab 驗證，詳見[標準單機驗收表](security/world-db/single-node-restore-profiles.md)，所有全域 Release Gate 仍 NO-GO。
 
+`1f8e62fe6667f566a40bcbe8c806429998377426` 七個獨立實體 SCRAM Login 的精確版本：ARM64 `job_01M8953AMR00TSERDB5NXY5VA7` **127 passed**、G5 `job_01M8955K0M00RTNRA0C2F9V3VW` **37 passed**，GitHub Python 全套 **1555 passed／14 skipped**，World DB／四服務／容器 CI 全部成功，參見 [#34 驗收索引](https://github.com/IAN40070510/Mirage_API/pull/34#issuecomment-7160311938)。本輪再新增 C-03 同版雙 JWS 並行寫入真七 TLS／PG 的候選負面試驗：只允許一筆 World Commit／Client 200，另一筆固定 503，並驗證沒有第二次可發送 Lease；正式矩陣的其他 CAS／斷線／復原案例仍 OPEN。
+
 ## 已實作範圍
 
 | 階段 | 可使用能力 | 驗收邊界 |

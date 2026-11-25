@@ -4,6 +4,8 @@ import json
 import multiprocessing
 import ssl
 import time
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from uuid import uuid4
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -45,7 +47,7 @@ from test_protected_rpc_mtls import _issue_mtls_certificates, _unused_local_port
 
 def test_g6_cart_order_nine_native_routes_seven_tls_and_replay(
         tmp_path, request, isolated_test_dsn):
-    """C-01～C-09 真 Client 200／業務 409、逐筆 Replay 拒絕及不可重複 Lease。"""
+    """C-01～C-09 真 Client 200／409、Replay／Lease 與雙 JWS 同版 CAS 競態。"""
     dsn = isolated_test_dsn
     now = int(time.time())
     initial = {
@@ -289,22 +291,87 @@ def test_g6_cart_order_nine_native_routes_seven_tls_and_replay(
                 code="order_not_cancellable", body=mutation(7, "order-cancel-again"),
             ) == {"code": "order_not_cancellable"}
 
-        assert len(jtids) == 16
+            # G6 並行：兩張各自合法的 JWS 對同一 Derived Cart 版本寫入，
+            # PostgreSQL 僅能提交一個 World Operation，失敗一方不能獲得
+            # Candidate Promotion／Send Lease，也不能以 Replay 再試一次。
+            race_created = native("POST", "/synthetic/carts", body={})
+            race_cart_id = race_created["cart"]["id"]
+            race_cart = world.resource_binding(
+                race_cart_id, environment_id="env", deployment_id="deploy",
+                now=int(time.time()),
+            )
+            race_path = "/synthetic/carts/" + race_cart_id
+            race_attempts = [str(uuid4()), str(uuid4())]
+            race_requests = [
+                _g6_signed_client_request(
+                    client, signer, gateway_port, method="POST",
+                    path=race_path + "/line-items",
+                    request_id="g6-cart-concurrent-" + str(index),
+                    body={
+                        "variant_id": "v1", "quantity": 1, "expected_version": 1,
+                        "idempotency_key": "g6-concurrent-" + str(index),
+                        "commit_attempt_id": attempt,
+                    },
+                    access_mode="cart", session_id=race_cart.session_id,
+                    resource_id=race_cart.resource_id,
+                )
+                for index, attempt in enumerate(race_attempts)
+            ]
+            barrier = Barrier(2)
+
+            def send_race(prepared):
+                """同時釋放兩個合法 Client HTTPS 傳輸，觀察真 PG CAS 勝負。"""
+                barrier.wait(timeout=10)
+                return client.send(prepared[0])
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                race_responses = list(pool.map(send_race, race_requests))
+            assert sorted(reply.status_code for reply in race_responses) == [200, 503], (
+                [(reply.status_code, reply.text) for reply in race_responses],
+                _g6_stage_counts(dsn),
+            )
+            winner = next(reply for reply in race_responses if reply.status_code == 200)
+            loser = next(reply for reply in race_responses if reply.status_code == 503)
+            assert winner.json()["state_version"] == 2
+            assert len(winner.json()["cart"]["items"]) == 1
+            assert loser.json() == {"detail": "gateway_delivery_unverifiable"}
+            for prepared, _ in race_requests:
+                replay = client.send(prepared)
+                assert replay.status_code == 503
+                assert replay.json() == {"detail": "gateway_delivery_unverifiable"}
+            after_race = native("GET", race_path, binding=race_cart)
+            assert after_race["state_version"] == 2
+            assert after_race["cart"]["items"] == winner.json()["cart"]["items"]
+
+        assert len(jtids) == 18
         with psycopg.connect(dsn) as connection:
             assert connection.execute(
                 "SELECT count(*) FROM replay_entries WHERE jti=ANY(%s)",
                 (jtids,),
-            ).fetchone() == (16,)
+            ).fetchone() == (18,)
             assert connection.execute(
                 "SELECT count(*) FROM ingress_receipts WHERE jti=ANY(%s)",
                 (jtids,),
-            ).fetchone() == (16,)
+            ).fetchone() == (18,)
+            assert connection.execute(
+                "SELECT count(*) FROM replay_entries WHERE jti=ANY(%s)",
+                ([jti for _, jti in race_requests],),
+            ).fetchone() == (2,)
+            assert connection.execute(
+                "SELECT count(*) FROM world_operations WHERE commit_attempt_id=ANY(%s)",
+                (race_attempts,),
+            ).fetchone() == (1,)
+            assert connection.execute(
+                "SELECT count(*) FROM protected_world_commit_sources "
+                "WHERE commit_attempt_id=ANY(%s)",
+                (race_attempts,),
+            ).fetchone() == (1,)
             assert connection.execute(
                 "SELECT count(*) FROM protected_candidate_promotions",
-            ).fetchone() == (16,)
+            ).fetchone() == (19,)
             assert connection.execute(
                 "SELECT count(*) FROM protected_send_leases",
-            ).fetchone() == (16,)
+            ).fetchone() == (19,)
     finally:
         for worker in workers:
             if worker.pid is not None:
