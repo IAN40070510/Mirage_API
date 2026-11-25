@@ -4,9 +4,11 @@ on:
   push:
     branches:
       - fix/mir-sec-world-001-resume-20261122
+      - fix/g5-fence-authority-scope-pin-20261125
   pull_request:
     branches:
       - fix/mir-sec-world-001-resume-20261122
+      - fix/g3b-g4-staging-integration-20261125
     paths:
       - .github/workflows/g3b-four-service-isolated.yml
       - deploy/security-lab/**
@@ -147,3 +149,10 @@ jobs:
           docker network rm mirage-g3b-gateway-net || true
           docker network rm mirage-g3b-execution-net || true
           docker network rm mirage-g3b-database-net || true
+          # 單次 runner 的測試憑證／SCRAM secrets 在容器銷毀後一併清除。
+          if [ -n "${G3B_LAB_ROOT:-}" ] && [ -d "$G3B_LAB_ROOT" ]; then
+            case "$G3B_LAB_ROOT" in
+              /tmp/tmp.*) find "$G3B_LAB_ROOT" -depth -delete ;;
+              *) echo 'G3B_LAB_SECRET_ROOT_UNEXPECTED: refusing cleanup' >&2; exit 1 ;;
+            esac
+          fi

@@ -218,6 +218,10 @@ Authorizer 啟動 preflight 驗證專屬物理 Login、固定 Schema、禁止跨
 以及 `generation_controls.control_revision` 和 Admission 必需欄位的 column-only
 UPDATE。此新增服務仍待真 SCRAM／網路隔離與正式 Client HTTP 端到端驗收；
 它**只授權 Snapshot，不傳輸 HTTP bytes**，Sender Release Fuse 保持關閉。
+隔離 G4 測試額外覆蓋一次性 SCRAM Login 以 `claim_revision` 等四個 Admission
+欄位級 UPDATE 完成 Grant→Claim→Authorize；不得 SELECT 已授權 Snapshot bytes，
+也有真 TLS 握手檢查無 Client Cert、不同 CA 及偽造 Candidate/Deadline 的拒絕。
+這些測試僅證明 Authorizer 邊界，尚不是 Verifier→Authorizer→Sender 端到端。
 
 G4 Sender（只准隔離部署；不屬於 G3b 四容器拓樸）專用：
 

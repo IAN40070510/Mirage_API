@@ -6,14 +6,17 @@ import socket
 import ssl
 import subprocess
 import time
+from uuid import uuid4
 
 import httpx
 import pytest
 
 from deception.security.protected_rpc import (
-    ProtectedRpcConfigurationError, create_direct_verifier_app, create_fixed_executor_app,
+    FixedAuthorizerMTLSClient, ProtectedRpcConfigurationError,
+    create_direct_verifier_app, create_fixed_authorizer_app, create_fixed_executor_app,
     create_fixed_sender_app, create_sealed_app, require_mtls_files,
-    serve_direct_verifier_mtls, serve_fixed_executor_mtls, serve_fixed_sender_mtls,
+    serve_direct_verifier_mtls, serve_fixed_authorizer_mtls,
+    serve_fixed_executor_mtls, serve_fixed_sender_mtls,
     serve_sealed_mtls,
 )
 
@@ -166,6 +169,73 @@ def test_g4_sender_real_mtls_is_credential_isolated_and_never_starts_send(tmp_pa
         with httpx.Client(verify=wrong_identity, trust_env=False, timeout=2.0) as stranger:
             with pytest.raises(httpx.TransportError):
                 stranger.post(f"https://127.0.0.1:{port}/internal/v1/send", json={})
+    finally:
+        worker.terminate()
+        worker.join(timeout=5)
+        if worker.is_alive():
+            worker.kill()
+            worker.join(timeout=5)
+
+
+def test_g4_authorizer_real_mtls_rejects_anonymous_and_client_forgery(tmp_path):
+    """真正 TLS Client Cert 必要；Receipt-only Authorizer 不接受候選欄位或不存在的 DB。"""
+    import asyncio
+    from deception.world.protected_grant import PostgresProtectedAuthorizer
+
+    ca, server_cert, server_key, client_cert, client_key = _issue_mtls_certificates(tmp_path)
+    app = create_fixed_authorizer_app(authorizer=PostgresProtectedAuthorizer(
+        "postgresql://unused.invalid/g4", expected_login="authorizer_only"))
+    port = _unused_local_port()
+    worker = multiprocessing.Process(target=serve_fixed_authorizer_mtls, kwargs={
+        "app": app, "host": "127.0.0.1", "port": port,
+        "server_cert": server_cert, "server_key": server_key,
+        "verifier_client_ca": ca,
+    })
+    worker.start()
+    try:
+        context = ssl.create_default_context(cafile=str(ca))
+        context.load_cert_chain(str(client_cert), str(client_key))
+        with httpx.Client(verify=context, trust_env=False, timeout=2.0) as trusted:
+            for _ in range(50):
+                try:
+                    ready = trusted.get(f"https://127.0.0.1:{port}/internal/ready")
+                    break
+                except httpx.ConnectError:
+                    if not worker.is_alive():
+                        pytest.fail("Authorizer mTLS listener stopped during startup")
+                    time.sleep(0.1)
+            else:
+                pytest.fail("Authorizer mTLS listener failed to start")
+            assert ready.json() == {"control_plane": "authorizer-receipt-only",
+                                    "trusted_send": "disabled"}
+            receipt = uuid4()
+            for body in ({"receipt_id": str(receipt), "candidate_ref": "forged"},
+                         {"receipt_id": str(receipt), "deadline": 9999999999},
+                         {"receipt_id": "invalid"}):
+                response = trusted.post(f"https://127.0.0.1:{port}/internal/v1/authorize-receipt",
+                                        json=body)
+                assert response.status_code == 400
+            # 只有真正 DB/Grant 可核准；此 mTLS 身分存在不等於能自創 Admission。
+            assert trusted.post(f"https://127.0.0.1:{port}/internal/v1/authorize-receipt",
+                                json={"receipt_id": str(receipt)}).status_code == 503
+        with httpx.Client(verify=ssl.create_default_context(cafile=str(ca)),
+                          trust_env=False, timeout=2.0) as anonymous:
+            with pytest.raises(httpx.TransportError):
+                anonymous.get(f"https://127.0.0.1:{port}/internal/ready")
+        foreign_dir = tmp_path / "foreign-authorizer"
+        foreign_dir.mkdir()
+        _, _, _, foreign_cert, foreign_key = _issue_mtls_certificates(foreign_dir)
+        wrong_context = ssl.create_default_context(cafile=str(ca))
+        wrong_context.load_cert_chain(str(foreign_cert), str(foreign_key))
+        with httpx.Client(verify=wrong_context, trust_env=False, timeout=2.0) as foreign:
+            with pytest.raises(httpx.TransportError):
+                foreign.get(f"https://127.0.0.1:{port}/internal/ready")
+        client = FixedAuthorizerMTLSClient(
+            origin=f"https://127.0.0.1:{port}", client_cert=client_cert,
+            client_key=client_key, server_ca=ca,
+        )
+        with pytest.raises(ProtectedRpcConfigurationError, match="result_unverifiable"):
+            asyncio.run(client.authorize_receipt(uuid4()))
     finally:
         worker.terminate()
         worker.join(timeout=5)

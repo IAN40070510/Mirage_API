@@ -1464,7 +1464,9 @@ def create_fixed_authorizer_app(*, authorizer) -> FastAPI:
                               parse_constant=reject_constant)
             if not isinstance(data, dict) or set(data) != {"receipt_id"}:
                 raise ValueError("fixed_authorizer_fields_invalid")
-            call = FixedAuthorizerCall.model_validate(data)
+            # SyntheticModel 的 strict UUID4 不接受 Python str 隱式轉型；
+            # 在獨立 JSON 重複鍵檢查後，使用 JSON 模式解析線上 UUID 字串。
+            call = FixedAuthorizerCall.model_validate_json(body)
         except (ValueError, TypeError) as exc:
             raise HTTPException(status_code=400, detail="fixed_authorizer_rpc_invalid") from exc
         try:
