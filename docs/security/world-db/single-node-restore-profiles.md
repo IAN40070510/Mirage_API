@@ -93,7 +93,7 @@ Synthetic Cart/Order and Medusa; its JUnit is
 
 | Gate | Isolated evidence status | Still required for formal acceptance |
 | --- | --- | --- |
-| SINGLE-NODE-01 | **PARTIAL PASS** — 20 routes have specified Client HTTP/PG subcases with no external Fence | Complete 2xx/4xx matrix and actual formal single-node startup/services without lab-only components |
+| SINGLE-NODE-01 | **PARTIAL PASS** — 20 routes have specified Client HTTP/PG subcases with no external Fence；另有 D-74 原生 Compose 的**真正 PostgreSQL** 容器／卷啟動、重啟、無外部 Port 及清理子案 | Complete 2xx/4xx matrix and actual formal single-node startup of all protected roles without lab-only components |
 | SINGLE-NODE-02 | **PARTIAL PASS** — true SCRAM negative ACL, unique Send Lease, ASGI partial/unknown cases and four-service CI | All seven deployed services with independent physical logins, secret mounts, strict ingress network and client transport |
 | SINGLE-NODE-03 | **PARTIAL PASS** — local restore marker, immutable DB trigger, mixed legacy Sender SQL and Send/Purge serialization | Real restored-system bootstrap/DB rollback and snapshot reconciliation/GC under release policy; no blind rearming |
 | SINGLE-NODE-04 | **PARTIAL PASS** — profile parser accepts no-Fence mode and live isolated native paths function without it | Formal production-like all-service boot, full feature matrix and explicit `whole_host_rollback_guarantee=false` deployment report |
@@ -104,6 +104,24 @@ Synthetic Cart/Order and Medusa; its JUnit is
 local PostgreSQL tests cannot prove an undetected whole-host snapshot rollback,
 and an accepted standard profile must explicitly disclose that limitation.
 The production release fuse, Trusted Send and DECEIVE remain OFF.
+
+**2026-11-26 D-74 真 Compose PostgreSQL 子項驗收（未結案）：**
+Draft PR #34 的固定 SHA `fa0b28b0dffd14c6f96a00689d20e0df9e7f8e5e`
+在專用 ARM64 `161.33.154.211` 使用獨立隨機 Compose 專案執行
+`tests/test_single_node_lifecycle.py`；由真正
+`deploy/single-node/compose.yaml` 啟動 PG17，確認正確 DB Login、
+僅內部 Database 網路、Host Port 不存在、專案 World Volume、
+SQL 寫入後重啟依舊存在、隨機專案卷及容器清理乾淨。
+同一 SHA 的 G5／角色／Compose 回歸
+`job_01M8AFW8AY00XFB7ZX34AE7YT5` **158 passed**，
+七 TLS 真 Client／PG 回歸
+`job_01M8AFZVBW00FSHSVXCQJY4YCJ` **3 passed**；
+JUnit 分別為
+`/tmp/mirage-g3b-g6-20261125.AsFBoE/g5-compose-exact-fa0b28b.xml`
+及 `g3b-g6-7tls-exact-fa0b28b.xml`。
+**此一真 DB 子項不等於九容器共同啟動**，沒有正式 SCRAM Secret
+配發、全部來源 HTTP 錯誤或線路故障證據，且需要明確拋棄式
+Docker opt-in；SINGLE-NODE-01～06 和 G3b～G6 全體仍 **NO-GO**。
 
 ### 2026-11-25 G5 actual PostgreSQL restore experiment — bounded evidence
 

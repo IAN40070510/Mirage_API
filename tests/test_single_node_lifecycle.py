@@ -156,19 +156,23 @@ def test_true_disposable_compose_postgres_lifecycle_without_external_fence(tmp_p
         ], environment=env).decode("ascii").strip()
         assert persisted == "73", "single_node_isolated_world_volume_not_persistent"
     finally:
-        if created:
-            # 唯一清理本次建立的亂數專案／Docker Compose 專屬 named volume。
-            subprocess.run(
-                [*base, "down", "--volumes", "--remove-orphans"],
-                env=env, capture_output=True, check=False, timeout=90,
-            )
-        # 測試 Secret 是 owner 唯讀；不要嘗試用原權限覆寫它。
-        secret.unlink()
-    if created:
-        assert not _command([
-            DOCKER_BIN, "ps", "-aq", "--filter", "label=com.docker.compose.project=" + project,
-        ]).strip()
-        assert not _command([
-            DOCKER_BIN, "volume", "ls", "-q", "--filter",
-            "label=com.docker.compose.project=" + project,
-        ]).strip()
+        try:
+            if created:
+                # 任何前面斷言失敗都必須清理本次亂數專案；失敗不得默默略過。
+                _command([*base, "down", "--volumes", "--remove-orphans"],
+                         environment=env, timeout=90)
+                assert not _command([
+                    DOCKER_BIN, "ps", "-aq", "--filter",
+                    "label=com.docker.compose.project=" + project,
+                ]).strip(), "single_node_isolated_container_cleanup_incomplete"
+                assert not _command([
+                    DOCKER_BIN, "volume", "ls", "-q", "--filter",
+                    "label=com.docker.compose.project=" + project,
+                ]).strip(), "single_node_isolated_volume_cleanup_incomplete"
+                assert not _command([
+                    DOCKER_BIN, "network", "ls", "-q", "--filter",
+                    "label=com.docker.compose.project=" + project,
+                ]).strip(), "single_node_isolated_network_cleanup_incomplete"
+        finally:
+            # 測試 Secret 是 owner 唯讀；不要嘗試用原權限覆寫它。
+            secret.unlink()
