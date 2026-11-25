@@ -178,7 +178,8 @@ def test_g6_full_real_jws_seven_tls_hops_native_http_and_replay(
     signer_key = Ed25519PrivateKey.generate()
     endpoint_specs = (
         ("executor", create_fixed_executor_app(executor=PostgresProtectedWorldExecutor(
-            dsn, expected_login=login, world_store=world)),
+            dsn, expected_login=login, world_store=world,
+            rejection_templates={"unknown_synthetic_sku": "synthetic-inventory-1"})),
          serve_fixed_executor_mtls, "verifier_client_ca"),
         ("validator", create_native_validator_app(projector=projector),
          serve_native_validator_mtls, "verifier_client_ca"),
@@ -259,19 +260,39 @@ def test_g6_full_real_jws_seven_tls_hops_native_http_and_replay(
             assert duplicate.status_code == 503
             assert duplicate.json() == {"detail": "gateway_delivery_unverifiable"}
             assert b"available" not in duplicate.content
+            # I-04 真業務 409 必須走同一條獨立投影→Grant→Sender，不能由 Gateway 造錯誤。
+            missing = client.build_request(
+                "GET", f"https://127.0.0.1:{gateway_port}/synthetic/inventory/not-in-world",
+                headers={"x-request-id": "g6-real-jws-native-409"},
+            )
+            missing_jti = uuid4().hex
+            missing.headers["x-trusted-session"] = signed(
+                signer_key, jti=missing_jti,
+                fingerprint=fingerprint_httpx_request(missing, "g6-real-jws-native-409"),
+                access_mode="inventory",
+            )
+            missing_native = client.send(missing)
+            assert missing_native.status_code == 409, missing_native.text
+            assert missing_native.content == b'{"code":"unknown_synthetic_sku"}'
+            assert missing_native.headers["content-type"] == "application/json"
+            missing_replay = client.send(missing)
+            assert missing_replay.status_code == 503
+            assert missing_replay.json() == {"detail": "gateway_delivery_unverifiable"}
         with psycopg.connect(dsn) as connection:
             assert connection.execute(
-                "SELECT count(*) FROM replay_entries WHERE jti=%s", (jti,)
-            ).fetchone() == (1,)
+                "SELECT count(*) FROM replay_entries WHERE jti IN (%s,%s)",
+                (jti, missing_jti),
+            ).fetchone() == (2,)
             assert connection.execute(
-                "SELECT count(*) FROM ingress_receipts WHERE jti=%s", (jti,)
-            ).fetchone() == (1,)
+                "SELECT count(*) FROM ingress_receipts WHERE jti IN (%s,%s)",
+                (jti, missing_jti),
+            ).fetchone() == (2,)
             assert connection.execute(
                 "SELECT count(*) FROM protected_candidate_promotions"
-            ).fetchone() == (1,)
+            ).fetchone() == (2,)
             assert connection.execute(
                 "SELECT count(*) FROM protected_send_leases"
-            ).fetchone() == (1,)
+            ).fetchone() == (2,)
     finally:
         for worker in workers:
             if worker.pid is not None:
