@@ -56,7 +56,7 @@ def test_g3b_cart_creation_validator_rejects_cross_scope_and_forged_projection(m
 
         async def post(self, url, *, json):
             """Caller 不得選擇 Response Body 或源 Scope。"""
-            assert url == "https://validator.invalid:8445/internal/v1/project-cart-creation"
+            assert url == "https://validator.invalid:8445/internal/v1/project-receipt"
             assert json == {"receipt_id": str(receipt)}
             return httpx.Response(200, json=projection)
 
@@ -692,7 +692,7 @@ def test_g3b_cart_order_read_200_validator_rejects_forged_native_payloads(monkey
 
         async def post(self, url, *, json):
             """唯讀 Validator 只接受受保護 Receipt，不接受狀態或 Body 選擇。"""
-            assert url == "https://validator.invalid:8445/internal/v1/project-cart-read"
+            assert url == "https://validator.invalid:8445/internal/v1/project-receipt"
             assert json == {"receipt_id": str(receipt)}
             return httpx.Response(200, json=projection)
 
@@ -791,7 +791,7 @@ def test_g3b_cart_operation_validator_binds_historical_entity_to_requested_cart(
 
         async def post(self, url, *, json):
             """只允許以 Receipt 查核，不讓 Client 選擇歷史 Response。"""
-            assert url == "https://validator.invalid:8445/internal/v1/project-cart-read"
+            assert url == "https://validator.invalid:8445/internal/v1/project-receipt"
             assert json == {"receipt_id": str(receipt)}
             return httpx.Response(200, json=projected)
 
@@ -894,7 +894,7 @@ def test_g3b_inventory_200_validator_handoff_rejects_modified_world_bytes(monkey
 
         async def post(self, url, *, json):
             """Validator 僅收 Receipt，禁止 Caller 自選 SKU 或 Response Body。"""
-            assert url == "https://validator.invalid:8445/internal/v1/project-inventory-snapshot"
+            assert url == "https://validator.invalid:8445/internal/v1/project-receipt"
             assert json == {"receipt_id": str(receipt)}
             return httpx.Response(200, json=projected)
 
@@ -1011,7 +1011,7 @@ def test_g3b_inventory_operation_200_validator_rejects_forged_history(monkeypatc
 
         async def post(self, url, *, json):
             """驗證 RPC 僅傳 Receipt，絕不從 Verifier 帶入 Body／Status。"""
-            assert url == "https://validator.invalid:8445/internal/v1/project-inventory-operation"
+            assert url == "https://validator.invalid:8445/internal/v1/project-receipt"
             assert json == {"receipt_id": str(receipt)}
             return httpx.Response(200, json=projected)
 
@@ -1090,7 +1090,7 @@ def test_g3b_independent_synthetic_409_handoff_denies_candidate_rebinding(
 
         async def post(self, url, *, json):
             """驗證唯一 Receipt 輸入，不接受 Runtime 傳入偽造來源。"""
-            assert url == "https://validator.invalid:8445/internal/v1/project-synthetic-rejection"
+            assert url == "https://validator.invalid:8445/internal/v1/project-receipt"
             assert json == {"receipt_id": str(receipt)}
             return httpx.Response(200, json=projected)
 
@@ -1162,7 +1162,7 @@ def test_g3b_validator_handoff_preserves_native_status_headers_and_body(
 
         async def post(self, url, *, json):
             """核對 RPC 只傳 Receipt，不容許自選 Template 或 Scope。"""
-            assert url == "https://validator.invalid:8445/internal/v1/project-medusa-rejection"
+            assert url == "https://validator.invalid:8445/internal/v1/project-receipt"
             assert json == {"receipt_id": str(receipt)}
             return httpx.Response(200, json=projected)
 
@@ -1270,7 +1270,7 @@ def test_g3b_medusa_add_validator_handoff_rejects_rebound_commit(monkeypatch):
 
         async def post(self, url, *, json):
             """唯一 RPC 輸入是 Receipt，不能帶 Body／Status／來源選擇。"""
-            assert url == "https://validator.invalid:8445/internal/v1/project-medusa-add-success"
+            assert url == "https://validator.invalid:8445/internal/v1/project-receipt"
             assert json == {"receipt_id": str(receipt)}
             return httpx.Response(200, json=projected)
 
@@ -1344,7 +1344,7 @@ def test_g3b_medusa_delete_validator_requires_exact_deleted_item_and_commit(monk
 
         async def post(self, url, *, json):
             """只以 Receipt 查詢，不接受任意 Payload。"""
-            assert url == "https://validator.invalid:8445/internal/v1/project-medusa-add-success"
+            assert url == "https://validator.invalid:8445/internal/v1/project-receipt"
             assert json == {"receipt_id": str(receipt)}
             return httpx.Response(200, json=projected)
 
@@ -1432,7 +1432,7 @@ def test_g3b_medusa_complete_validator_denies_unverified_order(monkeypatch):
 
         async def post(self, url, *, json):
             """Caller 只可指定受保護 Receipt。"""
-            assert url == "https://validator.invalid:8445/internal/v1/project-medusa-add-success"
+            assert url == "https://validator.invalid:8445/internal/v1/project-receipt"
             assert json == {"receipt_id": str(receipt)}
             return httpx.Response(200, json=projected)
 
@@ -1777,7 +1777,7 @@ def test_g3b_medusa_read_validator_rejects_rebound_native_200(
 
         async def post(self, url, *, json):
             """只容許 Receipt，拒絕 Caller 提供 Body／Status 或 Scope。"""
-            assert url == "https://validator.invalid:8445/internal/v1/project-medusa-read"
+            assert url == "https://validator.invalid:8445/internal/v1/project-receipt"
             assert json == {"receipt_id": str(receipt)}
             return httpx.Response(200, json=reply)
 
@@ -1874,7 +1874,7 @@ def test_g3b_medusa_creation_validator_denies_scope_and_source_rebind(monkeypatc
 
         async def post(self, url, *, json):
             """RPC 不准由 Verifier 選擇原生回應內容。"""
-            assert url == "https://validator.invalid:8445/internal/v1/project-medusa-creation"
+            assert url == "https://validator.invalid:8445/internal/v1/project-receipt"
             assert json == {"receipt_id": str(receipt)}
             return httpx.Response(200, json=reply)
 

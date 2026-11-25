@@ -347,7 +347,7 @@ class FixedNativeValidatorMTLSClient:
             raise ProtectedRpcConfigurationError("cart_creation_operation_unapproved")
         async with httpx.AsyncClient(verify=self._tls, trust_env=False, timeout=8.0) as client:
             response = await client.post(
-                self._origin + "/internal/v1/project-cart-creation",
+                self._origin + "/internal/v1/project-receipt",
                 json={"receipt_id": str(receipt_id)},
             )
         if response.status_code != 200:
@@ -434,7 +434,7 @@ class FixedNativeValidatorMTLSClient:
             raise ProtectedRpcConfigurationError("medusa_creation_operation_unapproved")
         async with httpx.AsyncClient(verify=self._tls, trust_env=False, timeout=8.0) as client:
             response = await client.post(
-                self._origin + "/internal/v1/project-medusa-creation",
+                self._origin + "/internal/v1/project-receipt",
                 json={"receipt_id": str(receipt_id)},
             )
         if response.status_code != 200:
@@ -536,7 +536,7 @@ class FixedNativeValidatorMTLSClient:
             raise ProtectedRpcConfigurationError("cart_validator_unexpected_attempt")
         async with httpx.AsyncClient(verify=self._tls, trust_env=False, timeout=8.0) as client:
             response = await client.post(
-                self._origin + "/internal/v1/project-cart-read",
+                self._origin + "/internal/v1/project-receipt",
                 json={"receipt_id": str(receipt_id)},
             )
         if response.status_code != 200:
@@ -649,7 +649,7 @@ class FixedNativeValidatorMTLSClient:
             raise ProtectedRpcConfigurationError("medusa_validator_operation_unapproved")
         async with httpx.AsyncClient(verify=self._tls, trust_env=False, timeout=8.0) as client:
             response = await client.post(
-                self._origin + "/internal/v1/project-medusa-read",
+                self._origin + "/internal/v1/project-receipt",
                 json={"receipt_id": str(receipt_id)},
             )
         if response.status_code != 200:
@@ -737,7 +737,7 @@ class FixedNativeValidatorMTLSClient:
             raise ProtectedRpcConfigurationError("medusa_add_validator_operation_unapproved")
         async with httpx.AsyncClient(verify=self._tls, trust_env=False, timeout=8.0) as client:
             response = await client.post(
-                self._origin + "/internal/v1/project-medusa-add-success",
+                self._origin + "/internal/v1/project-receipt",
                 json={"receipt_id": str(receipt_id)},
             )
         if response.status_code != 200:
@@ -827,7 +827,7 @@ class FixedNativeValidatorMTLSClient:
 
         async with httpx.AsyncClient(verify=self._tls, trust_env=False, timeout=8.0) as client:
             response = await client.post(
-                self._origin + "/internal/v1/project-medusa-rejection",
+                self._origin + "/internal/v1/project-receipt",
                 json={"receipt_id": str(receipt_id)},
             )
         if response.status_code != 200:
@@ -899,7 +899,7 @@ class FixedNativeValidatorMTLSClient:
             raise ProtectedRpcConfigurationError("synthetic_validator_operation_unapproved")
         async with httpx.AsyncClient(verify=self._tls, trust_env=False, timeout=8.0) as client:
             response = await client.post(
-                self._origin + "/internal/v1/project-synthetic-rejection",
+                self._origin + "/internal/v1/project-receipt",
                 json={"receipt_id": str(receipt_id)},
             )
         if response.status_code != 200:
@@ -976,7 +976,7 @@ class FixedNativeValidatorMTLSClient:
             raise ProtectedRpcConfigurationError("synthetic_success_attempt_invalid")
         async with httpx.AsyncClient(verify=self._tls, trust_env=False, timeout=8.0) as client:
             response = await client.post(
-                self._origin + "/internal/v1/project-synthetic-success",
+                self._origin + "/internal/v1/project-receipt",
                 json={"receipt_id": str(receipt_id)},
             )
         if response.status_code != 200:
@@ -1069,7 +1069,7 @@ class FixedNativeValidatorMTLSClient:
             raise ProtectedRpcConfigurationError("inventory_validator_operation_unapproved")
         async with httpx.AsyncClient(verify=self._tls, trust_env=False, timeout=8.0) as client:
             response = await client.post(
-                self._origin + "/internal/v1/project-inventory-snapshot",
+                self._origin + "/internal/v1/project-receipt",
                 json={"receipt_id": str(receipt_id)},
             )
         if response.status_code != 200:
@@ -1170,7 +1170,7 @@ class FixedNativeValidatorMTLSClient:
             raise ProtectedRpcConfigurationError("inventory_operation_validator_unapproved")
         async with httpx.AsyncClient(verify=self._tls, trust_env=False, timeout=8.0) as client:
             response = await client.post(
-                self._origin + "/internal/v1/project-inventory-operation",
+                self._origin + "/internal/v1/project-receipt",
                 json={"receipt_id": str(receipt_id)},
             )
         if response.status_code != 200:

@@ -63,8 +63,11 @@ Session 逐欄比對，保留已驗證的 `native_projection.status_code`、
 投影；來源缺失、混雜、Operation／Receipt／Fingerprint 重綁皆 fail closed。
 此入口不接受 Caller 提供 Handler、成功／失敗狀態碼、Body、Scope、Template
 或核准旗標；返回的仍是**候選**，不建立 Promotion／Grant／Sender Lease。
-現有固定分型投影 RPC 保留相容性；統一入口尚非 Verifier→Authorizer→Sender
-完整通路，不得視為 G4/G6 的發送驗收。
+Verifier 的十條原生候選 mTLS Client 路徑都收斂到這個 Receipt-only URL，
+各路徑仍獨立核對真實 Executor Operation／Envelope／來源、原始已驗簽 JWS
+的 Scope 與該操作的固定原生 JSON 語意；固定分型投影 RPC 只保留向後相容。
+此接線**未建立** Verifier→Authorizer→Sender 的完整授權傳輸通路，
+不得視為 G4/G6 的 Client HTTP 發送驗收。
 
 M-03 已知 Variant 的受保護 Executor Commit 已接線供隔離驗證：原始
 `POST /store/carts/{id}/line-items` 必須有與 JWS Fingerprint 完全一致的

@@ -1179,8 +1179,9 @@ def test_cart_http_verified_receipt_drives_real_fixed_world_handler(isolated_tes
         assert len(row) == 1 and next(iter(row.values()))["quantity"] == 2
 
     # C-03：只讀 Validator 經 Commit Source、WorldOperation、ReadAdmission 建立原生 200。
-    cart_success = PostgresProtectedNativeProjector(dsn, expected_login=_real_login(dsn)).project_synthetic_success(
-        receipt)
+    cart_projector = PostgresProtectedNativeProjector(dsn, expected_login=_real_login(dsn))
+    cart_success = cart_projector.project_synthetic_success(receipt)
+    assert cart_projector.project_verified_receipt(receipt) == cart_success
     assert cart_success.operation_id == "addGuestCartItem" and cart_success.status_code == 200
     assert cart_success.source.operation_result_digest == outcome.result_digest
     assert cart_success.source.committed_state_hash == outcome.committed_state_hash
@@ -1472,7 +1473,9 @@ def test_cart_http_verified_receipt_drives_real_fixed_world_handler(isolated_tes
     )
     assert refill_result["operation"] == "addGuestCartItem"
     assert refill_result["status"] == "committed" and refill_result["state_version"] == 5
-    assert projector.project_synthetic_success(refill_receipt).status_code == 200
+    refill_projection = projector.project_synthetic_success(refill_receipt)
+    assert projector.project_verified_receipt(refill_receipt) == refill_projection
+    assert refill_projection.status_code == 200
 
     complete_body = json.dumps({"expected_version": 5, "idempotency_key": "complete-cart",
                                 "commit_attempt_id": str(uuid4())}).encode()
@@ -1911,8 +1914,9 @@ def test_verified_cart_get_requires_creator_lineage_and_original_receipt(isolate
     read, query = executor.read_verified_cart_http(**args)
     assert query.operation == "getGuestCart"
     assert read.snapshot.state["cart"]["id"] == created.binding.resource_id
-    projected = PostgresProtectedNativeProjector(dsn, expected_login=_real_login(dsn)).project_cart_read(
-        get_receipt)
+    read_projector = PostgresProtectedNativeProjector(dsn, expected_login=_real_login(dsn))
+    projected = read_projector.project_cart_read(get_receipt)
+    assert read_projector.project_verified_receipt(get_receipt) == projected
     assert projected.status_code == 200
     assert projected.operation_id == "getGuestCart"
     assert projected.request_fingerprint == proof.request_fingerprint
@@ -1969,6 +1973,7 @@ def test_verified_cart_get_requires_creator_lineage_and_original_receipt(isolate
     assert unknown_query.operation == "getCartOperation"
     missing_projection = PostgresProtectedNativeProjector(
         dsn, expected_login=_real_login(dsn)).project_cart_read(missing_receipt)
+    assert read_projector.project_verified_receipt(missing_receipt) == missing_projection
     assert missing_projection.status_code == 409
     assert missing_projection.source.read_admission_id == unknown_read.source.read_admission_id
     assert missing_projection.body_bytes == b'{"code":"operation_not_found"}'
