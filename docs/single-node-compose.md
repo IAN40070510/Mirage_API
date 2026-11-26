@@ -136,6 +136,16 @@ Server/Client 身分只存測試目錄。每份 Secret 由檔案擁有者設置
 Candidate、Promotion、Response Admission**，同一 JWS 重放仍拒絕。
 **正式 Compose Sender 固定 sealed**，有效授權亦只回安全 503、
 `protected_send_leases=0`；這不是原生 HTTP 200 或正式發送成功。
+同一測試檔的第二個參數案例，會**只在該次亂數拋棄式 Compose Project**
+建立短期 `isolated-receipt-sender.override.yaml`，僅覆寫 Sender 的測試
+CLI 命令，不修改 `deploy/single-node/compose.yaml` 或正式映像。
+測試 CLI 仍先執行正式 Sender 的 Profile／SCRAM／ACL／Restore Marker
+前置檢查，再以既有的 Receipt-only ASGI 候選建立唯一 Send Lease。
+真 HTTPS Gateway Client 應收到 `200` 與確定的原生 JSON，重放固定
+`503`；DB 的 Receipt／Promotion／Admission／Lease 各恰好 1。
+候選測試必須使用新建立的 `mirage-sn-full-*` Project 與
+`mirage_sn_full_*` DB，測試後刪除覆寫檔與全部暫存資源；**不允許
+拿此測試覆寫命令當成正式 Sender 釋出開關**。
 成功或失敗只針對本次亂數專案執行 `down --volumes`，
 並驗證容器／網路／卷殘留為零，測試用短期 CA 與 Secret 一併移除。
 **正式部署及任何非拋棄式 DB 絕不可執行這個刪卷流程。**
@@ -154,8 +164,11 @@ python3 -m pytest -q tests/test_single_node_full_stack.py
 
 本測試的 Publisher Evidence、Cart State 與 CA 是**測試用合成資料**，
 僅證明最小角色／實體容器／Secret／健康、負面 Gateway 路徑，
-以及**合成簽章正常穿越 Authorizer、由 sealed Sender 阻斷送出**。
-**未測試正式 Compose 的完整原生 2xx/4xx、真已核准的 Profile、正式發送，
+以及**正式 sealed 503／零 Lease 與臨時 Sender 候選的真原生 200／單 Lease**。
+ARM64 隔離主機 `161.33.154.211`、固定應用映像 `mirage-api:sn-cc2e0af`
+的雙參數實測 `job_01M8AZY38J00PN3MRNJT6XCWEW` **2 passed／73.33 秒**；
+JUnit `full-compose-receipt-candidate-cc2e0af.xml` 保存在隔離主機暫存
+驗收目錄。這仍**未測試正式 Compose 的完整原生 2xx/4xx、真已核准的 Profile、正式發送，
 也沒有執行完整 G5 GC／Restore／效能矩陣。**
 本項為 `SINGLE-NODE-01/02` 新增真實子項證據，
 **不得單憑 9/9 healthy 轉為整項 PASS**。

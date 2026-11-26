@@ -540,8 +540,58 @@ def _safe_startup_error_codes(container_id: str) -> tuple[str, ...]:
     return tuple(sorted(codes))[:16]
 
 
-def test_true_nine_service_compose_sealed_stack_with_physical_scram_and_tls(tmp_path):
-    """明確 opt-in 的可銷毀專案才建九容器，驗證真最小權限、TLS 與 Gateway 封閉。"""
+def _isolated_receipt_sender_override(tmp_path: Path, project: str,
+                                      database: str) -> Path:
+    """只在亂數拋棄式 DB 測試專案覆寫 Sender CLI，正式 Compose 永不載入。"""
+    assert re.fullmatch(r"mirage-sn-full-[0-9a-f]{12}", project)
+    assert re.fullmatch(r"mirage_sn_full_[0-9a-f]{10}", database)
+    script = """
+import os
+from pathlib import Path
+from psycopg.conninfo import conninfo_to_dict
+from deception.security.protected_rpc import (
+    create_receipt_proxy_sender_candidate_app, serve_fixed_sender_mtls,
+)
+from deception.security.protected_services import create_sender_service
+from deception.world.protected_send import PostgresProtectedSender
+
+config = os.environ
+assert config.get("MIRAGE_TRUSTED_SEND_ENABLE") == "false"
+assert config.get("MIRAGE_SINGLE_NODE_ISOLATED_CANDIDATE_ONLY") == "true"
+assert config.get("MIRAGE_SINGLE_NODE_CANDIDATE_PROJECT", "").startswith("mirage-sn-full-")
+assert config.get("MIRAGE_SINGLE_NODE_CANDIDATE_DATABASE", "").startswith("mirage_sn_full_")
+assert config.get("MIRAGE_RESTORE_PROFILE") == "standard_single_node"
+dsn = Path(config["MIRAGE_G4_SENDER_DSN_FILE"]).read_text(encoding="utf-8").strip()
+assert conninfo_to_dict(dsn).get("dbname") == config["MIRAGE_SINGLE_NODE_CANDIDATE_DATABASE"]
+# 沿用正式 Sender 的 Login、SCRAM、ACL、Restore Profile 與可選 Marker 前置檢查。
+create_sender_service(config)
+sender = PostgresProtectedSender(dsn, expected_login=config["MIRAGE_G4_SENDER_LOGIN"])
+app = create_receipt_proxy_sender_candidate_app(sender=sender)
+serve_fixed_sender_mtls(
+    app=app, host=config["MIRAGE_G3B_BIND_HOST"],
+    port=int(config["MIRAGE_G3B_BIND_PORT"]),
+    server_cert=Path(config["MIRAGE_G4_SENDER_SERVER_CERT_FILE"]),
+    server_key=Path(config["MIRAGE_G4_SENDER_SERVER_KEY_FILE"]),
+    sender_client_ca=Path(config["MIRAGE_G4_SENDER_CLIENT_CA_FILE"]),
+)
+"""
+    override = tmp_path / "isolated-receipt-sender.override.yaml"
+    override.write_text(yaml.safe_dump({"services": {"sender": {
+        "command": ["python", "-c", script],
+        "environment": {
+            "MIRAGE_SINGLE_NODE_ISOLATED_CANDIDATE_ONLY": "true",
+            "MIRAGE_SINGLE_NODE_CANDIDATE_PROJECT": project,
+            "MIRAGE_SINGLE_NODE_CANDIDATE_DATABASE": database,
+        },
+    }}}), encoding="utf-8")
+    override.chmod(0o600)
+    return override
+
+
+@pytest.mark.parametrize("sender_mode", ("sealed", "isolated_receipt_candidate"))
+def test_true_nine_service_compose_sealed_stack_with_physical_scram_and_tls(
+        tmp_path, sender_mode: str):
+    """各以拋棄式九容器驗證正式 Sender 封閉，及測試專用 Receipt 起送候選。"""
     if (os.environ.get("MIRAGE_SINGLE_NODE_FULL_STACK_ISOLATED") != "true"
             or os.environ.get("MIRAGE_SINGLE_NODE_DISPOSABLE_COMPOSE_PROJECT") != "true"
             or os.environ.get("MIRAGE_G5_RESTORE_PG_TOOL_CONTAINER") != "mirage-g3b-ci-db"):
@@ -561,6 +611,11 @@ def test_true_nine_service_compose_sealed_stack_with_physical_scram_and_tls(tmp_
     (secret_dir / "postgres_password").chmod(0o400)
     env = _env(secret_dir, database, admin, port)
     base = [COMPOSE_BIN, "-p", project, "-f", str(COMPOSE)]
+    if sender_mode == "isolated_receipt_candidate":
+        # 只針對本次隨機 Project／DB，既不改標準部署檔，也不賦予正式 Sender 開關。
+        base.extend(["-f", str(_isolated_receipt_sender_override(
+            tmp_path, project, database,
+        ))])
     _no_project_resources(project)
     created = False
     try:
@@ -654,11 +709,17 @@ def test_true_nine_service_compose_sealed_stack_with_physical_scram_and_tls(tmp_
                           timeout=30, trust_env=False) as client:
             authorized = _sign_disposable_native_get(client, origin, signer)
             actual = client.send(authorized)
-            # 本 Compose Sender 的正式 CLI 刻意封閉：有效 Receipt 最多
-            # 產生 Promotion/Admission，不能鑄造任何 Send Lease 或原生 bytes。
-            assert actual.status_code == 503
-            assert actual.json() == {"detail": "gateway_delivery_unverifiable"}
-            assert b"available" not in actual.content
+            if sender_mode == "sealed":
+                # 正式 CLI 刻意封閉，不能鑄造 Send Lease 或任何原生業務 bytes。
+                assert actual.status_code == 503
+                assert actual.json() == {"detail": "gateway_delivery_unverifiable"}
+                assert b"available" not in actual.content
+            else:
+                # Test-only ASGI 候選：由真 Sender 起送已 Pin 原生 HTTP，而非 Gateway 仿造。
+                assert actual.status_code == 200
+                assert actual.headers["content-type"].startswith("application/json")
+                assert actual.json() == {"sku": "sku-1", "available": 4,
+                                         "state_version": 1}
             replay = client.send(authorized)
             assert replay.status_code == 503
             assert replay.json() == {"detail": "gateway_delivery_unverifiable"}
@@ -667,7 +728,9 @@ def test_true_nine_service_compose_sealed_stack_with_physical_scram_and_tls(tmp_
                           "protected_world_read_sources", "candidate_records",
                           "protected_candidate_promotions", "response_admissions"):
                 assert conn.execute("SELECT count(*) FROM " + table).fetchone() == (1,)
-            assert conn.execute("SELECT count(*) FROM protected_send_leases").fetchone() == (0,)
+            assert conn.execute("SELECT count(*) FROM protected_send_leases").fetchone() == (
+                0 if sender_mode == "sealed" else 1,
+            )
     finally:
         try:
             if created:

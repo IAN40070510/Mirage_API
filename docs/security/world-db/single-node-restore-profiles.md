@@ -93,8 +93,8 @@ Synthetic Cart/Order and Medusa; its JUnit is
 
 | Gate | Isolated evidence status | Still required for formal acceptance |
 | --- | --- | --- |
-| SINGLE-NODE-01 | **PARTIAL PASS** — D-74 真 PG Volume 重啟子案；單機拋棄式 Compose **9/9 healthy**；Gateway loopback HTTPS 拒絕缺簽章／偽造 JWS，**有效 JWS 已到達唯一 PG Promotion／Admission，正式 sealed Sender 回 503 且零 Send Lease** | 完整原生 2xx/4xx／World→Publisher→Authorizer→Sender 流程與正式可發布 Profile／Secret、錯誤矩陣仍未驗收 |
-| SINGLE-NODE-02 | **PARTIAL PASS** — 受保護角色真 SCRAM／ACL 及 Unique Lease 子案；新增九組實體 NOINHERIT、具名 UID Secret POSIX ACL 及實際 mTLS 啟動 | 正式發送、各角色所有負面 ACL、密鑰輪替／滲透與完整 Client 首 byte／Unknown Transport 仍 OPEN |
+| SINGLE-NODE-01 | **PARTIAL PASS** — D-74 真 PG Volume 重啟子案；單機拋棄式 Compose **9/9 healthy**；Gateway loopback HTTPS 拒絕缺簽章／偽造 JWS；有效 JWS 於**正式 sealed Sender** 到達唯一 Promotion／Admission 後回 503、零 Lease；**僅測試臨時覆寫 Sender** 已從同一九容器路徑取得原生 200、唯一 Lease 與重放拒絕 | 正式 Sender 仍封閉；全部原生 2xx/4xx／批准 Profile／正式 Secret、故障矩陣仍未驗收，測試覆寫不可上線 |
+| SINGLE-NODE-02 | **PARTIAL PASS** — 受保護角色真 SCRAM／ACL 及 Unique Lease 子案；新增九組實體 NOINHERIT、具名 UID Secret POSIX ACL、實際 mTLS 啟動及隔離 Sender 原生 200／唯一 Lease | 正式發送、各角色所有負面 ACL、密鑰輪替／滲透與完整 Client 首 byte／Unknown Transport 仍 OPEN |
 | SINGLE-NODE-03 | **PARTIAL PASS** — local restore marker, immutable DB trigger, mixed legacy Sender SQL and Send/Purge serialization | Real restored-system bootstrap/DB rollback and snapshot reconciliation/GC under release policy; no blind rearming |
 | SINGLE-NODE-04 | **PARTIAL PASS** — profile parser accepts no-Fence mode and live isolated native paths function without it | Formal production-like all-service boot, full feature matrix and explicit `whole_host_rollback_guarantee=false` deployment report |
 | SINGLE-NODE-05 | **PARTIAL PASS** — invalid/missing external settings fail closed in syntax/identity tests | Durable external-mode pin, authorized transition, fresh live authority/quarantine and downgrade resistance |
@@ -148,6 +148,21 @@ Receipt、Read Source、Candidate、Promotion、Response Admission
 本例不含正式完整原生 2xx/4xx 或真正可解封的發送／GC／Restore，
 合成 Publisher Evidence 亦非正式核准證據；
 **SINGLE-NODE-01／02 依然 PARTIAL，G3b～G6 整體 NO-GO**。
+
+**2026-11-26 真九容器 Receiver→Sender 原生發送技術子項：**
+在相同的受控 ARM64 隔離主機，固定應用映像 `mirage-api:sn-cc2e0af`
+與兩套新建亂數 PostgreSQL 17 Compose Project，
+`tests/test_single_node_full_stack.py` 同時核對正式 sealed Sender
+（Client 503／無 Lease）和**只存在測試 tmp_path 中**的 Sender 命令覆寫
+（Client 原生 200、Snapshot Pin、Send Lease 1、重放 503；Ingress／
+Candidate／Promotion／Admission 各 1）。測試命令先執行正式 Sender
+SCRAM／ACL／Profile 與可選 Restore Marker 前置檢查，mTLS／DB 分離不變；
+正式 Compose、正式 Sender CLI 與 Trusted Send 完全不變。
+`job_01M8AZY38J00PN3MRNJT6XCWEW` **2 passed／73.33 秒**，JUnit
+`/tmp/mirage-g3b-g6-20261125.AsFBoE/full-compose-receipt-candidate-cc2e0af.xml`。
+本證據沒有正式 Profile 簽署、全部 20 路由／2xx／4xx、G5 Known Restore／
+GC 故障及 G6 Client 網路丟失／負載／滾動回退矩陣，**不許用測試覆寫解除
+正式 Sender Release Fuse；SINGLE-NODE-01～06 與 G3b～G6 仍 NO-GO**。
 
 ### 2026-11-25 G5 actual PostgreSQL restore experiment — bounded evidence
 
