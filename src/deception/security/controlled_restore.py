@@ -100,9 +100,42 @@ class DockerRestoreIsolation:
                         or entry["HostConfig"]["RestartPolicy"]["Name"] != "no"
                         or entry["HostConfig"].get("AutoRemove") is True):
                     raise ValueError("container_not_opted_in")
+            self._verify_compose_membership(inspected)
             return inspected
+        except ControlledRestoreError:
+            raise
         except (ValueError, KeyError, TypeError, AttributeError):
             raise ControlledRestoreError("g5_restore_container_identity_invalid") from None
+
+    def _verify_compose_membership(self, inspected: dict[str, dict]) -> None:
+        """標準 Compose 還原每次核對同一專案的 Gateway、Verifier 與 Sender 全部實例。"""
+        labels = [entry["Config"]["Labels"] for entry in inspected.values()]
+        project_key = "com.docker.compose.project"
+        if all(project_key not in item for item in labels):
+            return
+        projects = {item.get(project_key) for item in labels}
+        if len(projects) != 1:
+            raise ControlledRestoreError("g5_restore_compose_project_invalid")
+        project = projects.pop()
+        if not isinstance(project, str) or not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", project):
+            raise ControlledRestoreError("g5_restore_compose_project_invalid")
+        roles = {"gateway": "ingress", "verifier": "ingress", "sender": "sender"}
+        service_key = "com.docker.compose.service"
+        if ({item.get(service_key) for item in labels} != set(roles)
+                or any(roles[item[service_key]] != item[self._LABEL_ROLE] for item in labels)):
+            raise ControlledRestoreError("g5_restore_compose_manifest_incomplete")
+        rows = self._docker(
+            "container", "ls", "--all", "--no-trunc", "--filter",
+            f"label={project_key}={project}", "--format",
+            '{{.ID}}|{{.Label "com.docker.compose.service"}}|{{.Label "mirage.restore.stop_eligible"}}',
+        ).decode("ascii").splitlines()
+        discovered = set()
+        for row in rows:
+            container_id, service, eligible = row.split("|")
+            if service in roles or eligible == "true":
+                discovered.add(container_id)
+        if discovered != set(inspected):
+            raise ControlledRestoreError("g5_restore_compose_manifest_incomplete")
 
     def stop_and_verify(self) -> None:
         """先驗證全部 opt-in 身分再依精確 ID 停機，之後確認無活躍 PID。"""

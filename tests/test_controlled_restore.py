@@ -241,5 +241,73 @@ def test_real_disposable_docker_stop_only_two_labeled_containers():
         for spec in created:
             subprocess.run([
                 "/usr/bin/docker", "--host", "unix:///var/run/docker.sock",
-                "container", "rm", "--force", spec.container_id,
+                "container", "rm", "--force", "--volumes", spec.container_id,
             ], capture_output=True, check=False, timeout=30)
+
+
+@pytest.mark.parametrize("variant", ["complete", "missing_gateway", "extra_replica", "mixed_project"])
+def test_compose_restore_checks_project_inventory(monkeypatch, variant):
+    """每次查停流應枚舉整個 Compose 專案，拒絕漏列服務、副本與混入其他專案。"""
+    gateway = RestoreContainer("c" * 64, "/gateway", "ingress")
+    specs = (*CONTAINERS, gateway)
+    services = ("verifier", "sender", "gateway")
+    inspected = []
+    rows = []
+    for spec, service in zip(specs, services):
+        item = _inspection(spec, running=False)
+        labels = item["Config"]["Labels"]
+        labels["com.docker.compose.project"] = "demo"
+        labels["com.docker.compose.service"] = service
+        rows.append(f"{spec.container_id}|{service}|true")
+        inspected.append(item)
+    if variant == "missing_gateway":
+        specs = specs[:-1]
+        inspected.pop()
+    elif variant == "mixed_project":
+        inspected[-1]["Config"]["Labels"]["com.docker.compose.project"] = "other"
+    elif variant == "extra_replica":
+        rows.append(f"{'d' * 64}|gateway|true")
+    isolation = DockerRestoreIsolation(specs)
+
+    def docker(*args):
+        """以固定清單回應 inspect 與專案查詢，禁止執行其他命令。"""
+        if args[:2] == ("container", "inspect"):
+            return json.dumps(inspected).encode()
+        assert args[:6] == ("container", "ls", "--all", "--no-trunc", "--filter",
+                            "label=com.docker.compose.project=demo")
+        return "\n".join([*rows, "e" * 64 + "|postgres|"]).encode()
+
+    monkeypatch.setattr(isolation, "_docker", docker)
+    if variant == "complete":
+        isolation.require_quiescent()
+    else:
+        with pytest.raises(ControlledRestoreError):
+            isolation.require_quiescent()
+
+
+def test_real_compose_restore_requires_stopped_replica_in_manifest():
+    """以真 Docker 驗證同一 Compose 專案已停止的副本也必須列入停流清單。"""
+    if os.environ.get("MIRAGE_G5_REAL_DOCKER_QUIESCE_ISOLATED") != "true":
+        pytest.skip("requires explicitly isolated disposable Docker daemon")
+    project = "mirage-restore-" + uuid4().hex
+    docker = ["/usr/bin/docker", "--host", "unix:///var/run/docker.sock", "container"]
+    created = []
+    try:
+        for service in ("gateway", "verifier", "sender", "gateway"):
+            role = "sender" if service == "sender" else "ingress"
+            name = f"{project}-{service}-{len(created)}"
+            container_id = subprocess.check_output([
+                *docker, "create", "--pull", "never", "--network", "none", "--name", name,
+                "--label", "com.docker.compose.project=" + project,
+                "--label", "com.docker.compose.service=" + service,
+                "--label", "mirage.restore.role=" + role,
+                "--label", "mirage.restore.stop_eligible=true",
+                "postgres:17.6-alpine", "true",
+            ], text=True, timeout=30).strip()
+            created.append(RestoreContainer(container_id, "/" + name, role))
+        with pytest.raises(ControlledRestoreError, match="^g5_restore_compose_manifest_incomplete$"):
+            DockerRestoreIsolation(created[:-1]).require_quiescent()
+        DockerRestoreIsolation(created).require_quiescent()
+    finally:
+        for spec in created:
+            subprocess.run([*docker, "rm", "-v", spec.container_id], check=True, timeout=30)

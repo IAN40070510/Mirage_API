@@ -214,9 +214,10 @@ M-01～M-07 成功初測 `job_01M8BHBTS700RHXYNDP8VT9MWF`
 `mirage.restore.stop_eligible=true`／`mirage.restore.role` 標籤。
 受控還原必須以 `DockerRestoreIsolation` 綁**每個**實際完整 Container ID，
 停止並機器核對所有入口與 Sender 後才執行 World 還原、寫入 Known Restore
-Marker 並由獨立 Sender 帳號讀回。對一份忘記列出 Gateway 的 Manifest，
-Docker 停機成功也**不能證明全入口已停流**；目前控制器沒有自動枚舉
-部署容器、完整序列鎖、外部連線 Drain、GC 真刪除或正式放行流程。
+Marker 並由獨立 Sender 帳號讀回。每次檢查 Compose 容器時，控制器枚舉同專案所有容器（含停止的副本），
+將 Gateway、Verifier、Sender 及具有停流標籤的容器 ID 與 Manifest 比對。
+缺少服務、混用專案或漏列副本會中止還原。目前仍缺少部署變動的序列鎖、
+外部連線 Drain、GC 真刪除與正式放行流程。
 
 - 容器、DB、TLS 或 ACL 錯誤：禁止回退 Demo／Runtime 明文路徑；必須停留在
   `NO-GO`，保留診斷碼與不含 Secret 的證據。

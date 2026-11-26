@@ -96,7 +96,9 @@ Contract Hash 後通過，**未弱化 Registry**。含一筆基準 Inventory 200
 真 PG 精確 **11 筆 Candidate／Promotion／Admission／Send Lease、
 1 筆 Cart Creation、5 Commit Source、2 Medusa Rejection Source**。
 ARM64 `job_01M8BHBTS700RHXYNDP8VT9MWF` **1 passed／42.25 秒**，
-JUnit `medusa-m01-m07-unique-trial.xml`；尚待提交精確 SHA 四模式複跑。
+JUnit `medusa-m01-m07-unique-trial.xml`；已核對 `4305d4c171cade278faf70d42b83817a2507ae42` ARM64 JUnit `single-node-exact-4305d4c.xml`：34 passed、0 skipped、199.515 秒，含 sealed、receipt、cart、medusa 四模式。
+
+G5 Compose 還原控制新增同專案 Gateway、Verifier、Sender 全部容器 ID 核對，含已停止的副本。ARM64 工作 `job_01M8BXXKTM00KF7G7DYD7DV7Q2` 實測 21 passed，涵蓋漏列副本拒絕與完整清單通過。部署序列鎖、外部連線排空及 GC 仍待驗收。
 **I／C／M 共 20 路由已有 D-74 九容器隔離原生回應子項，但完整變體、
 正式 Profile／Sender、G5／G6 和 Owner GO 都仍 OPEN**。
 
