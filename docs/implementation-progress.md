@@ -30,8 +30,12 @@ Role 和最小 ACL；短期獨立 mTLS CA 與主機具名 UID POSIX ACL
 讓 Verifier／兩 Executor／Validator／Publisher 三 Login／Authorizer／Sender
 以及 Gateway 於同台主機全部 **9/9 healthy**。
 Gateway loopback HTTPS readiness、缺簽章 403、假 JWS 經 mTLS
-失敗 503，且 PG Receipt／Send Lease 新增 0；測後拋棄式容器／卷／網路
-與短期 Secret 移除。映像從固定 `6e6c4ae` 另建
+失敗 503（這兩種無效請求均不新增 Receipt／Lease）。
+追加有效 Ed25519 JWS：真 Gateway→Verifier→Executor→Validator→Publisher
+→Authorizer 的 Receipt／Read Source／Candidate／Promotion／Admission
+各 1 筆，**Sender 在此 Compose 明確 sealed**，Client 503、
+Send Lease 0、重放不得新建授權；這不是原生 200 發送放行。
+測後拋棄式容器／卷／網路與短期 Secret 移除。映像從固定 `6e6c4ae` 另建
 `mirage-api:sn-6e6c4ae`，原本四服務 `mirage-api:standalone`
 未覆寫。這仍僅是`SINGLE-NODE-01/02` 的**隔離真啟動子項**，
 合成 Publisher Evidence 不能冒充正式 Profile、全原生路由與 G5/G6

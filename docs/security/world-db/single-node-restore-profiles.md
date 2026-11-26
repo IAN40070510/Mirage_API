@@ -93,7 +93,7 @@ Synthetic Cart/Order and Medusa; its JUnit is
 
 | Gate | Isolated evidence status | Still required for formal acceptance |
 | --- | --- | --- |
-| SINGLE-NODE-01 | **PARTIAL PASS** — D-74 真 PG Volume 重啟子案；另已在單機拋棄式 Compose 實測 **9/9 容器 healthy**、Gateway loopback HTTPS 與缺簽章／偽造 JWS 拒絕 | 完整原生 2xx/4xx／World→Publisher→Authorizer→Sender 流程與正式可發布 Profile／Secret、錯誤矩陣仍未驗收 |
+| SINGLE-NODE-01 | **PARTIAL PASS** — D-74 真 PG Volume 重啟子案；單機拋棄式 Compose **9/9 healthy**；Gateway loopback HTTPS 拒絕缺簽章／偽造 JWS，**有效 JWS 已到達唯一 PG Promotion／Admission，正式 sealed Sender 回 503 且零 Send Lease** | 完整原生 2xx/4xx／World→Publisher→Authorizer→Sender 流程與正式可發布 Profile／Secret、錯誤矩陣仍未驗收 |
 | SINGLE-NODE-02 | **PARTIAL PASS** — 受保護角色真 SCRAM／ACL 及 Unique Lease 子案；新增九組實體 NOINHERIT、具名 UID Secret POSIX ACL 及實際 mTLS 啟動 | 正式發送、各角色所有負面 ACL、密鑰輪替／滲透與完整 Client 首 byte／Unknown Transport 仍 OPEN |
 | SINGLE-NODE-03 | **PARTIAL PASS** — local restore marker, immutable DB trigger, mixed legacy Sender SQL and Send/Purge serialization | Real restored-system bootstrap/DB rollback and snapshot reconciliation/GC under release policy; no blind rearming |
 | SINGLE-NODE-04 | **PARTIAL PASS** — profile parser accepts no-Fence mode and live isolated native paths function without it | Formal production-like all-service boot, full feature matrix and explicit `whole_host_rollback_guarantee=false` deployment report |
@@ -135,9 +135,15 @@ Docker opt-in；SINGLE-NODE-01～06 和 G3b～G6 全體仍 **NO-GO**。
 非 world-readable 具名 UID POSIX Secret ACL，核對
 **PostgreSQL 加八服務，共九容器全部 healthy**。
 Gateway 僅在 Host loopback HTTPS 可達，缺簽章 403、
-偽造 JWS 走真 Verifier mTLS 後回 503，
-Receipt／Send Lease 都未增加。隔離執行
-`job_01M8AJE8MQ00GM07DRJHN81QHK` **1 passed／零警告**；
+偽造 JWS 走真 Verifier mTLS 後回 503（無效請求零 Receipt／Lease）。
+再以真 Ed25519 有效 JWS 驗證完整上游鏈：
+Receipt、Read Source、Candidate、Promotion、Response Admission
+各 **1**，重放拒絕；正式 Compose Sender 的 sealed 503 令
+**Send Lease=0**，因此不可將此結果誤列成原生 HTTP 200。
+原九容器啟動工作
+`job_01M8AJE8MQ00GM07DRJHN81QHK` **1 passed／零警告**，
+追加有效 JWS 封閉鏈
+`job_01M8AKCA1Q00DPGD9HHP87X732` **1 passed**；
 測試容器／Named Volume／網路與一次性 Secret 移除。
 本例不含正式完整原生 2xx/4xx 或真正可解封的發送／GC／Restore，
 合成 Publisher Evidence 亦非正式核准證據；

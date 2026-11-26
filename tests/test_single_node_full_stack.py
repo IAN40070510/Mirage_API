@@ -20,6 +20,13 @@ import time
 from uuid import uuid4
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from deception.api.fingerprint import fingerprint_httpx_request
+from deception.domains.ecommerce.inventory import SyntheticInventory
+from deception.world import (
+    PostgresProjectionRegistry, ProjectionCompatibilityProfile, ProjectionEvidence,
+)
+from deception.world.session import SessionBinding
+from test_trusted_session import encode
 import httpx
 import psycopg
 from psycopg import sql
@@ -83,7 +90,8 @@ READ = {
     "protected_medusa_rejection_sources,projection_registry,"
     "projection_profile_revocations,protected_cart_creations,guest_cart_creations,"
     "synthetic_resources,session_heads,session_world_bindings,generation_controls,"
-    "world_snapshots,world_commit_receipts,trusted_key_revocations",
+    "world_snapshots,world_commit_receipts,trusted_key_revocations,"
+    "protected_candidate_promotions",
     "authorizer": "protected_candidate_promotions,ingress_receipts,projection_registry,"
     "session_heads,session_world_bindings,generation_controls,trusted_key_revocations,"
     "projection_profile_revocations,response_admissions,protected_grant_bindings,"
@@ -245,7 +253,8 @@ def _provision(admin_dsn: str, database: str, admin_login: str,
     return dsns
 
 
-def _material(root: Path, dsns: dict[str, str], pg_password: str) -> dict[str, str | Path]:
+def _material(root: Path, dsns: dict[str, str], pg_password: str,
+              signing_key: Ed25519PrivateKey) -> dict[str, str | Path]:
     """產生全部 Compose Secret；每條 Client→Server 都用獨立 CA 與葉私鑰。"""
     trust = {}
     for name in ("gateway_verifier", "gateway_sender", "executor", "validator",
@@ -271,9 +280,8 @@ def _material(root: Path, dsns: dict[str, str], pg_password: str) -> dict[str, s
         }, separators=(",", ":")),
         "medusa_publishable_key": "pk_disposable_single_node_only",
     }
-    key = Ed25519PrivateKey.generate()
     material["verifier_keys"] = json.dumps({
-        "test": base64.b64encode(key.public_key().public_bytes_raw()).decode("ascii"),
+        "test": base64.b64encode(signing_key.public_key().public_bytes_raw()).decode("ascii"),
     })
     material["publisher_evidence"] = json.dumps({
         name: {
@@ -333,6 +341,59 @@ def _material(root: Path, dsns: dict[str, str], pg_password: str) -> dict[str, s
         "verifier_authorizer_client_ca": trust["authorizer"][0],
     })
     return material
+
+
+def _seed_disposable_native_inventory(admin_dsn: str,
+                                      material: dict[str, str | Path]) -> None:
+    """僅對本次全新拋棄式 DB 建立真 World 與投影 Registry，不替正式 Profile 背書。"""
+    contract = json.loads(str(material["publisher_evidence"]))["synthetic-inventory"]
+    profile = ProjectionEvidence(
+        source_spec_sha256=contract["source_spec_sha256"],
+        compatibility_profile=ProjectionCompatibilityProfile(
+            **contract["compatibility_profile"],
+        ),
+        projection_contract_hash=contract["projection_contract_hash"],
+        official_schema_valid=contract["official_schema_valid"],
+        effective_projection_valid=contract["effective_projection_valid"],
+    )
+    PostgresProjectionRegistry(admin_dsn).ensure_registered_batch((profile,))
+    binding = SessionBinding(
+        environment_id="disposable", deployment_id="isolated",
+        session_id="session", session_epoch=1, access_mode="inventory",
+    )
+    SyntheticInventory(admin_dsn).resolve(
+        binding, {"inventory": {"sku-1": 4}, "reservations": {}},
+        now=int(time.time()), ttl=600,
+    )
+
+
+def _sign_disposable_native_get(client: httpx.Client, origin: str,
+                                signer: Ed25519PrivateKey) -> httpx.Request:
+    """依真正 Client URL 與 Headers 簽發單次 Ed25519 JWS，私鑰僅留測試記憶體。"""
+    jti = uuid4().hex
+    request_id = "sn-compose-valid-" + jti
+    outgoing = client.build_request(
+        "GET", origin + "/synthetic/inventory/sku-1",
+        headers={"x-request-id": request_id},
+    )
+    now = int(time.time())
+    claims = {
+        "iss": "gateway", "aud": "mirage", "iat": now - 5, "nbf": now - 5,
+        "exp": now + 45, "jti": jti, "environment_id": "disposable",
+        "deployment_id": "isolated", "session_id": "session", "session_epoch": 1,
+        "access_mode": "inventory",
+        "request_fingerprint": fingerprint_httpx_request(outgoing, request_id),
+        "assessment_id": "isolated", "assessment_digest": "b" * 64,
+    }
+    prefix = encode({
+        "alg": "Ed25519", "kid": "test", "protocol_version": "1.1",
+        "typ": "mirage-trusted-session+jwt",
+    }) + "." + encode(claims)
+    signature = base64.urlsafe_b64encode(
+        signer.sign(prefix.encode("ascii")),
+    ).decode("ascii").rstrip("=")
+    outgoing.headers["x-trusted-session"] = prefix + "." + signature
+    return outgoing
 
 
 def _install_role_owned_secrets(root: Path, material: dict[str, str | Path],
@@ -531,7 +592,9 @@ def test_true_nine_service_compose_sealed_stack_with_physical_scram_and_tls(tmp_
         )
         apply_migrations(admin_dsn, ROOT / "migrations")
         dsns = _provision(admin_dsn, database, admin, "postgres")
-        material = _material(tmp_path, dsns, password)
+        signer = Ed25519PrivateKey.generate()
+        material = _material(tmp_path, dsns, password, signer)
+        _seed_disposable_native_inventory(admin_dsn, material)
         _install_role_owned_secrets(tmp_path, material, doc)
         _run([*base, "--profile", "isolated-gateway", "up", "-d"],
              env=env, timeout=180)
@@ -586,6 +649,24 @@ def test_true_nine_service_compose_sealed_stack_with_physical_scram_and_tls(tmp_
             assert invalid_signed_request.json()["detail"] == "gateway_delivery_unverifiable"
         with psycopg.connect(admin_dsn) as conn:
             assert conn.execute("SELECT count(*) FROM ingress_receipts").fetchone() == (0,)
+            assert conn.execute("SELECT count(*) FROM protected_send_leases").fetchone() == (0,)
+        with httpx.Client(verify=ssl.create_default_context(cafile=str(ca)),
+                          timeout=30, trust_env=False) as client:
+            authorized = _sign_disposable_native_get(client, origin, signer)
+            actual = client.send(authorized)
+            # 本 Compose Sender 的正式 CLI 刻意封閉：有效 Receipt 最多
+            # 產生 Promotion/Admission，不能鑄造任何 Send Lease 或原生 bytes。
+            assert actual.status_code == 503
+            assert actual.json() == {"detail": "gateway_delivery_unverifiable"}
+            assert b"available" not in actual.content
+            replay = client.send(authorized)
+            assert replay.status_code == 503
+            assert replay.json() == {"detail": "gateway_delivery_unverifiable"}
+        with psycopg.connect(admin_dsn) as conn:
+            for table in ("replay_entries", "ingress_receipts", "read_admissions",
+                          "protected_world_read_sources", "candidate_records",
+                          "protected_candidate_promotions", "response_admissions"):
+                assert conn.execute("SELECT count(*) FROM " + table).fetchone() == (1,)
             assert conn.execute("SELECT count(*) FROM protected_send_leases").fetchone() == (0,)
     finally:
         try:

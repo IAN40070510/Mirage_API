@@ -126,7 +126,13 @@ Server/Client 身分只存測試目錄。每份 Secret 由檔案擁有者設置
 測試要求所有 9 容器 `healthy`、Database／Sender 不公開 Host 埠，
 只從 loopback HTTPS 讀 Gateway readiness；缺少 Signed Session
 的 HTTP 必須拒絕、假的 JWS 經 Gateway→Verifier 真 mTLS
-也必須固定拒絕，且 DB 新 Receipt／Send Lease 仍為 0。
+也必須固定拒絕，且**上述無效請求**不增加 Receipt／Send Lease。
+接著以**只存在測試記憶體內**的 Ed25519 私鑰簽發有效 JWS，
+讀取本次新建立的合成 Inventory World，驗證真實 Gateway→Verifier→Executor
+→Validator→Publisher→Authorizer 產生各 **1 筆 Receipt、Read Source、
+Candidate、Promotion、Response Admission**，同一 JWS 重放仍拒絕。
+**正式 Compose Sender 固定 sealed**，有效授權亦只回安全 503、
+`protected_send_leases=0`；這不是原生 HTTP 200 或正式發送成功。
 成功或失敗只針對本次亂數專案執行 `down --volumes`，
 並驗證容器／網路／卷殘留為零，測試用短期 CA 與 Secret 一併移除。
 **正式部署及任何非拋棄式 DB 絕不可執行這個刪卷流程。**
@@ -144,8 +150,9 @@ python3 -m pytest -q tests/test_single_node_full_stack.py
 ```
 
 本測試的 Publisher Evidence、Cart State 與 CA 是**測試用合成資料**，
-僅證明最小角色／實體容器／Secret／健康與負面 Gateway 路徑。
-**未測試正式完整原生 2xx/4xx、真已核准的 Profile、正式發送，
+僅證明最小角色／實體容器／Secret／健康、負面 Gateway 路徑，
+以及**合成簽章正常穿越 Authorizer、由 sealed Sender 阻斷送出**。
+**未測試正式 Compose 的完整原生 2xx/4xx、真已核准的 Profile、正式發送，
 也沒有執行完整 G5 GC／Restore／效能矩陣。**
 本項為 `SINGLE-NODE-01/02` 新增真實子項證據，
 **不得單憑 9/9 healthy 轉為整項 PASS**。
