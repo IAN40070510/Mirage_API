@@ -93,8 +93,8 @@ Synthetic Cart/Order and Medusa; its JUnit is
 
 | Gate | Isolated evidence status | Still required for formal acceptance |
 | --- | --- | --- |
-| SINGLE-NODE-01 | **PARTIAL PASS** — D-74 真 PG Volume 重啟子案；單機拋棄式 Compose **9/9 healthy**；Gateway loopback HTTPS 拒絕缺簽章／偽造 JWS；有效 JWS 於**正式 sealed Sender** 到達唯一 Promotion／Admission 後回 503、零 Lease；**僅測試臨時覆寫 Sender** 已從同一九容器路徑取得原生 200、唯一 Lease 與重放拒絕 | 正式 Sender 仍封閉；全部原生 2xx/4xx／批准 Profile／正式 Secret、故障矩陣仍未驗收，測試覆寫不可上線 |
-| SINGLE-NODE-02 | **PARTIAL PASS** — 受保護角色真 SCRAM／ACL 及 Unique Lease 子案；新增九組實體 NOINHERIT、具名 UID Secret POSIX ACL、實際 mTLS 啟動及隔離 Sender 原生 200／唯一 Lease | 正式發送、各角色所有負面 ACL、密鑰輪替／滲透與完整 Client 首 byte／Unknown Transport 仍 OPEN |
+| SINGLE-NODE-01 | **PARTIAL PASS** — D-74 真 PG Volume 重啟子案；拋棄式 Compose **9/9 healthy**；Gateway loopback HTTPS 拒絕缺簽章／偽造 JWS；**正式 sealed Sender** 503／零 Lease；臨時測試覆寫已涵蓋 I-01～I-04 的原生 200／409 和 CAS 一贏一拒 | 正式 Sender 仍封閉；其餘 16 條原生路由／批准 Profile／正式 Secret、故障矩陣未驗收，測試覆寫不可上線 |
+| SINGLE-NODE-02 | **PARTIAL PASS** — 真 SCRAM／ACL、九組實體 NOINHERIT、具名 UID Secret POSIX ACL 與 mTLS；隔離 Sender 驗證 11 筆 Ingress、10 筆唯一 Send Lease、3 World Commit 與 2 Rejection Source | 正式發送、各角色全部負面 ACL、密鑰輪替／滲透及完整 Client 首 byte／Unknown Transport 仍 OPEN |
 | SINGLE-NODE-03 | **PARTIAL PASS** — local restore marker, immutable DB trigger, mixed legacy Sender SQL and Send/Purge serialization | Real restored-system bootstrap/DB rollback and snapshot reconciliation/GC under release policy; no blind rearming |
 | SINGLE-NODE-04 | **PARTIAL PASS** — profile parser accepts no-Fence mode and live isolated native paths function without it | Formal production-like all-service boot, full feature matrix and explicit `whole_host_rollback_guarantee=false` deployment report |
 | SINGLE-NODE-05 | **PARTIAL PASS** — invalid/missing external settings fail closed in syntax/identity tests | Durable external-mode pin, authorized transition, fresh live authority/quarantine and downgrade resistance |
@@ -163,6 +163,18 @@ SCRAM／ACL／Profile 與可選 Restore Marker 前置檢查，mTLS／DB 分離�
 本證據沒有正式 Profile 簽署、全部 20 路由／2xx／4xx、G5 Known Restore／
 GC 故障及 G6 Client 網路丟失／負載／滾動回退矩陣，**不許用測試覆寫解除
 正式 Sender Release Fuse；SINGLE-NODE-01～06 與 G3b～G6 仍 NO-GO**。
+
+**2026-11-26 I-01～I-04／G6 並行 CAS 真 Compose 子項：**
+相同 D-74 九容器短期候選 Sender 增加所有四個 Inventory Route 的
+原生 Client 200／409，以及雙 Ed25519 JWS 同版並行只允許一份 World Commit
+和 Client 200；敗者 503，不鑄造第二次 Lease。
+實際 DB **11 筆 Ingress／Read Source、10 筆 Candidate／Promotion／
+Admission／Lease、3 筆 Commit Source、2 筆 Rejection Source**，
+失敗路徑和重放不提升世界版本。ARM64 試驗
+`job_01M8B3P9E500DE6V9J97FGNH5Q` **1 passed／41.74 秒**，
+JUnit `/tmp/mirage-g3b-g6-20261125.AsFBoE/i01-i04-race-candidate-trial.xml`。
+未完成正式 SHA 雙模式複跑前不能把這項標成精確提交驗收；正式 Sender／
+外部整機回滾保證／G5 GC／G6 Client 線路故障仍保持 **NO-GO**。
 
 ### 2026-11-25 G5 actual PostgreSQL restore experiment — bounded evidence
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from concurrent.futures import ThreadPoolExecutor
 import ctypes
 import ctypes.util
 import json
@@ -16,6 +17,7 @@ import ssl
 import stat
 import struct
 import subprocess
+from threading import Barrier
 import time
 from uuid import uuid4
 
@@ -367,14 +369,20 @@ def _seed_disposable_native_inventory(admin_dsn: str,
     )
 
 
-def _sign_disposable_native_get(client: httpx.Client, origin: str,
-                                signer: Ed25519PrivateKey) -> httpx.Request:
-    """依真正 Client URL 與 Headers 簽發單次 Ed25519 JWS，私鑰僅留測試記憶體。"""
+def _sign_disposable_native_request(
+        client: httpx.Client, origin: str, signer: Ed25519PrivateKey,
+        *, method: str = "GET", path: str = "/synthetic/inventory/sku-1",
+        body: dict | None = None) -> httpx.Request:
+    """依真正原生 Method／URL／JSON Body 簽一次 JWS，私鑰僅留測試記憶體。"""
     jti = uuid4().hex
     request_id = "sn-compose-valid-" + jti
+    headers = {"x-request-id": request_id}
+    kwargs = {}
+    if body is not None:
+        headers["content-type"] = "application/json"
+        kwargs["content"] = json.dumps(body, separators=(",", ":")).encode("utf-8")
     outgoing = client.build_request(
-        "GET", origin + "/synthetic/inventory/sku-1",
-        headers={"x-request-id": request_id},
+        method, origin + path, headers=headers, **kwargs,
     )
     now = int(time.time())
     claims = {
@@ -394,6 +402,133 @@ def _sign_disposable_native_get(client: httpx.Client, origin: str,
     ).decode("ascii").rstrip("=")
     outgoing.headers["x-trusted-session"] = prefix + "." + signature
     return outgoing
+
+
+def _exercise_disposable_inventory_native_matrix(
+        client: httpx.Client, origin: str, signer: Ed25519PrivateKey) -> int:
+    """在真九容器驗證 I-01～I-04 的原生 200／409、World Commit 與重放拒絕。"""
+    signed = []
+
+    missing_sku = _sign_disposable_native_request(
+        client, origin, signer, path="/synthetic/inventory/not-in-world",
+    )
+    unknown = client.send(missing_sku)
+    assert unknown.status_code == 409, unknown.text
+    assert unknown.content == b'{"code":"unknown_synthetic_sku"}'
+    assert unknown.headers["content-type"] == "application/json"
+    signed.append(missing_sku)
+
+    attempt = str(uuid4())
+    reserve = _sign_disposable_native_request(
+        client, origin, signer, method="POST",
+        path="/synthetic/inventory/reservations",
+        body={"sku": "sku-1", "quantity": 2, "expected_version": 1,
+              "idempotency_key": "single-node-reserve-" + uuid4().hex,
+              "commit_attempt_id": attempt},
+    )
+    reserved = client.send(reserve)
+    assert reserved.status_code == 200, reserved.text
+    reservation = reserved.json()
+    assert reservation["commit_attempt_id"] == attempt
+    assert reservation["state_version"] == 2
+    reservation_id = reservation["reservation"]["reservation_id"]
+    assert reservation["reservation"]["sku"] == "sku-1"
+    signed.append(reserve)
+
+    history = _sign_disposable_native_request(
+        client, origin, signer, path="/synthetic/operations/" + attempt,
+    )
+    historical = client.send(history)
+    assert historical.status_code == 200, historical.text
+    assert historical.json()["commit_attempt_id"] == attempt
+    signed.append(history)
+
+    absent = _sign_disposable_native_request(
+        client, origin, signer, path="/synthetic/operations/" + str(uuid4()),
+    )
+    absent_history = client.send(absent)
+    assert absent_history.status_code == 409, absent_history.text
+    assert absent_history.content == b'{"code":"operation_not_found"}'
+    signed.append(absent)
+
+    cancel_path = "/synthetic/inventory/reservations/" + reservation_id + "/cancel"
+    cancel = _sign_disposable_native_request(
+        client, origin, signer, method="POST", path=cancel_path,
+        body={"expected_version": 2,
+              "idempotency_key": "single-node-cancel-" + uuid4().hex,
+              "commit_attempt_id": str(uuid4())},
+    )
+    cancelled = client.send(cancel)
+    assert cancelled.status_code == 200, cancelled.text
+    assert cancelled.json()["state_version"] == 3
+    assert cancelled.json()["reservation"]["reservation_id"] == reservation_id
+    assert cancelled.json()["reservation"]["status"] == "cancelled"
+    signed.append(cancel)
+
+    cancel_again = _sign_disposable_native_request(
+        client, origin, signer, method="POST", path=cancel_path,
+        body={"expected_version": 3,
+              "idempotency_key": "single-node-recancel-" + uuid4().hex,
+              "commit_attempt_id": str(uuid4())},
+    )
+    cancelled_twice = client.send(cancel_again)
+    assert cancelled_twice.status_code == 409, cancelled_twice.text
+    assert cancelled_twice.content == b'{"code":"reservation_not_active"}'
+    signed.append(cancel_again)
+
+    unknown_reserve = _sign_disposable_native_request(
+        client, origin, signer, method="POST",
+        path="/synthetic/inventory/reservations",
+        body={"sku": "not-in-world", "quantity": 1, "expected_version": 3,
+              "idempotency_key": "single-node-unknown-" + uuid4().hex,
+              "commit_attempt_id": str(uuid4())},
+    )
+    rejected = client.send(unknown_reserve)
+    assert rejected.status_code == 409, rejected.text
+    assert rejected.content == b'{"code":"unknown_synthetic_sku"}'
+    signed.append(unknown_reserve)
+
+    # G6：兩份不同 JWS 都已驗證，但同一 World Version 只可提交一次。
+    concurrent = [
+        _sign_disposable_native_request(
+            client, origin, signer, method="POST",
+            path="/synthetic/inventory/reservations",
+            body={"sku": "sku-1", "quantity": 1, "expected_version": 3,
+                  "idempotency_key": "single-node-race-" + str(index) + "-" + uuid4().hex,
+                  "commit_attempt_id": str(uuid4())},
+        ) for index in range(2)
+    ]
+    barrier = Barrier(2)
+
+    def send_parallel(original: httpx.Request) -> httpx.Response:
+        """同時送出兩個已簽名的同版本請求，製造真 DB CAS 競態。"""
+        barrier.wait(timeout=10)
+        return client.send(original)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(send_parallel, concurrent))
+    assert sorted(response.status_code for response in results) == [200, 503], (
+        [(response.status_code, response.text) for response in results]
+    )
+    race_winner = next(response for response in results if response.status_code == 200)
+    race_loser = next(response for response in results if response.status_code == 503)
+    assert race_winner.json()["state_version"] == 4
+    assert race_winner.json()["reservation"]["sku"] == "sku-1"
+    assert race_loser.json() == {"detail": "gateway_delivery_unverifiable"}
+    signed.extend(concurrent)
+
+    read_after_race = _sign_disposable_native_request(client, origin, signer)
+    latest = client.send(read_after_race)
+    assert latest.status_code == 200, latest.text
+    assert latest.json() == {"sku": "sku-1", "available": 3, "state_version": 4}
+    signed.append(read_after_race)
+
+    for original in signed:
+        replay = client.send(original)
+        assert replay.status_code == 503
+        assert replay.json() == {"detail": "gateway_delivery_unverifiable"}
+    # 兩份 CAS JWS 都進 Ingress，但敗者不能建立 Candidate／Admission／Lease。
+    return len(signed) - 1
 
 
 def _install_role_owned_secrets(root: Path, material: dict[str, str | Path],
@@ -707,8 +842,9 @@ def test_true_nine_service_compose_sealed_stack_with_physical_scram_and_tls(
             assert conn.execute("SELECT count(*) FROM protected_send_leases").fetchone() == (0,)
         with httpx.Client(verify=ssl.create_default_context(cafile=str(ca)),
                           timeout=30, trust_env=False) as client:
-            authorized = _sign_disposable_native_get(client, origin, signer)
+            authorized = _sign_disposable_native_request(client, origin, signer)
             actual = client.send(authorized)
+            expected_authorizations = 1
             if sender_mode == "sealed":
                 # 正式 CLI 刻意封閉，不能鑄造 Send Lease 或任何原生業務 bytes。
                 assert actual.status_code == 503
@@ -720,6 +856,9 @@ def test_true_nine_service_compose_sealed_stack_with_physical_scram_and_tls(
                 assert actual.headers["content-type"].startswith("application/json")
                 assert actual.json() == {"sku": "sku-1", "available": 4,
                                          "state_version": 1}
+                expected_authorizations += _exercise_disposable_inventory_native_matrix(
+                    client, origin, signer,
+                )
             replay = client.send(authorized)
             assert replay.status_code == 503
             assert replay.json() == {"detail": "gateway_delivery_unverifiable"}
@@ -727,10 +866,24 @@ def test_true_nine_service_compose_sealed_stack_with_physical_scram_and_tls(
             for table in ("replay_entries", "ingress_receipts", "read_admissions",
                           "protected_world_read_sources", "candidate_records",
                           "protected_candidate_promotions", "response_admissions"):
-                assert conn.execute("SELECT count(*) FROM " + table).fetchone() == (1,)
+                # 每個原生 409 也需授權 Pin，而非 Gateway 仿造錯誤。
+                expected = expected_authorizations + int(
+                    sender_mode == "isolated_receipt_candidate" and
+                    table in ("replay_entries", "ingress_receipts", "read_admissions",
+                              "protected_world_read_sources")
+                )
+                assert conn.execute("SELECT count(*) FROM " + table).fetchone() == (
+                    expected,
+                )
             assert conn.execute("SELECT count(*) FROM protected_send_leases").fetchone() == (
-                0 if sender_mode == "sealed" else 1,
+                0 if sender_mode == "sealed" else expected_authorizations,
             )
+            assert conn.execute(
+                "SELECT count(*) FROM protected_world_commit_sources"
+            ).fetchone() == (0 if sender_mode == "sealed" else 3,)
+            assert conn.execute(
+                "SELECT count(*) FROM protected_world_rejection_sources"
+            ).fetchone() == (0 if sender_mode == "sealed" else 2,)
     finally:
         try:
             if created:

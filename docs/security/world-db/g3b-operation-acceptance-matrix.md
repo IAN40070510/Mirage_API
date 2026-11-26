@@ -7,6 +7,21 @@
 Promotion、Authorized Snapshot、Send Lease 已真正完成。以下沒有一條路由
 取得正式 G3b 全操作端到端 PASS。
 
+**2026-11-26 D-74 真九容器 I-01～I-04 隔離候選增量：**
+在**正式 Docker Compose 定義的九個非 root／真 SCRAM／mTLS 服務**上，
+測試專用的短期 Sender 命令覆寫（正式 Sender CLI／Release Fuse 不變）
+已從真 Gateway Client HTTPS 收到 I-01～I-04 各種原生 200／409：
+Inventory 讀／預留／取消、歷史 operation、未知 SKU／不存在歷史操作／
+重複取消；同一版本的兩個不同 Ed25519 JWS 並行 mutation 只允許一筆
+200，另一筆必須 503，讀回世界版本 4／庫存餘量 3，全部重放固定 503。
+真 PG 逐項核對 **11 Ingress／Read Source、10 Candidate／Promotion／
+Admission／Send Lease、3 World Commit Source、2 Rejection Source**。
+指定 ARM64 `161.33.154.211` 隔離初測工作
+`job_01M8B3P9E500DE6V9J97FGNH5Q` **1 passed／41.74 秒**，
+JUnit `i01-i04-race-candidate-trial.xml`；正式 sealed 模式仍回 503、
+零 Lease。此增量**未使用已簽署正式 Publisher Profile，也沒有解封
+Sender、覆蓋其餘 16 條路由或完成所有故障矩陣**，全 G3b Gate 保持 OPEN。
+
 **傳輸子項實測**：固定程式 SHA `cb3e8a6a7d218e7f2144ba0d8ea641486e987898`，
 [PostgreSQL 17.6 CI 45056622731](https://github.com/IAN40070510/Mirage_API/actions/runs/45056622731)
 `65 passed`、實體 mTLS `4 passed`；

@@ -55,9 +55,22 @@ JUnit `full-compose-receipt-candidate-cc2e0af.xml`；拋棄式容器、資料卷
 網路由測試清理。不代表正式 Sender 可解封，亦未覆蓋所有路由／故障／
 恢復或 Owner 簽署；`SINGLE-NODE-01/02` 仍 PARTIAL，G3b～G6 仍 NO-GO。
 
+**2026-11-26 九容器 Inventory I-01～I-04＋並行 CAS 增量（仍 NO-GO）：**
+沿用 D-74 正式九服務拓樸與七條分離 mTLS、九個實體 NOINHERIT
+SCRAM Login；只在獨立拋棄式專案覆寫 Sender 的測試 ASGI 候選。
+新增原生 Client HTTPS 的 I-01 預留 200／未知 SKU 409、I-02 取消
+200／重複取消 409、I-03 歷史操作 200／不存在 409、I-04 庫存
+200／未知 SKU 409；兩個不同 JWS 的同版 CAS 真並行只有一筆
+200、敗者 503，讀回版本 4／剩餘庫存 3。全體 JWS 重放 503。
+PG 逐表核對 **11 筆 Ingress／Read Source、10 筆 Candidate／Promotion／
+Admission／Send Lease、3 筆 Commit Source、2 筆 Rejection Source**，
+拒絕路徑不能自行製造成功起送。ARM64 初步 `job_01M8B3P9E500DE6V9J97FGNH5Q`
+**1 passed／41.74 秒**，JUnit `i01-i04-race-candidate-trial.xml`；
+完整精確 SHA 雙模式與其餘 16 路由仍須另驗，正式 Sender 不解封。
+
 | 階段 | 隔離實測 | 尚未完成的放行條件 |
 | --- | --- | --- |
-| G3b | ARM64 四個獨立 non-root mTLS 服務與專用 SCRAM、20/20 無簽章路徑拒絕；I-01～I-04 的 8 組、C-01～C-09 的 16 組、M-01～M-07 的 10 組原生 Client 200／指定 400／404／409，均由真 Ed25519 JWS→Verifier→Executor→Validator→Publisher→Authorizer 跨七 TLS Listener、唯一 PG Lease 與 Replay 拒絕隔離驗收；新增每服務**不同實體 SCRAM Login** 的七 TLS 隔離回歸，包含 Sender／Authorizer 缺少關鍵唯讀 ACL 的真 `REVOKE` 啟動拒絕 | **20 路由尚未完成全部指定錯誤／CAS／故障／URL 矩陣**，Medusa 非空初始品項、完整官方契約變體、正式容器七服務 Secret／網路／憑證輪替及安全審核 |
+| G3b | ARM64 四個獨立 non-root mTLS 服務與專用 SCRAM、20/20 無簽章路徑拒絕；I-01～I-04 的 8 組、C-01～C-09 的 16 組、M-01～M-07 的 10 組原生 Client 200／指定 400／404／409，均由真 Ed25519 JWS→Verifier→Executor→Validator→Publisher→Authorizer 跨七 TLS Listener、唯一 PG Lease 與 Replay 拒絕隔離驗收；新增每服務**不同實體 SCRAM Login** 的七 TLS 隔離回歸，包含 Sender／Authorizer 缺少關鍵唯讀 ACL 的真 `REVOKE` 啟動拒絕；D-74 真九容器新增 I-01～I-04 原生 200／409 與同版 CAS 一贏一拒 | **其餘 16 路由**仍未完成標準九容器全部指定錯誤／CAS／故障／URL 矩陣；Medusa 非空初始品項、正式核准 Profile、正式容器密鑰輪替與安全審核 |
 | G4 | Receipt-only Sender 綁定不可變 DB Pin，唯一 Lease；Gateway 原始 HTTP mTLS、授權 Envelope Hash 與 Client 原生 HTTP；隔離七 TLS／真 PG／JWS 重放測試已通過；新增正式 D-74 九容器**臨時測試覆寫**的原生 200／一次 Lease，與正式 sealed 503／零 Lease 雙模式核對 | 正式服務仍封閉 503；不可拿測試覆寫當正式釋出；正式 Sender／Gateway 部署、完整路由與 Client 端安全審核 |
 | G5 | 已知 Restore／Purge、不可逆 Lease、密碼學 Anchor 模擬與獨立 PostgreSQL Fence 的隔離回歸；精確 `7ada6fd` ARM64 `53 passed` 額外覆蓋真 SCRAM、舊 Sender SQL DB Trigger、TEMP 偽裝、COMMIT ACK 不確定與標準單機 Profile fail-closed；實際 PG17 `pg_dump -Fc`／`pg_restore` 至另一暫存 DB，還原後先持久隔離再測新舊 Sender，隔離重跑 4/4；新增兩獨立 SCRAM Login、停流確認、實體 ACL／角色繼承拒絕與 Marker 雙帳號讀回的 `restore_bootstrap` CLI；再新增可選主機側 UUIDv4 預期檔與 Sender 啟動前 DB Marker 比對，舊備份／錯 Marker 拒絕 | 正式 Restore 控制面／故障域啟動、完整 DB Restore／GC／部署 Schema 和可選外部 Fence Acceptance；單機不得宣稱防整機快照倒退 |
 | G6 | 真 JWS 全鏈經七 TLS／PG Lease／原生 200，JWS 重放阻擋；Sender TCP 停機、復原新 Receipt、COMMIT 後未知 ACK、Known Restore 與實際 Sender mTLS Read Timeout 五類隔離案例均 fail-closed；Gateway Client 下游斷線不重送 | Client 實體掉線／網路封包遺失／跨節點重啟與延遲綜合矩陣、可追溯放行與 Owner 簽核 |
