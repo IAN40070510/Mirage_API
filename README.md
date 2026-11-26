@@ -389,6 +389,14 @@ OWASP 分類是設計弱點情境的依據。管理者在啟動時選定已實�
 
 ## 快速使用
 
+**正式架構選擇（D-74）：Docker Compose 標準單機部署，外部 Restore Fence 選配。**
+目前 [`deploy/single-node/compose.yaml`](deploy/single-node/compose.yaml) 是
+受保護九容器拓樸與本機 Gateway 隔離候選；不同於下方展示 Compose，
+**尚未完成正式放行、沒有公網 Gateway 預設入口**。
+各服務目的、Secret 分權、部署前必要條件與保留的 G3b～G6 Gate 見
+[標準單機部署說明](docs/single-node-compose.md)，不得把下方 Demo 啟動
+當作 Trusted Send 正式驗收。
+
 在專案根目錄執行：
 
 ```powershell
@@ -543,6 +551,22 @@ HTTP 驗證器執行 16 個一般及攻擊特徵請求，檢查 `200 → 404 →
 內部執行與提供軟體、容器、模型或規格給他人，所涉義務可能不同。分發時依實際包含元件保存 MIT／BSD／Apache 等授權與版權聲明；Apache-2.0 元件若帶 `NOTICE`，按條款保留適用內容並標示修改。README 簡表不能替代授權檔與 NOTICE。另核對模型權重的使用／商用／再散布條款，以及下載或打包的 API 規格、範例、文件的個別權利。不要把「依賴某個 LGPL／GPL 程式」直接等同整個獨立專案必須改用該授權；若未來引入其程式碼或連結／分發該元件，按**具體版本、整合方式與分發形式**評估並履行義務。
 
 ### Gateway 與獨立 Mirage 程序的 HTTPS 驗收
+
+#### 2026-11-25：G3b～G6 隔離候選（正式傳送仍關閉）
+
+可信 Client HTTP 的節點現在分為五層：
+
+1. **Gateway**：收原始 Client HTTPS，將相同 method／raw path／query／全部有序 Headers／Body 以自己的 mTLS 身分送出；不能由 Runtime 重建。
+2. **Verifier／Executor／Native Validator**：驗章、消費一次性 JTI、綁定業務操作，建立並驗證原生候選；不擁有 Send 權。
+3. **Publisher／Authorizer**：以 Receipt 從可信持久來源推導唯一授權、候選 Hash 與不可變 Deadline；Caller 不可指定 Status／Body。
+4. **Sender**：以獨立實體 Login 查不可變 Pin，在資料庫一次提交唯一 Send Lease 後，發出原生 status／headers／body。
+5. **Gateway→Client**：只可轉送與前述授權 Hash **完全相同**的原生 HTTP；Client 斷線或 ACK 未知不重新起送。
+
+實作拆在三個堆疊式 **Draft／NO-GO** PR：[Receipt 授權鏈 #32](https://github.com/IAN40070510/Mirage_API/pull/32)、[Receipt-only Sender #33](https://github.com/IAN40070510/Mirage_API/pull/33)、[原生 Gateway #34](https://github.com/IAN40070510/Mirage_API/pull/34)。
+`src/deception/security/protected_gateway.py` 為**僅能回環位址啟動**的隔離候選，正式 `create_sender_service()` 依然拒絕起送。獨立 ARM64 `161.33.154.211` 的七 TLS Listener／真 Ed25519 JWS 全鏈／唯一 PG Lease／Sender 停機與復原測試具體見
+[RPC 模組文件](docs/protected-rpc.md)和[Send Lease 文件](docs/protected-send.md)。
+G5 標準單機完整功能**不強制**外部 Restore Fence，但不承諾整機快照回滾偵測。
+**隔離候選已有同一 Client 請求的真 Verifier 全鏈測試；仍缺跨故障域／公網 Client 故障矩陣、正式最小權限部署、TLS 身分及 Owner 放行；不可把此隔離測試視作正式 G3b～G6 結案。**
 
 ### Gateway 與完整商品回應的驗收
 

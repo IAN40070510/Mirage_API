@@ -7,6 +7,51 @@
 Promotion、Authorized Snapshot、Send Lease 已真正完成。以下沒有一條路由
 取得正式 G3b 全操作端到端 PASS。
 
+**2026-11-26 D-74 真九容器 I-01～I-04 隔離候選增量：**
+在**正式 Docker Compose 定義的九個非 root／真 SCRAM／mTLS 服務**上，
+測試專用的短期 Sender 命令覆寫（正式 Sender CLI／Release Fuse 不變）
+已從真 Gateway Client HTTPS 收到 I-01～I-04 各種原生 200／409：
+Inventory 讀／預留／取消、歷史 operation、未知 SKU／不存在歷史操作／
+重複取消；同一版本的兩個不同 Ed25519 JWS 並行 mutation 只允許一筆
+200，另一筆必須 503，讀回世界版本 4／庫存餘量 3，全部重放固定 503。
+真 PG 逐項核對 **11 Ingress／Read Source、10 Candidate／Promotion／
+Admission／Send Lease、3 World Commit Source、2 Rejection Source**。
+指定 ARM64 `161.33.154.211` 隔離初測工作
+`job_01M8B3P9E500DE6V9J97FGNH5Q` **1 passed／41.74 秒**，
+JUnit `i01-i04-race-candidate-trial.xml`；正式 sealed 模式仍回 503、
+零 Lease。此增量**未使用已簽署正式 Publisher Profile，也沒有解封
+Sender、覆蓋其餘 16 條路由或完成所有故障矩陣**，全 G3b Gate 保持 OPEN。
+
+**2026-11-26 D-74 九容器 C-01～C-09 真 Client／Cart→Order 增量：**
+以拋棄式 Creator World 真正建立 Cart，從 DB 持久化的派生 Session／
+Resource 核對後才分別簽發 Cart／Order JWS。十八筆 C-01～C-09
+原生 200／指定 409、Cart Item 增刪改／歷史 Operation／完成訂單與取消
+都經正式九容器拓樸的獨立 mTLS／SCRAM 角色和**僅測試覆寫**的 Sender。
+Creator 越權讀派生 Cart、Cart 假冒 Order、舊 CAS 均 503；第二個短期
+Cart 的兩張同版 JWS 並行只有一個 200／World Commit，另一個 503。
+含一筆基準 Inventory 200，共 **20 筆 Candidate／Promotion／Admission／
+Send Lease、2 筆 Cart Creation、7 筆 World Commit Source、5 筆
+Rejection Source**，重放一律 503。ARM64 受控試驗
+`job_01M8BH30A2008NDD0FV4W72CAP` **1 passed／49.96 秒**，
+JUnit `cart-c01-c09-strict-trial.xml`；正式 Compose 與 Sender CLI 未改。
+**2026-11-26 D-74 九容器 M-01～M-07 Medusa Store 原生增量：**
+另一獨立 Creator World 建立 Medusa Cart，使用真 Publishable Key 與各平台
+互異的合成 Source／Profile／Contract Hash，經九容器驗證十次原生
+Client `200`／`400`／`404`，涵蓋 Cart 建立／讀取、Item 增刪改、
+無效數量、未知 Variant、完成 Cart 與讀取 Order。錯 Key、Creator 跨
+Scope、Cart 冒充 Order、未具受保護錯誤來源的非法重複刪除／空 Cart
+完成均拒絕 `503`；所有簽名請求重放均拒絕。含基準 Inventory 讀取，
+PG 精確核對 **11 Candidate／Promotion／Admission／Send Lease、1 Cart
+Creation、5 World Commit Source、2 Medusa Rejection Source**。
+第一次試跑因合成測試證據的三平台 Contract Hash 重複而被 Registry
+正確拒絕；僅修正測試資料的跨平台 Hash 唯一性後，ARM64 工作
+`job_01M8BHBTS700RHXYNDP8VT9MWF` **1 passed／42.25 秒**，
+JUnit `medusa-m01-m07-unique-trial.xml`；沒有放寬 Registry。
+**至此 I-01～I-04、C-01～C-09、M-01～M-07 共 20 條路由均具
+D-74 原生 Client 2xx／4xx 至少一組受控候選證據，但不等於各路由
+完整錯誤／URL／競態／故障矩陣驗收。** 正式核准 Publisher Profile、
+Sender Release Fuse、全部故障變體及 Owner GO 仍 **OPEN／NO-GO**。
+
 **傳輸子項實測**：固定程式 SHA `cb3e8a6a7d218e7f2144ba0d8ea641486e987898`，
 [PostgreSQL 17.6 CI 45056622731](https://github.com/IAN40070510/Mirage_API/actions/runs/45056622731)
 `65 passed`、實體 mTLS `4 passed`；
@@ -459,26 +504,56 @@ Rejection Source 合計 4。**僅這組 I-01→I-02 正向／重複取消候選�
 
 | 編號 | 實際方法／路由 | 來源 Proof | 固定 Executor | 2xx／4xx 完整相容簽收 |
 | --- | --- | --- | --- | --- |
-| I-01 | POST `/synthetic/inventory/reservations` | 隔離 PASS | 受保護 reserve；單一 Receipt Commit；真 Handler `unknown_synthetic_sku` 409 候選四服務 PASS；200 成功 Commit／獨立 Validator 候選真 PG PASS | OPEN：其他 409、CAS conflict、原生 HTTP |
-| I-02 | POST `/synthetic/inventory/reservations/{reservation_id}/cancel` | 隔離 PASS | 受保護 cancel；真 Reservation 200＋重複取消 `reservation_not_active` 409 候選，SHA `6f42a51` 真 PG PASS；**I-01 真建立→I-02 版本 2→3 取消 200／重複取消 409（`deb0311`、真四服務 #88）PASS** | OPEN：CAS conflict、其他 409、原生 HTTP |
-| I-03 | GET `/synthetic/operations/{attempt}` | 隔離 PASS | 固定 UUID4／空 Body Proof → ReadAdmission；獨立 Validator 核對 WorldOperation、Commit Receipt、Snapshot／Epoch／Key，重建歷史 200 或確定不存在的 409 候選；固定 SHA `88d286f` 真 PG/mTLS CI PASS | OPEN：客戶端原生 200／409、競態與故障路徑 |
-| I-04 | GET `/synthetic/inventory/{sku}` | 隔離 PASS | 固定 SKU／空 Body Proof → Executor ReadAdmission → 獨立 Validator 200 成功／真正缺 SKU 409 候選；SHA `c1769b9` 原始 UTF-8、SHA `4e2cecc` 正規 percent URL 候選真 PG/mTLS PASS | OPEN：Client 原生 200／409、全 URL 相容、G4 Send |
-| C-01 | POST `/synthetic/carts` | 隔離 PASS | Creator→Derived `cart_creation` 200 候選、獨立 Validator／Promotion／Creator Admission 真 PG（`f4ef309`）；真四服務實際 JWS／mTLS／Cart-only DB Role 候選 200、越權更新拒絕（`8f3aea4`、CI #68），跨 Receipt 重用鍵 fail-closed（`43d11ba`、CI #71），雙重 JSON Key／Client 偽造 Inventory 拒絕（`2fe7fb0`、CI #73），來源漂移在 Grant 拒絕 | OPEN：Client 原生 200／409、未知 COMMIT、Grant→Sender 競態、正式部署 |
-| C-02 | GET `/synthetic/carts/{cart_id}` | 隔離 PASS | 受保護 ReadAdmission＋來源 ID；獨立 Validator 按派生 Cart、目前 Snapshot 重建 200 候選，真 PG 測試 PASS；C-01 真建 Cart→新 Derived Session 立刻 GET（`a79df7c`、四服務 #75）PASS；原 Creator 對 Derived ID 跨 Scope 讀取 fail-closed（`91ba701`、四服務 #77）PASS | OPEN：409 來源、其餘跨 Scope 負面、客戶端原生 HTTP |
-| C-03 | POST `/synthetic/carts/{cart_id}/line-items` | 隔離 PASS | 受保護 add 200 Commit／Validator 候選真 PG PASS；真未知 Variant／庫存不足 409 候選 SHA `45b0285` 真 PG PASS；舊版本 CAS fail-closed SHA `c62c79c` 真 PG PASS；**C-01→C-02 新 Derived Cart 的四服務實體 200（`2cd34d1`、#79）＋未知 Variant 409 候選（`f414ecc`、#80）PASS** | OPEN：其餘 409／CAS 並行、原生 HTTP |
-| C-04 | POST `/synthetic/carts/{cart_id}/line-items/{item_id}` | 隔離 PASS | 受保護 update；真品項 200、缺品項 409、重送與 Proof 防替換，SHA `bcb0c68` 真 PG PASS；**新 Derived Cart 真四服務版本 2→3 200 候選（`2d75dfe`、#81）PASS** | OPEN：其他 409／CAS、原生 HTTP、正式部署 |
-| C-05 | DELETE `/synthetic/carts/{cart_id}/line-items/{item_id}` | 隔離 PASS | 受保護 remove；真品項 200、重複刪除 409、重送與 Proof 防替換，SHA `bcb0c68` 真 PG PASS；**同 Derived Cart 真四服務版本 3→4 200 候選（`2d75dfe`、#81）PASS** | OPEN：其他 409／CAS、原生 HTTP、正式部署 |
-| C-06 | POST `/synthetic/carts/{cart_id}/complete` | 隔離 PASS | 受保護 complete 200 候選真 PG PASS；真空 Cart／已完成 Cart 409 候選 SHA `45b0285` 真 PG PASS；**新 Derived Cart 空 Cart 409（`301b784`、四服務 #83）與補品項後真 Order 200（`7b7c076`、四服務 #84）隔離 PASS** | OPEN：其他 409／CAS、原生 HTTP |
-| C-07 | GET `/synthetic/orders/{order_id}` | 隔離 PASS | 獨立 Validator 按受保護派生 Order、ReadAdmission 重建 200，SHA `eb118a7` 真 PG PASS；**C-06 真生成的 Order，獨立 Resource Capability／ReadAdmission 200（`5205e2a`、四服務 #85）PASS** | OPEN：409 來源、原生 HTTP |
-| C-08 | POST `/synthetic/orders/{order_id}/cancel` | 隔離 PASS | 受保護 cancel_order 200 候選真 PG PASS；真重複取消 Order 409 候選 SHA `45b0285` 真 PG PASS；**同 Derived Order 真取消版本 6→7 200（`5205e2a`、四服務 #85）PASS** | OPEN：其他 409／CAS、原生 HTTP |
-| C-09 | GET `/synthetic/carts/{cart_id}/operations/{attempt}` | 隔離 PASS | 唯讀 Validator 核對歷史 WorldOperation、Protected Commit Source／Commit Receipt、ReadAdmission 與快照，重建 200 或確定不存在的 409 候選；固定 SHA `20be55a` 另修補歷史 Cart／Order 的跨 Cart ID 重綁，真 PG/mTLS CI PASS；**新 Derived Cart 真四服務歷史版本 2 200＋缺 UUIDv4 409（`fcf7f81`、#86）隔離 PASS** | OPEN：客戶端原生 200／409、競態與故障路徑 |
-| M-01 | POST `/store/carts` | 隔離 PASS | 僅部署固定 USD／Email、空 items 的原始 HTTP→Executor Creator→Derived Cart、獨立 Validator Medusa 200 候選與 Promotion／Grant 再驗；`cbf6009` 真 PG 165 tests／四服務 #97 PASS，新增 `19a1a3d` 四服務 #101 確認非法 Email／幣別／額外 Inventory／重複 JSON／Idempotency-Key／錯 Key 503，Query 在 Verifier 403，非空 items 503，真 DB 不增加 Cart | OPEN：Client 200／400／404／409，非空 items、其他建立欄位與所有故障 |
-| M-02 | GET `/store/carts/{id}` | 隔離 PASS | 原生 GET→Receipt／Key／Capability→ReadAdmission，`eb2c6ce` 真 PG／四服務隔離 PASS；唯讀 Validator 固定契約 Cart 200 候選 `3230ffa`、真四服務 #94／PG17.6 隔離 PASS | OPEN：Client 200／400／404／409 |
-| M-03 | POST `/store/carts/{id}/line-items` | 隔離 PASS | 特定 400／404 受保護拒絕來源；已知 Variant 真 Commit／獨立 200 候選 `a9eda2d` 真四服務 #45396264049 PASS，缺少 Validator Native Context SELECT 必須拒絕啟動、`3055a1d` 真 PG #45396777965 PASS | OPEN：正式 Client HTTP 200／400／404／409、CAS／ACK／競態及其餘拒絕 |
-| M-04 | POST `/store/carts/{id}/line-items/{line_id}` | 隔離 PASS | 固定 [`b2d0b84`](https://github.com/IAN40070510/Mirage_API/commit/b2d0b849f5753f3c333557abdaaecb6803eac915) 真四服務 [#45430189698](https://github.com/IAN40070510/Mirage_API/actions/runs/45430189698) `success`：M-03 真新增 Item→M-04 同 Derived Scope 數量更新，真 Commit 版本 2→3、獨立 Validator 固定 `StoreCartResponse` 200 候選、重放 403、缺 Item 503 fail-closed，四容器角色／網路／ACL 稽核成功 | **指定 M-04 200 候選隔離子項 PASS**；Client HTTP 200／400／404／409、其他業務拒絕、CAS／ACK／競態仍 OPEN |
-| M-05 | DELETE `/store/carts/{id}/line-items/{line_id}` | 隔離 PASS | 固定 Commit [`8994e06`](https://github.com/IAN40070510/Mirage_API/commit/8994e060db10c648b90bc0ef2f004f649099b350) [四服務 #45486950419](https://github.com/IAN40070510/Mirage_API/actions/runs/45486950419) `success`：真 M-03→M-04→M-05 Item，`cart.remove` 真 Commit 版本 3→4，獨立 Validator 核對官方 Delete 200 `{id,object,deleted,parent}`、重送 403、缺 Item 503，四容器網路／角色／ACL 稽核 PASS；[PG17.6 #45486950455](https://github.com/IAN40070510/Mirage_API/actions/runs/45486950455) `170 passed`、mTLS `5 passed`、G5 模擬 `9 passed`／隔離 Fence `7 passed`；容器 [#45486950465](https://github.com/IAN40070510/Mirage_API/actions/runs/45486950465) `success` | **指定 M-05 200 候選隔離子項 PASS**；Client HTTP 200／400／404／409、缺 Item 404、CAS／ACK／競態仍 OPEN |
-| M-06 | POST `/store/carts/{id}/complete` | 隔離 PASS | 固定 Commit [`bf5fea9`](https://github.com/IAN40070510/Mirage_API/commit/bf5fea92ef2571b05b5cf808e410e76ef35bf7e9) [真四服務 #45487762116](https://github.com/IAN40070510/Mirage_API/actions/runs/45487762116) `success`：M-05 刪空 Cart 503→受保護重新加 Item 版本 5→M-06 真 `cart.complete` Commit 版本 6，獨立 Validator 官方 oneOf `type=order` 200 候選，未付款／未履約；相同 Receipt 重放 403、不同 Receipt 重複完成 503，四角色／mTLS／ACL 驗收；[PG17.6 #45487762125](https://github.com/IAN40070510/Mirage_API/actions/runs/45487762125) `172 passed`、mTLS `5 passed`、G5 模擬 `9 passed`、隔離 Fence `7 passed`；容器 [#45487762135](https://github.com/IAN40070510/Mirage_API/actions/runs/45487762135) `success` | **指定 M-06 200 候選隔離子項 PASS**；Client HTTP 200／400／404／409、空 Cart 原生 400／409、CAS／ACK／競態仍 OPEN |
-| M-07 | GET `/store/orders/{id}` | 隔離 PASS | 原生 GET→Receipt／Key／Capability→ReadAdmission，`eb2c6ce` 真 PG／四服務隔離 PASS；唯讀 Validator 固定契約 Order 200 候選（匿名 `customer_id=null`）`3230ffa`、真四服務 #94／PG17.6 隔離 PASS | OPEN：Client 200／400／404／409 |
+| I-01 | POST `/synthetic/inventory/reservations` | 隔離 PASS | 受保護 reserve；單一 Receipt Commit；真 Handler `unknown_synthetic_sku` 409 候選四服務 PASS；200 成功 Commit／獨立 Validator 候選真 PG PASS；新增七 TLS 真 JWS→Client 原生 reserve 200／未知 SKU 409，均有 PG Grant／Lease 與 Replay 拒絕 | **Client 200／指定 409 隔離子項 PASS**；其他 409、CAS conflict 與正式 G4 Sender OPEN |
+| I-02 | POST `/synthetic/inventory/reservations/{reservation_id}/cancel` | 隔離 PASS | 受保護 cancel；真 Reservation 200＋重複取消 `reservation_not_active` 409 候選，SHA `6f42a51` 真 PG PASS；**I-01 真建立→I-02 版本 2→3 取消 200／重複取消 409（`deb0311`、真四服務 #88）PASS**；新增七 TLS 真 JWS→Client 原生 200／409 且各自 PG Lease／Replay 拒絕 | **Client 200／重複取消 409 隔離子項 PASS**；CAS conflict、其他 409 與正式部署 OPEN |
+| I-03 | GET `/synthetic/operations/{attempt}` | 隔離 PASS | 固定 UUID4／空 Body Proof → ReadAdmission；獨立 Validator 核對 WorldOperation、Commit Receipt、Snapshot／Epoch／Key，重建歷史 200 或確定不存在的 409 候選；固定 SHA `88d286f` 真 PG/mTLS CI PASS；新增七 TLS 真 JWS→Client 原生歷史 200／不存在 409、PG Grant／Lease、Replay 拒絕 | **Client 200／指定 409 隔離子項 PASS**；競態、故障路徑及正式部署 OPEN |
+| I-04 | GET `/synthetic/inventory/{sku}` | 隔離 PASS | 固定 SKU／空 Body Proof → Executor ReadAdmission → 獨立 Validator 200 成功／真正缺 SKU 409 候選；SHA `c1769b9` 原始 UTF-8、SHA `4e2cecc` 正規 percent URL 候選真 PG/mTLS PASS；新增 `tests/test_g6_full_real_chain.py` 真 JWS＋七 TLS＋PG Grant／唯一 Lease 驗證 Client 原生 200 與精確 409 `{"code":"unknown_synthetic_sku"}`，兩個 JWS 重放皆固定拒絕 | **I-04 Client 原生 200／409 隔離子項 PASS**；完整 URL 相容、CAS／故障與正式 G4 Sender 仍 OPEN |
+| C-01 | POST `/synthetic/carts` | 隔離 PASS | Creator→Derived `cart_creation` 200 候選、獨立 Validator／Promotion／Creator Admission 真 PG（`f4ef309`）；真四服務實際 JWS／mTLS／Cart-only DB Role 候選 200、越權更新拒絕（`8f3aea4`、CI #68），跨 Receipt 重用鍵 fail-closed（`43d11ba`、CI #71），雙重 JSON Key／Client 偽造 Inventory 拒絕（`2fe7fb0`、CI #73），來源漂移在 Grant 拒絕；新增七 TLS 真 Client 原生建立 200、衍生 Resource／Session、Replay 503、唯一 Lease | **Client 200 隔離子項 PASS**；建立 409 完整矩陣、未知 COMMIT、Grant→Sender 競態、正式部署 OPEN |
+| C-02 | GET `/synthetic/carts/{cart_id}` | 隔離 PASS | 受保護 ReadAdmission＋來源 ID；獨立 Validator 按派生 Cart、目前 Snapshot 重建 200 候選，真 PG 測試 PASS；C-01 真建 Cart→新 Derived Session 立刻 GET（`a79df7c`、四服務 #75）PASS；原 Creator 對 Derived ID 跨 Scope 讀取 fail-closed（`91ba701`、四服務 #77）PASS；新增七 TLS Client 200、Creator 跨衍生 Scope 503、Replay 503 | **Client 200／跨 Scope 拒絕隔離子項 PASS**；409 來源／其他跨 Scope／正式部署 OPEN |
+| C-03 | POST `/synthetic/carts/{cart_id}/line-items` | 隔離 PASS | 受保護 add 200 Commit／Validator 候選真 PG PASS；真未知 Variant／庫存不足 409 候選 SHA `45b0285` 真 PG PASS；舊版本 CAS fail-closed SHA `c62c79c` 真 PG PASS；**C-01→C-02 新 Derived Cart 的四服務實體 200（`2cd34d1`、#79）＋未知 Variant 409 候選（`f414ecc`、#80）PASS**；新增七 TLS Client 新增 200／未知 Variant 409／舊 CAS 503、Replay 503 | **Client 200／指定 409／CAS 拒絕隔離子項 PASS**；其餘 409／CAS 並行／正式部署 OPEN |
+| C-04 | POST `/synthetic/carts/{cart_id}/line-items/{item_id}` | 隔離 PASS | 受保護 update；真品項 200、缺品項 409、重送與 Proof 防替換，SHA `bcb0c68` 真 PG PASS；**新 Derived Cart 真四服務版本 2→3 200 候選（`2d75dfe`、#81）PASS**；新增七 TLS Client 更新版本 3 的 200／缺品項 409／Replay 503 | **Client 200／指定 409 隔離子項 PASS**；其他 409／CAS／正式部署 OPEN |
+| C-05 | DELETE `/synthetic/carts/{cart_id}/line-items/{item_id}` | 隔離 PASS | 受保護 remove；真品項 200、重複刪除 409、重送與 Proof 防替換，SHA `bcb0c68` 真 PG PASS；**同 Derived Cart 真四服務版本 3→4 200 候選（`2d75dfe`、#81）PASS**；新增七 TLS Client 刪除 200／重複刪除 409／Replay 503 | **Client 200／指定 409 隔離子項 PASS**；其他 409／CAS／正式部署 OPEN |
+| C-06 | POST `/synthetic/carts/{cart_id}/complete` | 隔離 PASS | 受保護 complete 200 候選真 PG PASS；真空 Cart／已完成 Cart 409 候選 SHA `45b0285` 真 PG PASS；**新 Derived Cart 空 Cart 409（`301b784`、四服務 #83）與補品項後真 Order 200（`7b7c076`、四服務 #84）隔離 PASS**；新增七 TLS Client 空 Cart 409／真 Order 200、Replay 503 | **Client 200／指定 409 隔離子項 PASS**；其他 409／CAS／正式部署 OPEN |
+| C-07 | GET `/synthetic/orders/{order_id}` | 隔離 PASS | 獨立 Validator 按受保護派生 Order、ReadAdmission 重建 200，SHA `eb118a7` 真 PG PASS；**C-06 真生成的 Order，獨立 Resource Capability／ReadAdmission 200（`5205e2a`、四服務 #85）PASS**；新增七 TLS Client Order 200／Cart Capability 冒用 Order 503／Replay 503 | **Client 200／跨資源拒絕隔離子項 PASS**；409 來源／正式部署 OPEN |
+| C-08 | POST `/synthetic/orders/{order_id}/cancel` | 隔離 PASS | 受保護 cancel_order 200 候選真 PG PASS；真重複取消 Order 409 候選 SHA `45b0285` 真 PG PASS；**同 Derived Order 真取消版本 6→7 200（`5205e2a`、四服務 #85）PASS**；新增七 TLS Client 取消 200／重複取消 409、Replay 503 | **Client 200／指定 409 隔離子項 PASS**；其他 409／CAS／正式部署 OPEN |
+| C-09 | GET `/synthetic/carts/{cart_id}/operations/{attempt}` | 隔離 PASS | 唯讀 Validator 核對歷史 WorldOperation、Protected Commit Source／Commit Receipt、ReadAdmission 與快照，重建 200 或確定不存在的 409 候選；固定 SHA `20be55a` 另修補歷史 Cart／Order 的跨 Cart ID 重綁，真 PG/mTLS CI PASS；**新 Derived Cart 真四服務歷史版本 2 200＋缺 UUIDv4 409（`fcf7f81`、#86）隔離 PASS**；新增七 TLS Client 歷史 200／缺 UUID4 409、Replay 503 | **Client 200／指定 409 隔離子項 PASS**；競態／故障／正式部署 OPEN |
+| M-01 | POST `/store/carts` | 隔離 PASS | 僅部署固定 USD／Email、空 items 的原始 HTTP→Executor Creator→Derived Cart、獨立 Validator Medusa 200 候選與 Promotion／Grant 再驗；`cbf6009` 真 PG 165 tests／四服務 #97 PASS，新增 `19a1a3d` 四服務 #101 確認非法 Email／幣別／額外 Inventory／重複 JSON／Idempotency-Key／錯 Key 503，Query 在 Verifier 403，非空 items 503，真 DB 不增加 Cart；七 TLS Client Medusa Cart 200、衍生 Session／真 PG 唯一 Lease、Replay 503 | **Client 200 隔離子項 PASS**；其餘 400／404／409、非空 items／建立欄位／故障 OPEN
+| M-02 | GET `/store/carts/{id}` | 隔離 PASS | 原生 GET→Receipt／Key／Capability→ReadAdmission，`eb2c6ce` 真 PG／四服務隔離 PASS；唯讀 Validator 固定契約 Cart 200 候選 `3230ffa`、真四服務 #94／PG17.6 隔離 PASS；七 TLS Client Cart GET 200、錯 Publishable Key／Creator 跨 Scope 503、Replay 503 | **Client 200／身分拒絕隔離子項 PASS**；其餘 400／404／409 OPEN
+| M-03 | POST `/store/carts/{id}/line-items` | 隔離 PASS | 特定 400／404 受保護拒絕來源；已知 Variant 真 Commit／獨立 200 候選 `a9eda2d` 真四服務 #45396264049 PASS，缺少 Validator Native Context SELECT 必須拒絕啟動、`3055a1d` 真 PG #45396777965 PASS；七 TLS Client 有效 Variant 200、無效數量 400 `invalid_data`、未知 Variant 404 `not_found`，每個具真 PG Promotion／Lease／Replay 503 | **Client 200／指定 400／404 隔離子項 PASS**；其餘 409／CAS／ACK／競態 OPEN
+| M-04 | POST `/store/carts/{id}/line-items/{line_id}` | 隔離 PASS | 固定 [`b2d0b84`](https://github.com/IAN40070510/Mirage_API/commit/b2d0b849f5753f3c333557abdaaecb6803eac915) 真四服務 [#45430189698](https://github.com/IAN40070510/Mirage_API/actions/runs/45430189698) `success`：M-03 真新增 Item→M-04 同 Derived Scope 數量更新，真 Commit 版本 2→3、獨立 Validator 固定 `StoreCartResponse` 200 候選、重放 403、缺 Item 503 fail-closed，四容器角色／網路／ACL 稽核成功；七 TLS Client 品項更新 200／真 Derived Cart 版本推進／Replay 503 | **Client 200 隔離子項 PASS**；其餘 400／404／409、CAS／ACK／競態 OPEN
+| M-05 | DELETE `/store/carts/{id}/line-items/{line_id}` | 隔離 PASS | 固定 Commit [`8994e06`](https://github.com/IAN40070510/Mirage_API/commit/8994e060db10c648b90bc0ef2f004f649099b350) [四服務 #45486950419](https://github.com/IAN40070510/Mirage_API/actions/runs/45486950419) `success`：真 M-03→M-04→M-05 Item，`cart.remove` 真 Commit 版本 3→4，獨立 Validator 核對官方 Delete 200 `{id,object,deleted,parent}`、重送 403、缺 Item 503，四容器網路／角色／ACL 稽核 PASS；[PG17.6 #45486950455](https://github.com/IAN40070510/Mirage_API/actions/runs/45486950455) `170 passed`、mTLS `5 passed`、G5 模擬 `9 passed`／隔離 Fence `7 passed`；容器 [#45486950465](https://github.com/IAN40070510/Mirage_API/actions/runs/45486950465) `success`；七 TLS Client 官方 Delete 200、重刪 503／Replay 503 | **Client 200／缺品項 fail-closed 隔離子項 PASS**；缺品項原生 404、CAS／ACK／競態 OPEN
+| M-06 | POST `/store/carts/{id}/complete` | 隔離 PASS | 固定 Commit [`bf5fea9`](https://github.com/IAN40070510/Mirage_API/commit/bf5fea92ef2571b05b5cf808e410e76ef35bf7e9) [真四服務 #45487762116](https://github.com/IAN40070510/Mirage_API/actions/runs/45487762116) `success`：M-05 刪空 Cart 503→受保護重新加 Item 版本 5→M-06 真 `cart.complete` Commit 版本 6，獨立 Validator 官方 oneOf `type=order` 200 候選，未付款／未履約；相同 Receipt 重放 403、不同 Receipt 重複完成 503，四角色／mTLS／ACL 驗收；[PG17.6 #45487762125](https://github.com/IAN40070510/Mirage_API/actions/runs/45487762125) `172 passed`、mTLS `5 passed`、G5 模擬 `9 passed`、隔離 Fence `7 passed`；容器 [#45487762135](https://github.com/IAN40070510/Mirage_API/actions/runs/45487762135) `success`；七 TLS Client 空 Cart 503、補品項後原生 Order 200／Replay 503 | **Client 200／空 Cart fail-closed 隔離子項 PASS**；原生 400／409、CAS／ACK／競態 OPEN
+| M-07 | GET `/store/orders/{id}` | 隔離 PASS | 原生 GET→Receipt／Key／Capability→ReadAdmission，`eb2c6ce` 真 PG／四服務隔離 PASS；唯讀 Validator 固定契約 Order 200 候選（匿名 `customer_id=null`）`3230ffa`、真四服務 #94／PG17.6 隔離 PASS；七 TLS Client 原生 Order GET 200、Cart 假冒 Order 能力 503／Replay 503 | **Client 200／跨資源拒絕隔離子項 PASS**；其餘 400／404／409 OPEN
+
+**七 TLS × 七個實體 SCRAM Role 隔離增量**：I-01～I-04／C-01～C-09／
+M-01～M-07 的三套實機測試保留各自受信 HTTP／mTLS Listener，但將
+Verifier、Executor、唯讀 Validator、Candidate Writer、Promoter、
+Authorizer、Sender 分別綁定獨立 NOINHERIT／SCRAM PostgreSQL Login。
+建置時禁止繼承角色及超級使用者身份，依表／欄位授最小必要權限，
+在 Startup Preflight 先核對物理 Login 與跨角色 DML 拒絕。另以真
+`REVOKE` 驗證 Sender 缺 Purge Fence `SELECT`、Authorizer 缺
+Creator→Derived Creation Source `SELECT` 都必須在啟動前拒絕；
+恢復窄 `GRANT` 後才允許跑完整指定 2xx／4xx／Replay／Lease。
+這是**單主機拋棄式 PG Schema 的隔離角色驗收**，不是正式 Docker
+Secret Mount／網路來源／正式 Release Fuse PASS。
+
+**C-03 真併行 CAS 候選**：`tests/test_g6_cart_full_real_chain.py` 在
+另一個真 Creator→Derived Cart 的相同版本 1，同時提交兩張不同
+JWS／JTI／Receipt／Commit Attempt 的有效加購請求。唯一合法勝者
+取得原生 Client 200／世界版本 2，失敗方只能回固定 503；真 PG
+`world_operations`／`protected_world_commit_sources` 對這兩個 Attempt
+都只能有一筆，`protected_candidate_promotions`／
+`protected_send_leases` 不能產生第二份授權發送。兩張原始 JWS
+再使用均須拒絕，獨立 GET 重建的 Cart 必須等於唯一勝者；這是
+單一隔離競態子項，不代表其他 CAS／網路抖動／壓力矩陣結案。
+
+**I-01 真併行 CAS 候選**：`tests/test_g6_full_real_chain.py` 在
+Inventory 真實已提交版本 3，讓兩張有效而不同的 JWS 同時預留 SKU。
+唯一勝者才能產生原生 Client 200／世界版本 4；敗者固定 503，
+不得有第二筆 `world_operations`／`protected_world_commit_sources`
+或第二份 Send Lease。再由新 Receipt 的獨立 I-04 GET 證實庫存只扣
+一次，兩張舊 JWS 都不可重放；與 C-03 一同收集併發子項證據，
+不得外推成完整跨節點／斷線／DB 恢復測試。
 
 ## 安全簽收門檻
 

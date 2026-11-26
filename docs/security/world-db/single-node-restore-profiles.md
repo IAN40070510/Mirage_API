@@ -55,8 +55,11 @@ spoofed same-name TEMP table cannot hide an actual event. This requires real
 least-privilege login, positive legacy SQL and adversarial TEMP-shadow tests.
 The deployer must suspend ingress before restore and persist the marker **after**
 restoring the database, before reopening Sender; restoring an older DB image after
-the marker could erase it. There is no verified release path, startup orchestrator,
-or protection against already-started network sends yet, so SINGLE-NODE-03 remains OPEN.
+the marker could erase it. A separate opt-in `restore_bootstrap.py` entrypoint now
+verifies this **manual** post-restore marker step under two distinct least-privilege
+logins, but there is still no verified **production** release path, startup
+orchestrator, or protection against already-started network sends; SINGLE-NODE-03
+remains OPEN.
 
 Missing external DSN/secret must not prevent standard single-node **configuration parsing**; configured external mode cannot downgrade to standard because an external field is missing or corrupt. **Remaining security blocker:** a deliberately changed environment that removes *all* external settings is not detectable from an environment-only declaration. An authoritative, durable mode pin outside the World restore domain, guarded transitions, liveness/freshness verification and persistent quarantine are still required before claiming full `SINGLE-NODE-05` or any external assurance. A configured external profile whose authority becomes unavailable MUST remain quarantined, without silent downgrade.
 
@@ -69,6 +72,265 @@ Missing external DSN/secret must not prevent standard single-node **configuratio
 - **SINGLE-NODE-05:** Explicit external mode with wrong/missing credentials or broken network cannot automatically start as standard mode; a profile change needs an auditable authorized transition, no active send lease, and consistent state. **Partial code/test candidate:** fail-closed syntax, field and key checks; not yet durable pin, live Fence or controlled transitions.
 - **SINGLE-NODE-06:** G3b/G4/G6 full native regression, mixed binaries, rollback, concurrency, performance, release fuse and Owner acceptance for an exact SHA/environment. Optionality does not bypass any other security gate.
 
+### 2026-11-25 isolated standard-profile evidence — not a release signature
+
+On the dedicated ARM64 `161.33.154.211` **disposable test PostgreSQL**, exact
+SHA `7ada6fd539075c74ad4660919b0a2a5bc5852acc`, Gateway job
+`job_01M893DRJW00Z7GF0MPMZR6H75` executed
+`tests/test_protected_send.py`, `tests/test_restore_profile.py` and
+`tests/test_world_acl_preflight.py`: **53 passed, 0 failed**; JUnit:
+`/tmp/mirage-g3b-g6-20261125.AsFBoE/g5-standard-roles-exact-7ada6fd.xml`.
+Cases include actual PostgreSQL SCRAM privilege denial, known-restore
+quarantine and idempotence, older Sender SQL INSERT trigger protection,
+adversarial TEMP shadow, unknown COMMIT ACK, active Send Lease versus Purge,
+concurrent StartSend, pinned ASGI partial delivery, and explicit standard versus
+external-profile parse rejection. No external Fence service was installed.
+The exact same SHA's 7 TLS native gateway suite
+`job_01M8939FXM001KK15ZBTSGNCTK` passed **30 tests** covering at least
+one Client-native response per 20 registered routes across Inventory,
+Synthetic Cart/Order and Medusa; its JUnit is
+`/tmp/mirage-g3b-g6-20261125.AsFBoE/g3b-all20-exact-7ada6fd.xml`.
+
+| Gate | Isolated evidence status | Still required for formal acceptance |
+| --- | --- | --- |
+| SINGLE-NODE-01 | **PARTIAL PASS** — D-74 真 PG Volume 重啟；拋棄式 Compose **9/9 healthy**；Gateway 拒絕缺簽章／偽造 JWS；**正式 sealed Sender** 503／零 Lease；臨時測試覆寫已涵蓋 I-01～I-04、C-01～C-09、M-01～M-07 **20 條路由**原生 200／400／404／409 子案、派生 Scope 與 CAS 一贏一拒 | 正式 Sender 仍封閉；批准 Profile／正式 Secret、全部故障／錯誤／URL 變體未驗收，測試覆寫不可上線 |
+| SINGLE-NODE-02 | **PARTIAL PASS** — 真 SCRAM／ACL、九組實體 NOINHERIT、具名 UID Secret POSIX ACL 與 mTLS；Inventory 候選 11 Ingress／10 Lease；Cart 候選含基準請求有 20 唯一 Lease、2 Cart Creation、7 Commit／5 Rejection Source；Medusa 候選含基準請求有 11 唯一 Lease、1 Cart Creation、5 Commit／2 Rejection Source | 正式發送、各角色全部負面 ACL、密鑰輪替／滲透及完整 Client 首 byte／Unknown Transport 仍 OPEN |
+| SINGLE-NODE-03 | **PARTIAL PASS** — local restore marker, immutable DB trigger, mixed legacy Sender SQL and Send/Purge serialization | Real restored-system bootstrap/DB rollback and snapshot reconciliation/GC under release policy; no blind rearming |
+| SINGLE-NODE-04 | **PARTIAL PASS** — profile parser accepts no-Fence mode and live isolated native paths function without it | Formal production-like all-service boot, full feature matrix and explicit `whole_host_rollback_guarantee=false` deployment report |
+| SINGLE-NODE-05 | **PARTIAL PASS** — invalid/missing external settings fail closed in syntax/identity tests | Durable external-mode pin, authorized transition, fresh live authority/quarantine and downgrade resistance |
+| SINGLE-NODE-06 | **PARTIAL PASS** — 30 true seven-TLS tests and separate G6 outage/ACK/timeout subcases | Full matrix: mixed binaries, true network loss, concurrency, performance, rollback recovery and Owner exact-SHA GO |
+
+**None of these six rows is an unconditional final PASS.** In particular,
+local PostgreSQL tests cannot prove an undetected whole-host snapshot rollback,
+and an accepted standard profile must explicitly disclose that limitation.
+The production release fuse, Trusted Send and DECEIVE remain OFF.
+
+**2026-11-26 D-74 真 Compose PostgreSQL 子項驗收（未結案）：**
+Draft PR #34 的固定 SHA `fa0b28b0dffd14c6f96a00689d20e0df9e7f8e5e`
+在專用 ARM64 `161.33.154.211` 使用獨立隨機 Compose 專案執行
+`tests/test_single_node_lifecycle.py`；由真正
+`deploy/single-node/compose.yaml` 啟動 PG17，確認正確 DB Login、
+僅內部 Database 網路、Host Port 不存在、專案 World Volume、
+SQL 寫入後重啟依舊存在、隨機專案卷及容器清理乾淨。
+同一 SHA 的 G5／角色／Compose 回歸
+`job_01M8AFW8AY00XFB7ZX34AE7YT5` **158 passed**，
+七 TLS 真 Client／PG 回歸
+`job_01M8AFZVBW00FSHSVXCQJY4YCJ` **3 passed**；
+JUnit 分別為
+`/tmp/mirage-g3b-g6-20261125.AsFBoE/g5-compose-exact-fa0b28b.xml`
+及 `g3b-g6-7tls-exact-fa0b28b.xml`。
+**此一真 DB 子項不等於九容器共同啟動**，沒有正式 SCRAM Secret
+配發、全部來源 HTTP 錯誤或線路故障證據，且需要明確拋棄式
+Docker opt-in；SINGLE-NODE-01～06 和 G3b～G6 全體仍 **NO-GO**。
+
+**2026-11-26 單機九容器啟動實測（不是 Release GO）：**
+指定 ARM64 測試機 `161.33.154.211` 上，固定代碼起點
+`6e6c4ae2ea5bb60e80234a6f10b5768d266a1668`，
+另建獨立 ARM64 Image `mirage-api:sn-6e6c4ae`
+（SHA-256 Image ID `e59a5017313a92c4cc320d242ac71fda88949b972a5511758743f460f97f901d`），
+不覆寫既存 `mirage-api:standalone`。
+新增的 `tests/test_single_node_full_stack.py` 在全新
+`mirage-sn-full-*` 隨機 Compose 專案，執行真 Migration、
+九組不同實體 SCRAM Login／最低 ACL、不同 mTLS CA／SAN、
+非 world-readable 具名 UID POSIX Secret ACL，核對
+**PostgreSQL 加八服務，共九容器全部 healthy**。
+Gateway 僅在 Host loopback HTTPS 可達，缺簽章 403、
+偽造 JWS 走真 Verifier mTLS 後回 503（無效請求零 Receipt／Lease）。
+再以真 Ed25519 有效 JWS 驗證完整上游鏈：
+Receipt、Read Source、Candidate、Promotion、Response Admission
+各 **1**，重放拒絕；正式 Compose Sender 的 sealed 503 令
+**Send Lease=0**，因此不可將此結果誤列成原生 HTTP 200。
+原九容器啟動工作
+`job_01M8AJE8MQ00GM07DRJHN81QHK` **1 passed／零警告**，
+追加有效 JWS 封閉鏈
+`job_01M8AKCA1Q00DPGD9HHP87X732` **1 passed**；
+測試容器／Named Volume／網路與一次性 Secret 移除。
+本例不含正式完整原生 2xx/4xx 或真正可解封的發送／GC／Restore，
+合成 Publisher Evidence 亦非正式核准證據；
+**SINGLE-NODE-01／02 依然 PARTIAL，G3b～G6 整體 NO-GO**。
+
+**2026-11-26 真九容器 Receiver→Sender 原生發送技術子項：**
+在相同的受控 ARM64 隔離主機，固定應用映像 `mirage-api:sn-cc2e0af`
+與兩套新建亂數 PostgreSQL 17 Compose Project，
+`tests/test_single_node_full_stack.py` 同時核對正式 sealed Sender
+（Client 503／無 Lease）和**只存在測試 tmp_path 中**的 Sender 命令覆寫
+（Client 原生 200、Snapshot Pin、Send Lease 1、重放 503；Ingress／
+Candidate／Promotion／Admission 各 1）。測試命令先執行正式 Sender
+SCRAM／ACL／Profile 與可選 Restore Marker 前置檢查，mTLS／DB 分離不變；
+正式 Compose、正式 Sender CLI 與 Trusted Send 完全不變。
+`job_01M8AZY38J00PN3MRNJT6XCWEW` **2 passed／73.33 秒**，JUnit
+`/tmp/mirage-g3b-g6-20261125.AsFBoE/full-compose-receipt-candidate-cc2e0af.xml`。
+本證據沒有正式 Profile 簽署、全部 20 路由／2xx／4xx、G5 Known Restore／
+GC 故障及 G6 Client 網路丟失／負載／滾動回退矩陣，**不許用測試覆寫解除
+正式 Sender Release Fuse；SINGLE-NODE-01～06 與 G3b～G6 仍 NO-GO**。
+
+**2026-11-26 I-01～I-04／G6 並行 CAS 真 Compose 子項：**
+相同 D-74 九容器短期候選 Sender 增加所有四個 Inventory Route 的
+原生 Client 200／409，以及雙 Ed25519 JWS 同版並行只允許一份 World Commit
+和 Client 200；敗者 503，不鑄造第二次 Lease。
+實際 DB **11 筆 Ingress／Read Source、10 筆 Candidate／Promotion／
+Admission／Lease、3 筆 Commit Source、2 筆 Rejection Source**，
+失敗路徑和重放不提升世界版本。ARM64 試驗
+`job_01M8B3P9E500DE6V9J97FGNH5Q` **1 passed／41.74 秒**，
+JUnit `/tmp/mirage-g3b-g6-20261125.AsFBoE/i01-i04-race-candidate-trial.xml`。
+未完成正式 SHA 雙模式複跑前不能把這項標成精確提交驗收；正式 Sender／
+外部整機回滾保證／G5 GC／G6 Client 線路故障仍保持 **NO-GO**。
+
+**2026-11-26 C-01～C-09 Cart／Order 九容器原生鏈：**
+第三個獨立亂數 Project 先建立 Creator Cart World，再用 DB 派生的
+Cart／Order Session／Resource 簽發真 JWS；C-01～C-09 共 18 次原生
+Client 200／指定 409，包含品項增刪改、操作歷史、完成／取消訂單。
+Creator 跨 Scope、Cart 偽裝 Order、舊 CAS 皆 503；第二個 Cart 的兩張
+同版 JWS 真並行只允許一個原生 200 與一筆 World Commit，敗者 503。
+加上基準 Inventory 讀取，PG 核對 **20 筆 Candidate／Promotion／
+Admission／Send Lease、2 筆 Cart Creation、7 Commit Source、
+5 Rejection Source**，所有可重放 JWS 立即拒絕。
+ARM64 嚴格初測 `job_01M8BH30A2008NDD0FV4W72CAP`
+**1 passed／49.96 秒**，JUnit
+`/tmp/mirage-g3b-g6-20261125.AsFBoE/cart-c01-c09-strict-trial.xml`。
+此為隔離候選，不是正式 Sender Release 或 G5/G6 完整故障驗收。
+
+**2026-11-26 M-01～M-07 Medusa Store 九容器原生鏈：**
+第四個獨立亂數 Project 在獨立 Creator World 建 Cart，使用真
+Publishable Key 和分平台互異的合成 Source／Profile／Contract Hash，
+從 Gateway HTTPS 取得 10 次原生 `200`／`400`／`404`，涵蓋
+M-01～M-07。錯 Key、Creator 跨 Scope、Cart 冒充 Order，及缺少
+受保護錯誤來源的操作固定 `503`，已簽 JWS 的重放立即拒絕。
+另加基準 Inventory 200，PG 核對 **11 Candidate／Promotion／
+Admission／唯一 Send Lease、1 Cart Creation、5 World Commit
+Source、2 Medusa Rejection Source**。測試合成 Contract Hash
+初次跨平台碰撞被 Registry 正確拒絕；只更正 fixture 而不變更 Registry。
+ARM64 初測 `job_01M8BHBTS700RHXYNDP8VT9MWF`
+**1 passed／42.25 秒**，JUnit
+`/tmp/mirage-g3b-g6-20261125.AsFBoE/medusa-m01-m07-unique-trial.xml`。
+此為 20 條路由各至少一組原生 Client 候選的證據，仍非完整正式
+Profile／錯誤／URL／故障／Sender 放行驗收。
+
+### 2026-11-25 G5 actual PostgreSQL restore experiment — bounded evidence
+
+On dedicated disposable ARM64 PostgreSQL 17.6, the opt-in
+`tests/test_g5_real_restore.py` performed an actual `pg_dump -Fc` of an
+isolated migrated source schema and `pg_restore` into a **separately named,
+random temporary database in the same disposable PostgreSQL cluster**. The
+backup was taken before a known-restore marker existed; the restored copy
+therefore contained a protected `SEND_AUTHORIZED` Receipt but **no marker**.
+Before any restored Sender startup or permitted traffic, the experiment
+persisted the marker twice (idempotently), then verified the new Sender
+issued **zero** Send Leases and an older Sender's direct SQL was denied by
+the database's known-restore trigger. Four independent runs passed:
+`job_01M89BEPRS009SYR2E1N2CV6Y6` (one) and
+`job_01M89BFA0W00APSBDM74NY4RYF` (three); JUnit files
+`g5-real-pgdump-restore-experiment.xml` and
+`g5-real-pgdump-restore-repeat-2.xml` through `-4.xml`, under
+`/tmp/mirage-g3b-g6-20261125.AsFBoE/`. Cleanup inspection reported
+**zero** generated `mirage_g5_restore_%` databases remaining.
+
+This proves only the **controlled, manually sequenced, same-host restored-DB
+quarantine subcase**. The marker is not magically included in an older backup;
+real restore orchestration must guarantee quiesced ingress, marker durability
+and Sender isolation *before* traffic. This experiment did **not** test VM
+rollback, boot/restart orchestration, full GC/Purge reconciliation, host-wide
+snapshot detection, a separate failure domain or a production restore.
+`SINGLE-NODE-03`, the full G5 gate and final release remain **OPEN/NO-GO**.
+
+**2026-11-26 incremental restored-DB GC/Purge subcase:** the same opt-in
+PG17.6 `pg_dump -Fc` / `pg_restore` test now continues *after* the known-restore
+quarantine to query Sender's read-only reconciliation: a restored
+`SEND_AUTHORIZED` record with no visible Lease is **not** permission to retry.
+It then installs a real `protected_authorized_snapshot_purge_fences` row with
+one UUIDv4 GC operation, proves exact-ID replay is idempotent, rejects a
+different GC ID, preserves the immutable pinned Envelope bytes and original
+Authorization, and verifies **zero new Send Leases**. Disposable ARM64 lab
+job `job_01M8ABADVY00ZQPFE8B0W2237Q` passed one actual restored-DB case;
+temporary restored DB count **0**. This is an **isolated quarantine/Purge
+subcase only**, not GC byte deletion, concurrent distributed purge, a real
+crash/restart, the production retention policy or a formal G5 release PASS.
+
+The G5 Sender also now exposes **read-only, counter-only**
+`summarize_known_restore_quarantine()` for an isolated physical Sender login.
+It requires at least one immutable Restore marker, then uses a **single SQL
+snapshot** to classify pinned Authorizations without Lease, started/unknown
+sends, terminal sends, existing Leases, GC/Purge Fences and unclassified states.
+This result has no rearm operation and always reports `retry_permitted=false`;
+an empty Lease count after DB rollback never proves that no external bytes were
+sent. PostgreSQL experiment `job_01M8ABGMAR00N443VFMRZGZZKS` passed **2**
+real cases (unmarked DB rejected; previous started/unknown Lease classified;
+real restored/Purged DB classified) with **zero** generated databases left.
+Production recovery review, error-handling, retention and authoritative release
+governance are still **NOT ACCEPTED**.
+
+### Subsequent G5 post-restore bootstrap candidate — not an acceptance signature
+
+`src/deception/security/restore_bootstrap.py` adds an explicit operator-controlled
+`python -m deception.security.restore_bootstrap` command for the same normal
+single-node profile. It demands **both** ingress-stopped and restore-complete
+confirmations, a stable UUIDv4 event, two different physical `NOINHERIT` PostgreSQL
+logins pointing at exactly the same database/schema, and separate secret mounts.
+The Recorder must have only Marker `INSERT`; a readback Sender must have only
+Marker `SELECT`, with no role memberships, `CREATE`, `UPDATE` or `DELETE`.
+The CLI marks under the existing exclusive transaction lock and **reads the exact
+event back using the independent Sender login**; a repeated ID is idempotent.
+Invalid/missing confirmation, credential/target mismatch, unexpectedly elevated
+ACLs and role memberships all reject before insertion. Secrets are read from
+bounded, non-symlink regular files and never printed in CLI output.
+
+The new isolated PG17 `pg_dump -Fc`/`pg_restore` subcase also invokes the actual
+bootstrap CLI, checks deliberate role-ACL and membership attacks, and verifies
+that ordinary and legacy Sender remain quarantined after bootstrapping. The
+**pre-commit** ARM64 jobs `job_01M89CEBNQ00FMS45JHAH0P0WY` (1 pass),
+`job_01M89CGEPX00X3SY807Y01DRF1` (53 pass combined regression) and
+`job_01M89CJ65400KV54JB1A9MP0W7` (5 pass including negatives) used disposable
+DBs and left zero `mirage_g5_restore_%` databases. Their exact-commit
+success is recorded in PR #34 at `73a84461` (58 actual ARM64 tests, four CI
+workflows successful, Python full suite 1559 passed/15 skipped). Ordinary CI
+deliberately skips the destructive real-Restore case without opt-in.
+
+The subsequent boot guard candidate optionally reads a host-side expected
+UUIDv4 file **outside the restored World DB**, and `create_sender_service`
+requires the **matching persisted event through its own physical Sender login
+before constructing even its sealed mTLS app**. A restored older DB with the
+host-side file still present, missing/wrong marker, unreadable/invalid host
+file or DB outage all fail closed at startup. Real PG17 `pg_restore` negative
+and positive tests use the same disposable roles; this remains an opt-in
+boot guard, **not an enforced or authoritative host-side witness**: removing
+the configuration or rolling back the whole VM may remove both sides.
+**No software guard verifies that ingress was truly stopped**, nor is there a
+production restart orchestrator, persistent mode pin, GC/Purge reconciliation
+or approved release mechanism. Thus `SINGLE-NODE-03` remains PARTIAL and
+the release remains NO-GO.
+
+**Docker controlled-stop subcase (candidate, not formal G5 acceptance):**
+`controlled_restore.py` adds a sequence from machine-verified Docker stop of
+explicitly identified opt-in ingress/Sender containers, through a trusted
+World restore callback, to Marker INSERT and independent Sender readback. It
+rechecks each declared container's immutable ID, labels, `RestartPolicy=no`,
+running status and PID before and after restore and after the Marker. No code
+path restarts or releases a Sender. This helps validate the *listed Docker
+processes* and phase ordering, but cannot cover undeclared ingress, alternate
+processes, in-flight packets, concurrent Docker operators or whole-host
+rollback. It does not replace a deployment-wide authoritative quiescence lock;
+`SINGLE-NODE-03` remains PARTIAL and final G5/G6 release NO-GO.
+
+### Standard single-node Compose profile selection (2026-11-26 candidate)
+
+The selected normal deployment mechanism is **one Docker Compose application**,
+not a required second server or Fence authority. The new
+[`deploy/single-node/compose.yaml`](../../../deploy/single-node/compose.yaml)
+defines World PostgreSQL, the seven currently supported protected service
+containers and an **explicit opt-in, loopback-only, still-sealed Gateway
+candidate**. All protected services use distinct non-root UID/Secret sets,
+fixed internal networks and `restart: "no"` for fail-closed known restore.
+Only the Gateway has an opt-in host port, pinned to `127.0.0.1`; PostgreSQL
+and Sender never publish host ports. The Gateway and Sender explicitly declare
+`standard_single_node` v1 and `MIRAGE_TRUSTED_SEND_ENABLE=false`.
+
+This candidate must pass real least-privilege provisioning, mTLS startup,
+native HTTP and Restore/GC/network/Owner acceptance **before any public
+deployment or Trusted Send release**. Current Docker file-backed Secret UID/
+GID/mode restrictions need explicit host ACL verification. See
+[`docs/single-node-compose.md`](../../single-node-compose.md). It does not
+change `SINGLE-NODE-01` through `-06` from PARTIAL/OPEN.
+
 ## Optional external Fence acceptance — mandatory only if enabled or claimed
 
 - **FENCE-OPTION-01:** Independent authority and storage/backup/restore domain; pin namespace, epoch, real SCRAM logins and Ed25519 identity. Same-host Docker lab is insufficient for whole-host rollback claim.
@@ -76,7 +338,7 @@ Missing external DSN/secret must not prevent standard single-node **configuratio
 - **FENCE-OPTION-03:** Durable World Intent, DB-first/Anchor-first ambiguity, both commit-ACK losses, publisher reconciliation, immutable evidence and exact coverage of revocation/replay/binding/sends/purge; unresolved state remains quarantined.
 - **FENCE-OPTION-04:** BD-05 atomic machine-verified Quarantine release bound to exact World snapshot and latest Fence Head, under concurrent Send/Purge/Restore; no human bypass and no new Send authorization created by release.
 
-Existing `RESTORE-ANCHOR-*`, `RESTORE-RELEASE-*` and external `WORLD-RESTORE-PUBLISH/FENCE-*` cases remain required for **the enabled external profile**. Their historical `NOT_RUN`, `OPEN` or partial CI results must not be relabeled PASS. Single-node tests are newly introduced and are also `NOT_RUN` until executed against native code.
+Existing `RESTORE-ANCHOR-*`, `RESTORE-RELEASE-*` and external `WORLD-RESTORE-PUBLISH/FENCE-*` cases remain required for **the enabled external profile**. Their historical `NOT_RUN`, `OPEN` or partial CI results must not be relabeled PASS. The 2026-11-25 isolated single-node subcases above are now executed, but the **full** SINGLE-NODE-01～06 acceptance remains OPEN.
 
 ## Release governance and migration
 

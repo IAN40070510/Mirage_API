@@ -8,6 +8,12 @@ TLS 握手；它不採信 HTTP header 所宣稱的「已驗證身分」。正式
 **僅供該內部 RPC Caller 使用的 CA／信任集**，不可把一般 Gateway 或公共
 服務用戶端 CA 混入。
 
+G3b/G4 的 Gateway 及 Verifier 組裝時以 X.509 CA 公鑰辨識各條信任根，
+包含輪替 CA Bundle 中的**每一張**；不依賴檔名不同就推定權限隔離。
+複製同一 CA 至不同 Secret 名稱、重用 CA 私鑰、不同 Bundle 交集、
+非簽發 CA 或 symlink 欺騙均拒絕啟動。測試只證明候選程序
+啟動拒絕，不取代憑證輪替、撤銷、正式 PKI 與各服務實際來源身分驗收。
+
 ### G4 提前施工：封閉獨立 Sender（未放行）
 
 `create_fixed_sender_app()`／`serve_fixed_sender_mtls()` 讓 Sender 使用另一組
@@ -31,6 +37,38 @@ Scope，從獨立 Sender 的受保護資料庫解析原 Authorizer Pin 後，一
 下游代理，因此不能宣稱整個 G4 Client HTTP 已通，更不能宣稱 G5/G6
 Release Gate 通過。具體查核及限制見 [G4 Send 文件](protected-send.md)。
 
+### Gateway 原生 HTTP 代理候選（未裝載正式 CLI）
+
+`src/deception/security/protected_gateway.py` 新增三個隔離元件：
+`FixedGatewayVerifierMTLSClient` 將 **Client 原始** HTTP method、raw path/query、
+Host、受信任 JWS Header、Body 及 Fingerprint Header 順序以專用雙向 TLS
+交給 Verifier；只接收完整 Receipt→Promotion→Authorizer 鏈且原 Fingerprint、
+Receipt、Owner 與候選 Hash 全相同的結果。`FixedGatewaySenderMTLSClient`
+再以**另一組** Client CA、單一 Receipt ID 起送，禁止第二次 RPC；
+它緩衝並限制原生 Body、排除 H11/Uvicorn transport-only headers，以完整
+status、ordered semantic headers、body bytes 重算 Envelope SHA-256，必須
+與前一段獨立 Authorizer 的 Candidate Hash 一致才能交給 Client。內部
+Sender 503 與合法業務 503 一律靠 Hash 區分，沒有「看到 503 就盲轉」的捷徑。
+
+`create_gateway_native_proxy_candidate_app()` 只接受 HTTPS Client Scope、唯一
+`X-Request-ID` 與唯一 `X-Trusted-Session`，不允許 `/internal/*` 業務路由；
+它保留 Sender 的原生 ASGI Status/Headers/Body，不重建業務內容。未知
+Verifier／Sender RPC、Hash 錯誤、任何異常均返回固定 503；**不重送 Receipt**。
+`serve_gateway_native_proxy_loopback_tls()` 限 `127.0.0.1`／`::1`，供隔離真 TLS
+實驗使用；**無任何 production CLI 或環境旗標**能啟動這個對外候選。
+
+隔離驗收現在分兩層：`tests/test_protected_gateway_proxy.py` 使用固定 Verifier
+stub 專門驗三層 TLS、真 PG Lease、Hash、Sender 停機／復原、真 mTLS Read
+Timeout（8 秒，單次 RPC）與故障；另外
+`tests/test_g6_full_real_chain.py` 以**真正的 Ed25519 JWS、原始 Fingerprint、
+七個各自 loopback TLS Listener** 驗證同一 Client HTTP 經 Gateway→Verifier→
+Executor→Native Validator→Publisher→Authorizer→Sender 原生 200，接著重放
+相同 JWS 固定拒絕且僅有一把持久化 Lease。後者使用拋棄式 PG schema、
+短期獨立測試 CA；正式分別部署／最小權限實體 Login 與跨故障域尚未核准。Sender
+仍是 G4 未解封 App；Sender→Gateway ACK 不等於 Client 已收到，Gateway
+離線、Client 斷線及整機 Restore／跨復原域未知結果均無第二次送出權。
+G5 單機預設不強制外部 Fence，但不能保障整機快照回滾偵測。
+
 ### G3b→G4 Receipt-only Authorizer 接線（可選的隔離驗收增量）
 
 只有在獨立 Validator 已取得精確原生候選、另一個具獨立 SCRAM 角色的
@@ -48,7 +86,7 @@ mTLS 配置，且 Authorizer 與 Publisher 的 Verifier Client Cert/Key 不可
 使用相同實體檔案或相同憑證公鑰。任何一項設定已出現卻為空值或不完整，
 都必須拒絕啟動，不能藉 falsy 空字串退回 Candidate-only。完全未提供這組
 設定才保留舊的內部 Candidate-only 流程。
-目前只有單元隔離鏈驗證，四服務部署尚未接這個選用 Caller、Sender 仍封閉；
+目前另有完整 loopback 七 TLS 端到端隔離驗證，但四服務正式部署尚未接這個選用 Caller、Sender 仍封閉；
 不能把內部 `receipt_authorization` JSON 當成原生 Client HTTP 或正式放行。
 
 ### G3b Direct Verifier HTTP 入口（隔離增量）

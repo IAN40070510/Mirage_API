@@ -1,0 +1,365 @@
+# D-74 標準單機：1 台主機、6 組隔離網路、真實角色與 Secrets；外部 Fence 非必備。
+# 目前是正式拓樸的 PRE-RELEASE 候選：Sender 一律封閉；Gateway 僅 loopback opt-in。
+# 未完成 G3b～G6 全部驗收及 Owner GO 前，不可作公開正式發送入口。
+name: mirage-standard-single-node
+
+x-protected: &protected
+  image: ${MIRAGE_SINGLE_NODE_IMAGE:?pin a reviewed local image}
+  command: ["python", "-m", "deception.security.protected_services"]
+  init: true
+  restart: "no"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  pids_limit: 64
+  mem_limit: 256m
+  tmpfs: ["/tmp:size=16m,mode=1777"]
+  stop_grace_period: 20s
+  # TCP 存活探針只證明 Listener 已 bind，不能當 mTLS/ACL 或業務安全驗收。
+  healthcheck:
+    test: ["CMD", "python", "-c", "import os,socket;socket.create_connection(('127.0.0.1',int(os.environ['MIRAGE_G3B_BIND_PORT'])),2).close()"]
+    interval: 15s
+    timeout: 4s
+    start_period: 20s
+    retries: 4
+
+services:
+  postgres:
+    image: ${MIRAGE_SINGLE_NODE_POSTGRES_IMAGE:-postgres:17.6-alpine}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${MIRAGE_SINGLE_NODE_DB_NAME:?required}
+      POSTGRES_USER: ${MIRAGE_SINGLE_NODE_DB_ADMIN:?required}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets: [postgres_password]
+    volumes:
+      - world_data:/var/lib/postgresql/data
+    networks: [database]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\" -h 127.0.0.1"]
+      interval: 5s
+      timeout: 4s
+      retries: 20
+    stop_grace_period: 60s
+
+  verifier:
+    <<: *protected
+    user: "10021:10021"
+    labels:
+      mirage.restore.stop_eligible: "true"
+      mirage.restore.role: ingress
+    depends_on:
+      postgres: {condition: service_healthy}
+      inventory-executor: {condition: service_healthy}
+      cart-executor: {condition: service_healthy}
+      native-validator: {condition: service_healthy}
+      candidate-publisher: {condition: service_healthy}
+      authorizer: {condition: service_healthy}
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      MIRAGE_G3B_SERVICE_ROLE: verifier
+      MIRAGE_G3B_BIND_HOST: 0.0.0.0
+      MIRAGE_G3B_BIND_PORT: "8443"
+      MIRAGE_G3B_WORLD_SCHEMA: ${MIRAGE_SINGLE_NODE_WORLD_SCHEMA:?required}
+      MIRAGE_G3B_ENVIRONMENT_ID: ${MIRAGE_SINGLE_NODE_ENVIRONMENT_ID:?required}
+      MIRAGE_G3B_DEPLOYMENT_ID: ${MIRAGE_SINGLE_NODE_DEPLOYMENT_ID:?required}
+      MIRAGE_G3B_EXPECTED_ISSUER: ${MIRAGE_SINGLE_NODE_ISSUER:?required}
+      MIRAGE_G3B_EXPECTED_AUDIENCE: ${MIRAGE_SINGLE_NODE_AUDIENCE:?required}
+      MIRAGE_G3B_VERIFIER_LOGIN: ${MIRAGE_SINGLE_NODE_VERIFIER_LOGIN:?required}
+      MIRAGE_G3B_VERIFIER_DSN_FILE: /run/secrets/verifier_dsn
+      MIRAGE_G3B_VERIFIER_KEYS_FILE: /run/secrets/verifier_keys
+      MIRAGE_G3B_VERIFIER_SERVER_CERT_FILE: /run/secrets/verifier_server_cert
+      MIRAGE_G3B_VERIFIER_SERVER_KEY_FILE: /run/secrets/verifier_server_key
+      MIRAGE_G3B_GATEWAY_CLIENT_CA_FILE: /run/secrets/gateway_client_ca
+      MIRAGE_G3B_VERIFIER_CLIENT_CERT_FILE: /run/secrets/verifier_executor_client_cert
+      MIRAGE_G3B_VERIFIER_CLIENT_KEY_FILE: /run/secrets/verifier_executor_client_key
+      MIRAGE_G3B_EXECUTOR_SERVER_CA_FILE: /run/secrets/executor_server_ca
+      MIRAGE_G3B_INVENTORY_EXECUTOR_ORIGIN: https://inventory-executor:8444
+      MIRAGE_G3B_CART_EXECUTOR_ORIGIN: https://cart-executor:8444
+      MIRAGE_G3B_NATIVE_VALIDATOR_ORIGIN: https://native-validator:8445
+      MIRAGE_G3B_VERIFIER_VALIDATOR_CERT_FILE: /run/secrets/verifier_validator_client_cert
+      MIRAGE_G3B_VERIFIER_VALIDATOR_KEY_FILE: /run/secrets/verifier_validator_client_key
+      MIRAGE_G3B_NATIVE_VALIDATOR_SERVER_CA_FILE: /run/secrets/validator_server_ca
+      MIRAGE_G4_PUBLISHER_ORIGIN: https://candidate-publisher:8446
+      MIRAGE_G4_VERIFIER_PUBLISHER_CERT_FILE: /run/secrets/verifier_publisher_client_cert
+      MIRAGE_G4_VERIFIER_PUBLISHER_KEY_FILE: /run/secrets/verifier_publisher_client_key
+      MIRAGE_G4_PUBLISHER_SERVER_CA_FILE: /run/secrets/publisher_server_ca
+      MIRAGE_G4_AUTHORIZER_ORIGIN: https://authorizer:8447
+      MIRAGE_G4_VERIFIER_AUTHORIZER_CERT_FILE: /run/secrets/verifier_authorizer_client_cert
+      MIRAGE_G4_VERIFIER_AUTHORIZER_KEY_FILE: /run/secrets/verifier_authorizer_client_key
+      MIRAGE_G4_AUTHORIZER_SERVER_CA_FILE: /run/secrets/authorizer_server_ca
+      MIRAGE_TRUSTED_SEND_ENABLE: "false"
+    secrets:
+      - verifier_dsn
+      - verifier_keys
+      - verifier_server_cert
+      - verifier_server_key
+      - gateway_client_ca
+      - verifier_executor_client_cert
+      - verifier_executor_client_key
+      - executor_server_ca
+      - verifier_validator_client_cert
+      - verifier_validator_client_key
+      - validator_server_ca
+      - verifier_publisher_client_cert
+      - verifier_publisher_client_key
+      - publisher_server_ca
+      - verifier_authorizer_client_cert
+      - verifier_authorizer_client_key
+      - authorizer_server_ca
+    networks: [ingress, execution, promotion, database]
+    expose: ["8443"]
+
+  inventory-executor:
+    <<: *protected
+    user: "10022:10022"
+    depends_on:
+      postgres: {condition: service_healthy}
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      MIRAGE_G3B_SERVICE_ROLE: executor
+      MIRAGE_G3B_BIND_HOST: 0.0.0.0
+      MIRAGE_G3B_BIND_PORT: "8444"
+      MIRAGE_G3B_WORLD_SCHEMA: ${MIRAGE_SINGLE_NODE_WORLD_SCHEMA:?required}
+      MIRAGE_G3B_EXECUTOR_PLATFORM: synthetic-inventory
+      MIRAGE_G3B_EXECUTOR_LOGIN: ${MIRAGE_SINGLE_NODE_INVENTORY_LOGIN:?required}
+      MIRAGE_G3B_EXECUTOR_DSN_FILE: /run/secrets/inventory_dsn
+      MIRAGE_G3B_EXECUTOR_SERVER_CERT_FILE: /run/secrets/inventory_server_cert
+      MIRAGE_G3B_EXECUTOR_SERVER_KEY_FILE: /run/secrets/inventory_server_key
+      MIRAGE_G3B_VERIFIER_CLIENT_CA_FILE: /run/secrets/inventory_verifier_client_ca
+      MIRAGE_TRUSTED_SEND_ENABLE: "false"
+    secrets: [inventory_dsn, inventory_server_cert, inventory_server_key, inventory_verifier_client_ca]
+    networks: [execution, database]
+    expose: ["8444"]
+
+  cart-executor:
+    <<: *protected
+    user: "10023:10023"
+    depends_on:
+      postgres: {condition: service_healthy}
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      MIRAGE_G3B_SERVICE_ROLE: executor
+      MIRAGE_G3B_BIND_HOST: 0.0.0.0
+      MIRAGE_G3B_BIND_PORT: "8444"
+      MIRAGE_G3B_WORLD_SCHEMA: ${MIRAGE_SINGLE_NODE_WORLD_SCHEMA:?required}
+      MIRAGE_G3B_EXECUTOR_PLATFORM: synthetic-carts
+      MIRAGE_G3B_EXECUTOR_LOGIN: ${MIRAGE_SINGLE_NODE_CART_LOGIN:?required}
+      MIRAGE_G3B_EXECUTOR_DSN_FILE: /run/secrets/cart_dsn
+      MIRAGE_G3B_CART_STATE_FILE: /run/secrets/cart_initial_state
+      MIRAGE_G3B_MEDUSA_PUBLISHABLE_KEY_FILE: /run/secrets/medusa_publishable_key
+      MIRAGE_G3B_EXECUTOR_SERVER_CERT_FILE: /run/secrets/cart_server_cert
+      MIRAGE_G3B_EXECUTOR_SERVER_KEY_FILE: /run/secrets/cart_server_key
+      MIRAGE_G3B_VERIFIER_CLIENT_CA_FILE: /run/secrets/cart_verifier_client_ca
+      MIRAGE_TRUSTED_SEND_ENABLE: "false"
+    secrets: [cart_dsn, cart_initial_state, medusa_publishable_key, cart_server_cert, cart_server_key, cart_verifier_client_ca]
+    networks: [execution, database]
+    expose: ["8444"]
+
+  native-validator:
+    <<: *protected
+    user: "10024:10024"
+    depends_on:
+      postgres: {condition: service_healthy}
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      MIRAGE_G3B_SERVICE_ROLE: validator
+      MIRAGE_G3B_BIND_HOST: 0.0.0.0
+      MIRAGE_G3B_BIND_PORT: "8445"
+      MIRAGE_G3B_WORLD_SCHEMA: ${MIRAGE_SINGLE_NODE_WORLD_SCHEMA:?required}
+      MIRAGE_G3B_VALIDATOR_LOGIN: ${MIRAGE_SINGLE_NODE_VALIDATOR_LOGIN:?required}
+      MIRAGE_G3B_VALIDATOR_DSN_FILE: /run/secrets/validator_dsn
+      MIRAGE_G3B_VALIDATOR_SERVER_CERT_FILE: /run/secrets/validator_server_cert
+      MIRAGE_G3B_VALIDATOR_SERVER_KEY_FILE: /run/secrets/validator_server_key
+      MIRAGE_G3B_VALIDATOR_CLIENT_CA_FILE: /run/secrets/verifier_validator_client_ca
+      MIRAGE_TRUSTED_SEND_ENABLE: "false"
+    secrets: [validator_dsn, validator_server_cert, validator_server_key, verifier_validator_client_ca]
+    networks: [execution, database]
+    expose: ["8445"]
+
+  candidate-publisher:
+    <<: *protected
+    user: "10026:10026"
+    depends_on:
+      postgres: {condition: service_healthy}
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      MIRAGE_G3B_SERVICE_ROLE: publisher
+      MIRAGE_G3B_BIND_HOST: 0.0.0.0
+      MIRAGE_G3B_BIND_PORT: "8446"
+      MIRAGE_G3B_WORLD_SCHEMA: ${MIRAGE_SINGLE_NODE_WORLD_SCHEMA:?required}
+      MIRAGE_G4_PUBLISHER_READER_LOGIN: ${MIRAGE_SINGLE_NODE_PUBLISHER_READER_LOGIN:?required}
+      MIRAGE_G4_PUBLISHER_WRITER_LOGIN: ${MIRAGE_SINGLE_NODE_PUBLISHER_WRITER_LOGIN:?required}
+      MIRAGE_G4_PUBLISHER_PROMOTER_LOGIN: ${MIRAGE_SINGLE_NODE_PUBLISHER_PROMOTER_LOGIN:?required}
+      MIRAGE_G4_PUBLISHER_READER_DSN_FILE: /run/secrets/publisher_reader_dsn
+      MIRAGE_G4_PUBLISHER_WRITER_DSN_FILE: /run/secrets/publisher_writer_dsn
+      MIRAGE_G4_PUBLISHER_PROMOTER_DSN_FILE: /run/secrets/publisher_promoter_dsn
+      MIRAGE_G4_PUBLISHER_EVIDENCE_FILE: /run/secrets/publisher_evidence
+      MIRAGE_G4_PUBLISHER_SERVER_CERT_FILE: /run/secrets/publisher_server_cert
+      MIRAGE_G4_PUBLISHER_SERVER_KEY_FILE: /run/secrets/publisher_server_key
+      MIRAGE_G4_PUBLISHER_VERIFIER_CLIENT_CA_FILE: /run/secrets/verifier_publisher_client_ca
+      MIRAGE_TRUSTED_SEND_ENABLE: "false"
+    secrets: [publisher_reader_dsn, publisher_writer_dsn, publisher_promoter_dsn, publisher_evidence, publisher_server_cert, publisher_server_key, verifier_publisher_client_ca]
+    networks: [promotion, database]
+    expose: ["8446"]
+
+  authorizer:
+    <<: *protected
+    user: "10027:10027"
+    depends_on:
+      postgres: {condition: service_healthy}
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      MIRAGE_G3B_SERVICE_ROLE: authorizer
+      MIRAGE_G3B_BIND_HOST: 0.0.0.0
+      MIRAGE_G3B_BIND_PORT: "8447"
+      MIRAGE_G3B_WORLD_SCHEMA: ${MIRAGE_SINGLE_NODE_WORLD_SCHEMA:?required}
+      MIRAGE_G4_AUTHORIZER_LOGIN: ${MIRAGE_SINGLE_NODE_AUTHORIZER_LOGIN:?required}
+      MIRAGE_G4_AUTHORIZER_DSN_FILE: /run/secrets/authorizer_dsn
+      MIRAGE_G4_AUTHORIZER_SERVER_CERT_FILE: /run/secrets/authorizer_server_cert
+      MIRAGE_G4_AUTHORIZER_SERVER_KEY_FILE: /run/secrets/authorizer_server_key
+      MIRAGE_G4_AUTHORIZER_VERIFIER_CLIENT_CA_FILE: /run/secrets/verifier_authorizer_client_ca
+      MIRAGE_TRUSTED_SEND_ENABLE: "false"
+    secrets: [authorizer_dsn, authorizer_server_cert, authorizer_server_key, verifier_authorizer_client_ca]
+    networks: [promotion, database]
+    expose: ["8447"]
+
+  sender:
+    <<: *protected
+    user: "10025:10025"
+    labels:
+      mirage.restore.stop_eligible: "true"
+      mirage.restore.role: sender
+    depends_on:
+      postgres: {condition: service_healthy}
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      MIRAGE_G3B_SERVICE_ROLE: sender
+      MIRAGE_G3B_BIND_HOST: 0.0.0.0
+      MIRAGE_G3B_BIND_PORT: "8448"
+      MIRAGE_G3B_WORLD_SCHEMA: ${MIRAGE_SINGLE_NODE_WORLD_SCHEMA:?required}
+      MIRAGE_G4_SENDER_LOGIN: ${MIRAGE_SINGLE_NODE_SENDER_LOGIN:?required}
+      MIRAGE_G4_SENDER_DSN_FILE: /run/secrets/sender_dsn
+      MIRAGE_G4_SENDER_SERVER_CERT_FILE: /run/secrets/sender_server_cert
+      MIRAGE_G4_SENDER_SERVER_KEY_FILE: /run/secrets/sender_server_key
+      MIRAGE_G4_SENDER_CLIENT_CA_FILE: /run/secrets/gateway_sender_client_ca
+      MIRAGE_RESTORE_PROFILE: standard_single_node
+      MIRAGE_RESTORE_PROFILE_VERSION: "1"
+      MIRAGE_TRUSTED_SEND_ENABLE: "false"
+    secrets: [sender_dsn, sender_server_cert, sender_server_key, gateway_sender_client_ca]
+    networks: [delivery, database]
+    expose: ["8448"]
+
+  # 必須 --profile isolated-gateway 才啟動，且只有本機 127.0.0.1 可連入。
+  # 這個 Candidate **不是**可直接對外公開的 Trusted HTTP 發送方案。
+  gateway:
+    <<: *protected
+    profiles: [isolated-gateway]
+    user: "10020:10020"
+    command: ["python", "-m", "deception.security.single_node_gateway"]
+    labels:
+      mirage.restore.stop_eligible: "true"
+      mirage.restore.role: ingress
+    depends_on:
+      verifier: {condition: service_healthy}
+      sender: {condition: service_healthy}
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      MIRAGE_SINGLE_NODE_GATEWAY_MODE: sealed_candidate_only
+      MIRAGE_SINGLE_NODE_GATEWAY_BIND_HOST: 0.0.0.0
+      MIRAGE_SINGLE_NODE_GATEWAY_BIND_PORT: "8443"
+      MIRAGE_G3B_BIND_PORT: "8443"
+      MIRAGE_G4_GATEWAY_SERVER_CERT_FILE: /run/secrets/gateway_server_cert
+      MIRAGE_G4_GATEWAY_SERVER_KEY_FILE: /run/secrets/gateway_server_key
+      MIRAGE_G4_GATEWAY_VERIFIER_ORIGIN: https://verifier:8443
+      MIRAGE_G4_GATEWAY_VERIFIER_CLIENT_CERT_FILE: /run/secrets/gateway_verifier_client_cert
+      MIRAGE_G4_GATEWAY_VERIFIER_CLIENT_KEY_FILE: /run/secrets/gateway_verifier_client_key
+      MIRAGE_G4_GATEWAY_VERIFIER_SERVER_CA_FILE: /run/secrets/gateway_verifier_server_ca
+      MIRAGE_G4_GATEWAY_SENDER_ORIGIN: https://sender:8448
+      MIRAGE_G4_GATEWAY_SENDER_CLIENT_CERT_FILE: /run/secrets/gateway_sender_client_cert
+      MIRAGE_G4_GATEWAY_SENDER_CLIENT_KEY_FILE: /run/secrets/gateway_sender_client_key
+      MIRAGE_G4_GATEWAY_SENDER_SERVER_CA_FILE: /run/secrets/gateway_sender_server_ca
+      MIRAGE_RESTORE_PROFILE: standard_single_node
+      MIRAGE_RESTORE_PROFILE_VERSION: "1"
+      MIRAGE_TRUSTED_SEND_ENABLE: "false"
+    secrets:
+      - gateway_server_cert
+      - gateway_server_key
+      - gateway_verifier_client_cert
+      - gateway_verifier_client_key
+      - gateway_verifier_server_ca
+      - gateway_sender_client_cert
+      - gateway_sender_client_key
+      - gateway_sender_server_ca
+    networks: [edge, ingress, delivery]
+    ports: ["127.0.0.1:${MIRAGE_SINGLE_NODE_GATEWAY_LOCAL_PORT:-18443}:8443"]
+
+networks:
+  edge: {}
+  ingress: {internal: true}
+  execution: {internal: true}
+  promotion: {internal: true}
+  delivery: {internal: true}
+  database: {internal: true}
+
+volumes:
+  world_data: {}
+
+# 全部 Secret 由主機受限目錄提供；請勿放進 Git 或透過環境變數傳明文。
+# Compose 的 file secrets 不保證 uid/gid/mode remap，主機 ACL 必須由部署者核對。
+secrets:
+  postgres_password: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/postgres_password"}
+  verifier_dsn: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/verifier_dsn"}
+  verifier_keys: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/verifier_keys"}
+  verifier_server_cert: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/verifier_server_cert"}
+  verifier_server_key: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/verifier_server_key"}
+  gateway_client_ca: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/gateway_client_ca"}
+  verifier_executor_client_cert: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/verifier_executor_client_cert"}
+  verifier_executor_client_key: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/verifier_executor_client_key"}
+  executor_server_ca: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/executor_server_ca"}
+  verifier_validator_client_cert: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/verifier_validator_client_cert"}
+  verifier_validator_client_key: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/verifier_validator_client_key"}
+  validator_server_ca: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/validator_server_ca"}
+  verifier_publisher_client_cert: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/verifier_publisher_client_cert"}
+  verifier_publisher_client_key: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/verifier_publisher_client_key"}
+  publisher_server_ca: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/publisher_server_ca"}
+  verifier_authorizer_client_cert: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/verifier_authorizer_client_cert"}
+  verifier_authorizer_client_key: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/verifier_authorizer_client_key"}
+  authorizer_server_ca: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/authorizer_server_ca"}
+  inventory_dsn: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/inventory_dsn"}
+  inventory_server_cert: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/inventory_server_cert"}
+  inventory_server_key: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/inventory_server_key"}
+  inventory_verifier_client_ca: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/inventory_verifier_client_ca"}
+  cart_dsn: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/cart_dsn"}
+  cart_initial_state: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/cart_initial_state"}
+  medusa_publishable_key: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/medusa_publishable_key"}
+  cart_server_cert: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/cart_server_cert"}
+  cart_server_key: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/cart_server_key"}
+  cart_verifier_client_ca: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/cart_verifier_client_ca"}
+  validator_dsn: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/validator_dsn"}
+  validator_server_cert: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/validator_server_cert"}
+  validator_server_key: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/validator_server_key"}
+  verifier_validator_client_ca: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/verifier_validator_client_ca"}
+  publisher_reader_dsn: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/publisher_reader_dsn"}
+  publisher_writer_dsn: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/publisher_writer_dsn"}
+  publisher_promoter_dsn: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/publisher_promoter_dsn"}
+  publisher_evidence: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/publisher_evidence"}
+  publisher_server_cert: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/publisher_server_cert"}
+  publisher_server_key: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/publisher_server_key"}
+  verifier_publisher_client_ca: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/verifier_publisher_client_ca"}
+  authorizer_dsn: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/authorizer_dsn"}
+  authorizer_server_cert: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/authorizer_server_cert"}
+  authorizer_server_key: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/authorizer_server_key"}
+  verifier_authorizer_client_ca: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/verifier_authorizer_client_ca"}
+  sender_dsn: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/sender_dsn"}
+  sender_server_cert: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/sender_server_cert"}
+  sender_server_key: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/sender_server_key"}
+  gateway_sender_client_ca: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/gateway_sender_client_ca"}
+  gateway_server_cert: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/gateway_server_cert"}
+  gateway_server_key: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/gateway_server_key"}
+  gateway_verifier_client_cert: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/gateway_verifier_client_cert"}
+  gateway_verifier_client_key: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/gateway_verifier_client_key"}
+  gateway_verifier_server_ca: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/gateway_verifier_server_ca"}
+  gateway_sender_client_cert: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/gateway_sender_client_cert"}
+  gateway_sender_client_key: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/gateway_sender_client_key"}
+  gateway_sender_server_ca: {file: "${MIRAGE_SINGLE_NODE_SECRETS_DIR:?required}/gateway_sender_server_ca"}

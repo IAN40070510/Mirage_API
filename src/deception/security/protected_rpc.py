@@ -2116,6 +2116,50 @@ def require_mtls_files(*, server_cert: Path, server_key: Path, client_ca: Path) 
             raise ProtectedRpcConfigurationError("protected_rpc_empty_mtls_file")
 
 
+def require_distinct_mtls_ca_public_keys(*roots: Path) -> None:
+    """逐張比對 X.509 CA Bundle 公鑰，禁止跨角色複製根憑證合併信任域。
+
+    呼叫端須傳入兩條以上必須隔離的信任鏈；缺檔、Symlink、非簽發 CA
+    或同一私鑰重新簽發的不同憑證皆拒絕；輪替中的多根 Bundle 也不得
+    有任一重疊身份，錯誤不透露 Secret 路徑。
+    """
+    from cryptography import x509
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
+    if len(roots) < 2:
+        raise ProtectedRpcConfigurationError("protected_rpc_mtls_ca_set_invalid")
+    identities: set[bytes] = set()
+    try:
+        for path in roots:
+            if (not isinstance(path, Path) or path.is_symlink()
+                    or not path.is_file() or not 0 < path.stat().st_size <= 65536):
+                raise ValueError("invalid CA file")
+            pem = path.read_bytes()
+            certificates = x509.load_pem_x509_certificates(pem)
+            # SSL 的 CA File 可以包含多張憑證；只讀第一張會讓惡意交集根
+            # 混入輪替 Bundle。不得允許可由 SSL 載入、但本檢查忽略的其他區塊。
+            declared = re.findall(rb"-----BEGIN ([A-Z ]+)-----", pem)
+            if (not certificates or len(declared) != len(certificates)
+                    or any(label != b"CERTIFICATE" for label in declared)):
+                raise ValueError("unexpected CA bundle content")
+            for certificate in certificates:
+                constraints = certificate.extensions.get_extension_for_class(
+                    x509.BasicConstraints).value
+                usage = certificate.extensions.get_extension_for_class(x509.KeyUsage).value
+                if not constraints.ca or not usage.key_cert_sign:
+                    raise ValueError("not a signing CA")
+                identity = certificate.public_key().public_bytes(
+                    Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
+                if identity in identities:
+                    raise ProtectedRpcConfigurationError(
+                        "protected_rpc_mtls_ca_identity_reuse_denied")
+                identities.add(identity)
+    except ProtectedRpcConfigurationError:
+        raise
+    except (OSError, ValueError, TypeError, x509.ExtensionNotFound):
+        raise ProtectedRpcConfigurationError("protected_rpc_mtls_ca_invalid") from None
+
+
 def create_sealed_app() -> FastAPI:
     """提供不含敏感資料的控制面健康檢查；禁止一切尚未核准的業務呼叫。"""
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)

@@ -523,6 +523,64 @@ def test_g4_sender_dedicated_secret_and_lease_are_sealed(tmp_path, monkeypatch):
         create_sender_service({**config, "MIRAGE_RESTORE_PROFILE": "external_fence"})
 
 
+def test_g5_sender_bootstrap_requires_out_of_db_expected_restore_event(tmp_path, monkeypatch):
+    """Sender 若被告知預期 Restore UUID，檔案／DB 任一無法核對便不得建立 Listener。"""
+    from deception.world.protected_send import PostgresProtectedSender
+    from deception.world.protected_grant import ProtectedGrantError
+
+    dsn_file = tmp_path / "sender.dsn"
+    dsn_file.write_text("postgresql://sender-only.invalid/g5", encoding="ascii")
+    witness = tmp_path / "restore-witness"
+    event_id = uuid4()
+    witness.write_text(str(event_id), encoding="ascii")
+    witness.chmod(0o600)
+    config = {
+        "MIRAGE_G4_SENDER_DSN_FILE": str(dsn_file),
+        "MIRAGE_G4_SENDER_LOGIN": "sender_only",
+        "MIRAGE_G3B_WORLD_SCHEMA": "public",
+        "MIRAGE_RESTORE_PROFILE": "standard_single_node",
+        "MIRAGE_RESTORE_PROFILE_VERSION": "1",
+        "MIRAGE_G5_EXPECTED_RESTORE_EVENT_FILE": str(witness),
+    }
+    seen = []
+
+    def accepted_preflight(*_args, **_kwargs):
+        """以固定模擬允許 G4 Login 預檢，使案例只測新增的 G5 啟動防線。"""
+
+    def matching_marker(_sender, event):
+        """記錄 Sender 在 Listener 建立前使用的精確 Restore 事件。"""
+        seen.append(event)
+
+    monkeypatch.setattr("deception.security.protected_services._login_preflight",
+                        accepted_preflight)
+    monkeypatch.setattr(PostgresProtectedSender, "require_known_restore_event",
+                        matching_marker)
+    app = create_sender_service(config)
+    assert app.openapi_url is None
+    assert seen == [event_id]
+
+    def missing_marker(_sender, event):
+        """模擬舊備份將本應持久存在的 Marker 回滾掉。"""
+        assert event == event_id
+        raise ProtectedGrantError("protected_sender_expected_restore_marker_absent")
+
+    monkeypatch.setattr(PostgresProtectedSender, "require_known_restore_event",
+                        missing_marker)
+    with pytest.raises(ProtectedRpcConfigurationError, match="expected_restore_marker_unverifiable"):
+        create_sender_service(config)
+    witness.write_text(str(uuid4()).upper(), encoding="ascii")
+    with pytest.raises(ProtectedRpcConfigurationError, match="expected_restore_marker_unverifiable"):
+        create_sender_service(config)
+    witness.write_text(str(event_id), encoding="ascii")
+    witness.chmod(0o644)
+    with pytest.raises(ProtectedRpcConfigurationError, match="expected_restore_marker_unverifiable"):
+        create_sender_service(config)
+    witness.chmod(0o600)
+    with pytest.raises(ProtectedRpcConfigurationError, match="expected_restore_marker_unverifiable"):
+        create_sender_service({**config, "MIRAGE_G5_EXPECTED_RESTORE_EVENT_FILE":
+                               str(tmp_path / "missing-witness")})
+
+
 def test_g4_sender_preflight_requires_column_only_state_update(monkeypatch):
     """Sender 無權修改 Admission 任意欄位，也不能寫 Proof、Snapshot 與業務表。"""
     import psycopg
@@ -554,6 +612,7 @@ def test_g4_sender_preflight_requires_column_only_state_update(monkeypatch):
                 allowed = {("response_admissions", "SELECT"),
                            ("protected_authorized_http_snapshots", "SELECT"),
                            ("protected_grant_bindings", "SELECT"),
+                           ("protected_authorized_snapshot_purge_fences", "SELECT"),
                            ("protected_local_restore_events", "SELECT"),
                            ("protected_send_leases", "INSERT"),
                            ("protected_send_leases", "SELECT"),

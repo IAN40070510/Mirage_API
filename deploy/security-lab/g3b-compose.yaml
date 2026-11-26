@@ -22,6 +22,10 @@ services:
   verifier:
     <<: *g3b-hardening
     user: "10021:10021"
+    # 僅是 G3b Verifier 入口；正式 Gateway 的額外 Listener 需另行盤點／停用。
+    labels:
+      mirage.restore.stop_eligible: "true"
+      mirage.restore.role: ingress
     environment:
       PYTHONDONTWRITEBYTECODE: "1"
       MIRAGE_G3B_SERVICE_ROLE: verifier

@@ -301,6 +301,7 @@ G4 Sender（只准隔離部署；不屬於 G3b 四容器拓樸）專用：
 | `MIRAGE_G4_SENDER_DSN_FILE`／`MIRAGE_G4_SENDER_LOGIN` | 獨立 Sender 物理 SCRAM 身分；嚴禁與 Runtime／Verifier／Executor／Validator 共用 |
 | `MIRAGE_G4_SENDER_SERVER_CERT_FILE`／`MIRAGE_G4_SENDER_SERVER_KEY_FILE` | 封閉 Sender mTLS Server 憑證及私鑰 |
 | `MIRAGE_G4_SENDER_CLIENT_CA_FILE` | Sender 專屬 Caller Client CA，禁止與既有三組 CA 共用 |
+| `MIRAGE_G5_EXPECTED_RESTORE_EVENT_FILE`（選配的單機恢復子控制） | 主機側固定 UUIDv4 檔；若配置，必須在 Listener 建立前用 Sender 實體 Login 查到 DB 同一 Marker，否則拒絕啟動。這不是 External Fence 或整機回滾保證 |
 
 Sender 啟動前檢查物理 Login、`NOINHERIT`、無 Role 成員資格、固定 Schema、
 無 Schema CREATE，另檢查三個授權／快照資料表 SELECT、單次 Lease INSERT／SELECT、
@@ -318,6 +319,13 @@ Sender 啟動時還會解析 D-74 版本化部署宣告（`MIRAGE_RESTORE_PROFIL
 此部分只是模式配置校驗，尚未完成持久模式釘選、正式 Sender 或 Restore
 驗收。503 固定分類為 `fixed_sender_release_gates_not_met`，不再錯稱
 「沒有外部 Fence」本身是標準單機的禁止原因。這不改變硬性 Release Fuse。
+另外若有部署 `MIRAGE_G5_EXPECTED_RESTORE_EVENT_FILE`，Sender 會嚴格讀取
+非 Symlink、不可 world-read 的 UUIDv4 檔，並以**自己的物理 Login**在
+`protected_local_restore_events` 查到同一 ID 後才建立封閉 Service。
+若 DB 還原到舊備份而遺失 Marker，或主機側檔案遺失、權限過寬、UUID
+不符／查詢失敗，均在 Listener 啟動前拒絕。未配置此選配欄位時仍只是
+原本固定 503 的 Sender；環境設定遭刪除、整機同時回滾或已對外
+傳輸的 bytes 均無法由此機制偵測，不能因此簽收 G5 正式 Gate。
 既有
 `PostgresProtectedSender.start_send()` 增加必填 UUIDv4 Receipt，對照
 Authorized Snapshot／Grant Binding 的同一 Receipt，阻止只有 Admission ID 的

@@ -936,6 +936,15 @@ def test_three_process_gateway_verifier_executor_distinct_mtls_roots(isolated_te
         "MIRAGE_G3B_VERIFIER_VALIDATOR_KEY_FILE": str(validator_client_key),
         "MIRAGE_G3B_NATIVE_VALIDATOR_SERVER_CA_FILE": str(validator_ca),
     }
+    # 不論複製的 CA 路徑是否不同，Verifier 不得把 Executor 的根套給 Validator。
+    copied_root = tmp_path / "copied-executor-root.pem"
+    copied_root.write_bytes(executor_ca.read_bytes())
+    with pytest.raises(ProtectedRpcConfigurationError,
+                       match="protected_rpc_mtls_ca_identity_reuse_denied"):
+        create_verifier_service({
+            **verifier_config,
+            "MIRAGE_G3B_NATIVE_VALIDATOR_SERVER_CA_FILE": str(copied_root),
+        })
     executor_config = {
         "MIRAGE_G3B_EXECUTOR_DSN_FILE": str(executor_dsn_file),
         "MIRAGE_G3B_EXECUTOR_LOGIN": executor_login,

@@ -1,5 +1,144 @@
 # Mirage_API 實作與驗收狀態
 
+## 2026-11-25 G3b～G6 安全 Gate 增量（未正式結案）
+
+**2026-11-26 D-74 正式架構選擇：單機 Docker Compose。**
+`deploy/single-node/compose.yaml` 把一台 Ubuntu 的 PostgreSQL、Verifier、
+Inventory／Cart Executor、Validator、Candidate Publisher、Authorizer、Sender
+與 opt-in 隔離 Gateway 組成同一專案；Sender/DB 不發佈 Host 埠，Gateway
+僅 `127.0.0.1`、需顯式 `isolated-gateway` Profile。所有角色有獨立
+容器 UID、Secret、內網、最小權限要求，Sender/Ingress `restart=no` 並
+預留受控 Restore 標籤；沒有任何強制外部 Fence 安裝。
+`tools/check_single_node_compose.py` 與 `tests/test_single_node_compose.py`
+新增惡意公開埠、DSN 跨角色、Restart、身份複用等拒絕測試；這是**候選部署
+與靜態安全規格**，尚未完成正式 Secret provisioning、七服務實際啟動／
+網路故障矩陣或 Owner 放行，**G3b～G6 仍是 NO-GO**。
+
+**2026-11-26 SINGLE-NODE-01 資料庫真容器增量：**
+`tests/test_single_node_lifecycle.py` 在專用 ARM64 主機以
+`mirage-sn-ci-*` 隨機 Compose 專案啟動**本份** D-74 Compose 的 PostgreSQL，
+驗證 PG17／正確 DB 身分、無 Host Port、唯一內網、獨立 World Volume、
+重啟後 SQL 資料持續存在，並確認僅本次專案的容器／卷回收。
+測試需三個獨立 opt-in，普通 CI 為 skip；它不包含其餘八角色或 Gateway
+的真 TLS／SCRAM 初始化，**SINGLE-NODE-01 仍 PARTIAL，02～06 仍 OPEN**。
+完整執行與安全邊界見 [單機部署文件](single-node-compose.md#獨立-postgresql-生命週期實測single-node-01-子項)。
+
+**2026-11-26 九容器真實 Compose 啟動新增子項：**
+`tests/test_single_node_full_stack.py` 在專用 ARM64 拋棄式隨機 Compose
+專案內，以同一個真 PG17 Migration 建立九組分離的實體 SCRAM／NOINHERIT
+Role 和最小 ACL；短期獨立 mTLS CA 與主機具名 UID POSIX ACL
+讓 Verifier／兩 Executor／Validator／Publisher 三 Login／Authorizer／Sender
+以及 Gateway 於同台主機全部 **9/9 healthy**。
+Gateway loopback HTTPS readiness、缺簽章 403、假 JWS 經 mTLS
+失敗 503（這兩種無效請求均不新增 Receipt／Lease）。
+追加有效 Ed25519 JWS：真 Gateway→Verifier→Executor→Validator→Publisher
+→Authorizer 的 Receipt／Read Source／Candidate／Promotion／Admission
+各 1 筆，**Sender 在此 Compose 明確 sealed**，Client 503、
+Send Lease 0、重放不得新建授權；這不是原生 200 發送放行。
+測後拋棄式容器／卷／網路與短期 Secret 移除。映像從固定 `6e6c4ae` 另建
+`mirage-api:sn-6e6c4ae`，原本四服務 `mirage-api:standalone`
+未覆寫。這仍僅是`SINGLE-NODE-01/02` 的**隔離真啟動子項**，
+合成 Publisher Evidence 不能冒充正式 Profile、全原生路由與 G5/G6
+故障 Gate；**G3b～G6 仍 NO-GO**。
+
+**2026-11-26 九容器真 Receipt→Sender 原生 HTTP 增量（仍 NO-GO）：**
+不修改 D-74 正式 Compose、Sender CLI 或 Trusted Send 預設值，
+`tests/test_single_node_full_stack.py` 增加兩種互相獨立的亂數 Project／DB：
+`sealed` 維持真 Gateway→Authorizer 後 `503`／Send Lease 0；
+`isolated_receipt_candidate` 僅由測試產生暫時 Compose Sender 命令覆寫，
+先執行正式 SCRAM／ACL／Profile 前置檢查，再讓既有 Receipt-only
+ASGI 候選於真 mTLS／PG17 環境輸出原生 `200`，同一 JWS 重放 `503`，
+Receipt／Read Source／Candidate／Promotion／Admission／Send Lease 各恰好 1。
+指定 ARM64 `161.33.154.211`、固定 Runtime Image `mirage-api:sn-cc2e0af`
+實測 `job_01M8AZY38J00PN3MRNJT6XCWEW` **2 passed／73.33 秒**，
+JUnit `full-compose-receipt-candidate-cc2e0af.xml`；拋棄式容器、資料卷、
+網路由測試清理。不代表正式 Sender 可解封，亦未覆蓋所有路由／故障／
+恢復或 Owner 簽署；`SINGLE-NODE-01/02` 仍 PARTIAL，G3b～G6 仍 NO-GO。
+
+**2026-11-26 九容器 Inventory I-01～I-04＋並行 CAS 增量（仍 NO-GO）：**
+沿用 D-74 正式九服務拓樸與七條分離 mTLS、九個實體 NOINHERIT
+SCRAM Login；只在獨立拋棄式專案覆寫 Sender 的測試 ASGI 候選。
+新增原生 Client HTTPS 的 I-01 預留 200／未知 SKU 409、I-02 取消
+200／重複取消 409、I-03 歷史操作 200／不存在 409、I-04 庫存
+200／未知 SKU 409；兩個不同 JWS 的同版 CAS 真並行只有一筆
+200、敗者 503，讀回版本 4／剩餘庫存 3。全體 JWS 重放 503。
+PG 逐表核對 **11 筆 Ingress／Read Source、10 筆 Candidate／Promotion／
+Admission／Send Lease、3 筆 Commit Source、2 筆 Rejection Source**，
+拒絕路徑不能自行製造成功起送。ARM64 初步 `job_01M8B3P9E500DE6V9J97FGNH5Q`
+**1 passed／41.74 秒**，JUnit `i01-i04-race-candidate-trial.xml`；
+完整精確 SHA 雙模式與其餘 16 路由仍須另驗，正式 Sender 不解封。
+
+**2026-11-26 九容器 Cart／Order C-01～C-09 原生與 CAS 增量（仍 NO-GO）：**
+第三個獨立 `isolated_cart_candidate` 隨機 D-74 Compose Project 由
+短期 Creator Scope 建真 Cart World；再以受保護衍生 Cart／Order
+Session／Resource 分別簽 JWS，完整跑完 C-01～C-09 的 **18 筆**
+原生 200／指定 409，包含品項增刪改／歷史操作／完成與取消；
+Creator 跨 Scope、Cart 冒充 Order、舊版本 CAS 均固定 503。
+另以不同 JWS 同時寫同一版 Cart，只准一個 Client 200 和 World Commit，
+敗者 503 且不鑄造第二張 Lease；所有成功 JWS 重放固定 503。
+含一筆 Inventory 基準 200，真 PG 精確核對 **20 筆 Candidate／
+Promotion／Admission／Send Lease、2 筆 Cart Creation、7 筆
+World Commit Source、5 筆 Rejection Source**。固定 ARM64 初測
+`job_01M8BH30A2008NDD0FV4W72CAP` **1 passed／49.96 秒**，
+JUnit `cart-c01-c09-strict-trial.xml`，尚待提交精確 SHA 三模式複跑。
+僅測試專用 Sender 覆寫，正式發送和 Owner GO 不變。
+
+**2026-11-26 九容器 Medusa M-01～M-07 原生增量（仍 NO-GO）：**
+第四個 `isolated_medusa_candidate` 拋棄式 Project 由真正 Creator
+Cart World／派生身分，以固定 Publishable Key 綁原始 HTTP JWS，
+核對 M-01～M-07 的 **10 筆**原生 Client 200／400／404，
+包含商品已存在時的品項增刪改、完成訂單與 Order Read；錯 Key、
+Creator 讀 Cart、Cart 讀 Order、無受保護 Error Source 的重複刪除
+和空 Cart 完成皆 503。原生 JWS 重放亦固定 503。
+初測先被 Registry 的 `bootstrap_evidence_conflict` 拒絕：三平台
+測試 Fixture 使用相同 Contract Hash；改成平台互異 Source／Profile／
+Contract Hash 後通過，**未弱化 Registry**。含一筆基準 Inventory 200，
+真 PG 精確 **11 筆 Candidate／Promotion／Admission／Send Lease、
+1 筆 Cart Creation、5 Commit Source、2 Medusa Rejection Source**。
+ARM64 `job_01M8BHBTS700RHXYNDP8VT9MWF` **1 passed／42.25 秒**，
+JUnit `medusa-m01-m07-unique-trial.xml`；已核對 `4305d4c171cade278faf70d42b83817a2507ae42` ARM64 JUnit `single-node-exact-4305d4c.xml`：34 passed、0 skipped、199.515 秒，含 sealed、receipt、cart、medusa 四模式。
+
+G5 Compose 還原控制新增同專案 Gateway、Verifier、Sender 全部容器 ID 核對，含已停止的副本。ARM64 工作 `job_01M8BXXKTM00KF7G7DYD7DV7Q2` 實測 21 passed，涵蓋漏列副本拒絕與完整清單通過。部署序列鎖、外部連線排空及 GC 仍待驗收。
+**I／C／M 共 20 路由已有 D-74 九容器隔離原生回應子項，但完整變體、
+正式 Profile／Sender、G5／G6 和 Owner GO 都仍 OPEN**。
+
+G3b 封閉模式九容器入口：對 I-01～I-04、C-01～C-09、M-01～M-07 分別省略 Request ID 或簽章 Header，共 40 個原生 HTTP 拒絕結果，逐一核對 403 和拒絕原因。PostgreSQL Receipt 與 Send Lease 皆為零。ARM64 工作 `job_01M8BYBEGS001M7YFFK4Y9CNKN` 通過。
+
+G6 九容器 Client 實體斷線子案：I-04 的 TLS Client 收到原生 HTTP 200 狀態前綴後，以 TCP RST 中止連線，沒有讀取 Body。相同 JWS 重送固定 503；PostgreSQL 的 Candidate、Admission 與 Send Lease 計數只增加一筆。ARM64 隔離工作 `job_01M8BY4PQZ00XBA3HJBN7TEZJ8` 通過。此案例未判定中止前核心已緩衝多少 Body；封包遺失、其他故障時點及混合版本回退仍待驗收。
+
+| 階段 | 隔離實測 | 尚未完成的放行條件 |
+| --- | --- | --- |
+| G3b | ARM64 四個獨立 non-root mTLS 服務與專用 SCRAM、20/20 無簽章路徑拒絕；I-01～I-04 的 8 組、C-01～C-09 的 16 組、M-01～M-07 的 10 組原生 Client 200／指定 400／404／409，均由真 Ed25519 JWS→Verifier→Executor→Validator→Publisher→Authorizer 跨七 TLS Listener、唯一 PG Lease 與 Replay 拒絕隔離驗收；新增每服務**不同實體 SCRAM Login** 的七 TLS 隔離回歸；D-74 真九容器 I-01～I-04、C-01～C-09、M-01～M-07 共 20 路由均有原生 Client 2xx／4xx 子案與派生 Scope、CAS 負面 | **三平台其餘完整錯誤／故障／URL／並行變體**、正式核准 Profile、憑證輪替、正式 Client 安全審核仍未完成，不能把 20 條部分覆蓋當作整個 Gate PASS |
+| G4 | Receipt-only Sender 綁定不可變 DB Pin，唯一 Lease；Gateway 原始 HTTP mTLS、授權 Envelope Hash 與 Client 原生 HTTP；隔離七 TLS／真 PG／JWS 重放測試已通過；新增正式 D-74 九容器**臨時測試覆寫**的原生 200／一次 Lease，與正式 sealed 503／零 Lease 雙模式核對 | 正式服務仍封閉 503；不可拿測試覆寫當正式釋出；正式 Sender／Gateway 部署、完整路由與 Client 端安全審核 |
+| G5 | 已知 Restore／Purge、不可逆 Lease、密碼學 Anchor 模擬與獨立 PostgreSQL Fence 的隔離回歸；精確 `7ada6fd` ARM64 `53 passed` 額外覆蓋真 SCRAM、舊 Sender SQL DB Trigger、TEMP 偽裝、COMMIT ACK 不確定與標準單機 Profile fail-closed；實際 PG17 `pg_dump -Fc`／`pg_restore` 至另一暫存 DB，還原後先持久隔離再測新舊 Sender，隔離重跑 4/4；新增兩獨立 SCRAM Login、停流確認、實體 ACL／角色繼承拒絕與 Marker 雙帳號讀回的 `restore_bootstrap` CLI；再新增可選主機側 UUIDv4 預期檔與 Sender 啟動前 DB Marker 比對，舊備份／錯 Marker 拒絕 | 正式 Restore 控制面／故障域啟動、完整 DB Restore／GC／部署 Schema 和可選外部 Fence Acceptance；單機不得宣稱防整機快照倒退 |
+| G6 | 真 JWS 全鏈經七 TLS／PG Lease／原生 200，JWS 重放阻擋；Sender TCP 停機、復原新 Receipt、COMMIT 後未知 ACK、Known Restore 與實際 Sender mTLS Read Timeout 五類隔離案例均 fail-closed；Gateway Client 下游斷線不重送 | Client 實體掉線／網路封包遺失／跨節點重啟與延遲綜合矩陣、可追溯放行與 Owner 簽核 |
+
+隔離候選分支的 PR 為 [#32](https://github.com/IAN40070510/Mirage_API/pull/32)、[#33](https://github.com/IAN40070510/Mirage_API/pull/33)、[#34](https://github.com/IAN40070510/Mirage_API/pull/34)，全為 Draft／**NO-GO**，正式 `Trusted Send OFF`。#33 確切 SHA `5294d075` 的完整 Python CI **1541 passed／14 skipped**，ARM64 World／Role **258 passed／8 skipped**；#34 的確切 CI 應以該 PR 最新 SHA 與 Actions/JUnit 為準，不能沿用前一版的數字冒充。上述 ARM64 是獨立 `161.33.154.211` 測試區，未修改共用 Oracle 既有部署。
+
+本輪 #34 ARM64 隔離驗收：G6 Sender 停機／新 Receipt 復原／已提交 Lease 回覆遺失／Known Restore **3/3**（其中停機與復原同一案例）；Gateway＋Sender 回歸 **26 passed**，工作 `job_01M891JFMM006JBZV10PKQHQVE`；新增同一 Client HTTP 真 Ed25519 JWS→Gateway→Verifier→Executor→Native Validator→Publisher→Authorizer→Sender 的七 TLS Listener 單案例 **1 passed**，工作 `job_01M891W4M600PCGRJD3A0RNZ1T`。該七 Listener 測試使用短期獨立測試 CA 與拋棄式同一 PG schema；各 mTLS Listener 真正獨立，資料庫角色最小權限的完整正式分離仍由別項 Role 驗收與部署 Gate 限制，**不可把此 Lab 視為正式可用性證明**。
+
+較新提交 `1a9fe1f` 的 I-01～I-04 真 Client 七 TLS 完整回歸：ARM64 工作 `job_01M892PB7400PMHA4BNXD22W6A`、`28 passed`、JUnit `/tmp/mirage-g3b-g6-20261125.AsFBoE/g3b-i01-i04-exact-1a9fe1f.xml`；新 Cart／Order 測試 `tests/test_g6_cart_full_real_chain.py` 以 Creator→Derived Cart→Derived Order 的有效短期 JWS 經同樣七 Listener，逐筆精確核對 C-01～C-09 的 16 個指定 Client 原生 200／409 子案例及每張 Replay、Promotion、唯一 Lease，另對 Creator 跨 Scope、Cart 假冒 Order Capability 與舊版本 CAS 要求 503。這只是隔離 Sender 的證據，不是正式 production Sender 切換或 Owner 的 Gate 簽署。
+
+`a53893af` 的 C-01～C-09 確切 ARM64 工作 `job_01M8932BYQ005T61RAE9NE927E`：`29 passed`、JUnit `/tmp/mirage-g3b-g6-20261125.AsFBoE/g3b-cart-exact-a53893a.xml`、文件 2182 functions／69 guides PASS。續新增 `tests/test_g6_medusa_full_real_chain.py`：M-01～M-07 共 10 個 Client 原生 200／400／404、10 筆真 PG Promotion／唯一 Send Lease、10 次即時重放拒絕，錯 Publishable Key／Creator 跨 Scope／缺 Item／空 Cart complete／Cart 假冒 Order 503。Medusa Projector 從 repo 固定的 OpenAPI 來源獨立重建 Payload；不允許 Gateway 虛構 Medusa 4xx。全路由均仍需按完整錯誤／故障表逐項簽收後才可放行。
+
+`7ada6fd` 三平台固定 SHA ARM64 合併回歸：`job_01M8939FXM001KK15ZBTSGNCTK`、**30 passed**、JUnit `/tmp/mirage-g3b-g6-20261125.AsFBoE/g3b-all20-exact-7ada6fd.xml`；I/C/M 共 34 個指定原生回應、相互隔離的短期 JWS／PG Promotion／Send Lease 與逐筆 Replay 拒絕。G5 標準單機獨立回歸：`job_01M893DRJW00Z7GF0MPMZR6H75`、**53 passed**、JUnit `/tmp/mirage-g3b-g6-20261125.AsFBoE/g5-standard-roles-exact-7ada6fd.xml`。兩者均只在可拋棄 PostgreSQL／loopback TLS Lab 驗證，詳見[標準單機驗收表](security/world-db/single-node-restore-profiles.md)，所有全域 Release Gate 仍 NO-GO。
+
+`1f8e62fe6667f566a40bcbe8c806429998377426` 七個獨立實體 SCRAM Login 的精確版本：ARM64 `job_01M8953AMR00TSERDB5NXY5VA7` **127 passed**、G5 `job_01M8955K0M00RTNRA0C2F9V3VW` **37 passed**，GitHub Python 全套 **1555 passed／14 skipped**，World DB／四服務／容器 CI 全部成功，參見 [#34 驗收索引](https://github.com/IAN40070510/Mirage_API/pull/34#issuecomment-7160311938)。本輪再新增 C-03 同版雙 JWS 並行寫入真七 TLS／PG 的候選負面試驗：只允許一筆 World Commit／Client 200，另一筆固定 503，並驗證沒有第二次可發送 Lease；正式矩陣的其他 CAS／斷線／復原案例仍 OPEN。
+
+G6 再新增 I-01 原生 Inventory 同版雙 JWS 真 HTTPS 併發 CAS：兩筆各自合法的 Reservation 對版本 3 同時競爭，一筆 Client 200／世界版本 4、另一筆固定 503；核對真 PostgreSQL 只有一筆 Commit Source／World Operation、兩個 JTI 重放都遭拒，且獨立 I-04 GET 重建唯一勝者的庫存。與 C-03 相同，這是單一隔離子案例而非完整壓力／跨故障域釋出證據。
+
+G5 實際備份還原增量 `tests/test_g5_real_restore.py`：專用 ARM64／拋棄式 PostgreSQL 17.6，在**同一測試 Cluster 的兩個不同資料庫名稱**，以真正 `pg_dump -Fc`、`pg_restore` 驗證舊備份仍含 `SEND_AUTHORIZED` 而沒有後來的 Restore marker；開放 Sender 前補寫可持久 marker 後，新 Sender 零 Lease、舊 Sender 直接 SQL 被 Trigger 拒絕。隔離實驗 `job_01M89BEPRS009SYR2E1N2CV6Y6` 一次 PASS，`job_01M89BFA0W00APSBDM74NY4RYF` 再三次 PASS，JUnit 置於 `/tmp/mirage-g3b-g6-20261125.AsFBoE/g5-real-pgdump-restore-*.xml`；暫存還原資料庫殘留 **0**。測試需明確 `MIRAGE_G5_REAL_RESTORE_ISOLATED=true` opt-in，普通 CI 跳過；證據**不包含**正式啟動編排、整機快照回滾防護、GC 或 Owner 簽核，完整 G5／G6 仍 OPEN。
+
+G5 後續受控 post-restore 子程序：`src/deception/security/restore_bootstrap.py` 的 CLI 要求停流與還原完成雙確認；Recorder 只能 INSERT，另一個實體 Sender 只能 SELECT 回讀 UUIDv4 Marker，必須同 DB／Schema、NOINHERIT／無 membership、無跨角色權限。`tests/test_restore_bootstrap.py` 的前置拒絕，加上 `tests/test_g5_real_restore.py` 真還原後的惡意 `GRANT UPDATE`／`GRANT ROLE` 失敗、撤權後可落盤及重送冪等，ARM64 候選實驗 `job_01M89CJ65400KV54JB1A9MP0W7` **5 passed／暫存還原 DB 殘留 0**；另合併 G5 回歸 `job_01M89CGEPX00X3SY807Y01DRF1` **53 passed**。此子程序**無法自行證明**部署真的停流、也不會在正式 Sender 重啟時自動執行，不是整階段正式驗收 PASS；仍需精確提交 SHA 複驗、真 Restore 啟動編排／Purge／GC／G6 故障矩陣。
+
+G5 增量 Docker 停流順序候選：`controlled_restore.py` 綁定完整 Docker ID、原始容器名稱、`ingress`／`sender` opt-in Labels 與 `RestartPolicy=no`，執行精確 stop 後三次以上確認已退出／PID=0，再串入受控 World Restore 回呼及兩獨立 SCRAM Marker 落盤／讀回。錯誤時一律不呼叫啟動／Release。`tests/test_controlled_restore.py` 覆蓋 manifest、惡意 daemon inspect、停流順序及每個階段故障，另提供明確 opt-in 的無網路 disposable Docker 真停機測試。此功能只驗證已列名 Docker 程序，沒有全 Gateway／旁路盤點、同步 Docker daemon 競爭控制或在途封包證明；`SINGLE-NODE-03` 仍 OPEN。
+
+G5 Sender 啟動前隔離子控制再新增 `MIRAGE_G5_EXPECTED_RESTORE_EVENT_FILE`：檔案留在 World DB 備份域外，若設定則 Sender 必須在封閉 mTLS App 建立前以自己的實體 Login 確認同一 UUIDv4 Marker；真 PG17 舊備份未含事件先拒絕、受控寫入後才可組裝封閉 Sender，錯 UUID 與異常 Secret 檔拒絕。ARM64 提交前 `job_01M89EDYPT00JQ1HZGC0S00TJS` **6 passed**（含真 Restore）、`job_01M89EERVW000JZ6C7YQ4ZM7G3` **6 passed**（Sender 組裝／配置負面）。仍須精確 SHA 重跑；未配置該檔、全機一起回滾或未真正停止流量都不能由這個選配子控制證明，G5／G6 Gate 保持 OPEN。
+
+G5 追加真還原後 GC／Purge 邊界：同一 `tests/test_g5_real_restore.py` 在獨立 PG17 恢復副本完成 Known Restore Marker 後，核對唯讀 `reconcile_send` 即使看不到 Lease 也 `retry_permitted=False`；針對舊備份留下的 `SEND_AUTHORIZED`，新增實體 Snapshot Purge Fence，原 GC UUID 重送冪等、異 ID 重綁拒絕、原始 Envelope 不改寫且無新 Send Lease。ARM64 隔離 `job_01M8ABADVY00ZQPFE8B0W2237Q` **1 passed**／還原測試 DB 殘留 **0**。這不等於清除 Snapshot bytes、完整 GC 保留期、崩潰後自動恢復或 G5 正式 Gate PASS。
+
+G5 恢復唯讀彙整：新增 `ProtectedRestoreQuarantineSummary`、`PostgresProtectedSender.summarize_known_restore_quarantine()`，**有 Marker 才能**在一條 SQL Snapshot 取得受保護授權總數、已授權無 Lease、已起送／結果不明、終態、GC Fence、Lease 和非預期狀態之計數；輸出不帶 Receipt/Lease ID，也永遠不可重送。ARM64 `job_01M8ABGMAR00N443VFMRZGZZKS` **2 passed**，包含沒有 Marker 先拒絕、既有已起送 Lease 分類，以及真還原／Purge 副本分類，暫存 DB 殘留 **0**。此為受控恢復的局部觀察資料，不能證明先前網路 bytes 沒送出，也不是自動恢復或正式放行。
+
 ## 已實作範圍
 
 | 階段 | 可使用能力 | 驗收邊界 |

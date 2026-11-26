@@ -8,11 +8,13 @@ on:
       - fix/g4-pinned-asgi-lease-deadline-20261125
       - fix/g3b-g4-receipt-authorizer-link-20261125
       - fix/g4-receipt-only-sender-proxy-20261125
+      - fix/g4-gateway-native-http-proxy-20261125
   pull_request:
     branches:
       - fix/mir-sec-world-001-resume-20261122
       - fix/g3b-g4-staging-integration-20261125
       - fix/g3b-g4-receipt-authorizer-link-20261125
+      - fix/g4-receipt-only-sender-proxy-20261125
     paths:
       - .github/workflows/g3b-four-service-isolated.yml
       - deploy/security-lab/**

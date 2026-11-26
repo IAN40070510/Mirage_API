@@ -67,6 +67,94 @@ if lease is None:
 # 只有獨立 sender 的真 ASGI 範圍才可消費此 lease；不做未知 COMMIT 重試。
 ```
 
+## G5 受控還原後 Quarantine 入口
+
+實際 PostgreSQL 17.6 受控還原回歸在 Marker 已落盤後，還會用已還原的
+`SEND_AUTHORIZED`/無 Lease 狀態執行 Sender 唯讀對帳，確認絕不發放重試權。
+`PostgresProtectedSender.summarize_known_restore_quarantine()` 進一步以獨立
+Sender 的實體 SELECT 權限，在**單一 PostgreSQL SQL Snapshot** 統計
+Restore Marker 數、Protected Snapshot 總數、授權但無 Lease、已起送／結果
+不明、終態、GC Purge Fence、總 Lease 和非預期狀態。輸出僅含數量，不包含
+Receipt／Lease 明文 ID；Marker 不存在直接拒絕，所有統計結果的
+`retry_permitted=False`。此功能只提供恢復決策所需的**局部只讀證據**，
+**不會**授權再次發送、解封或刪除任何 Snapshot。
+接著以同一真實 DB 執行 `PostgresProtectedSnapshotPurger.fence_snapshot()`，
+驗證唯一 GC ID 冪等、換 ID 拒絕、授權 Snapshot 原始 bytes 保留供稽核，
+且 StartSend 仍然拒絕。這只是被隔離副本上的**不可逆清理資格**案例，
+不是實際刪除 bytes、GC 保留期策略或生產環境的完整恢復驗收。
+
+`python -m deception.security.restore_bootstrap` 提供 **人工控制面的 post-restore
+落盤子程序**，不是 Restore 執行器、外部 Fence 或正式 Sender 解封工具。
+只有在部署控制面已停止新的入口與所有傳輸，並完成指定資料庫的還原，才能
+提供兩個明確的 `--ingress-stopped-confirmed`、`--restore-complete-confirmed`。
+入口先核對兩個**不同實體** PostgreSQL NOINHERIT SCRAM Login、相同
+資料庫／Schema／PG 連線選項、Recorder 僅能 INSERT Marker 與 Sender 僅能
+SELECT Marker（兩者均無 UPDATE／DELETE／CREATE）。其後由 Recorder 以
+交易鎖寫入 UUIDv4 的不可逆 Known Restore 事件，再以**另一條 Sender 實體
+連線**讀回同 ID；無權、失聯、缺表或不同目標全部拒絕。該事件 UUID
+需由部署控制面保存，遇 COMMIT ACK 不明只能使用**相同** UUID 重試。
+
+在**僅供隔離測試**的已停止入口環境，先由 Owner 以檔案秘密掛載供應
+`/run/secrets/restore-recorder-dsn`、`/run/secrets/restore-sender-dsn`
+（非 symlink、至多 4096 bytes、不得 world-readable／group-writable），
+兩份 DSN 需各自設定相同的固定 `search_path`：
+
+```bash
+python -m deception.security.restore_bootstrap \
+  --recorder-dsn-file /run/secrets/restore-recorder-dsn \
+  --recorder-login mirage_restore_recorder \
+  --sender-dsn-file /run/secrets/restore-sender-dsn \
+  --sender-login mirage_restore_sender \
+  --schema world_data \
+  --restore-event-id 2c22b2d8-045d-4b5f-8706-fc4e80c1778b \
+  --ingress-stopped-confirmed --restore-complete-confirmed
+```
+
+成功輸出只含 `quarantined`、`new_marker`、事件 UUID 與
+`whole_host_rollback_guarantee=false`；失敗只回報固定錯誤代碼，絕不印 DSN。
+受控還原工作完成後，可由部署控制面在 **World DB 備份域外**保留只含
+同一個小寫正規 UUIDv4 的本機檔，設定 Sender 的
+`MIRAGE_G5_EXPECTED_RESTORE_EVENT_FILE` 指向它。
+`create_sender_service` 會在建立 Listener 前透過獨立實體 Sender Login
+查同一 Marker：舊資料庫備份不含新 Marker 時，服務直接拒絕啟動；
+Marker 寫入後才允許原本**仍封閉 503** 的服務啟動。檔案缺失、非正規 UUID、
+權限過寬或查詢失敗一律拒絕。使用者自行刪除整個環境設定、未設定檔案或
+整機回滾時不保證能偵測，**這只是選配的 DB-only rollback 子控制**。
+這個子程序**不能自行證明**前述「已停流／已還原」布林聲明是真的，
+也不能防止操作者日後再把 DB 回滾至 Marker 前、不能偵測整機回滾，
+更沒有自動 GC／Snapshot reconcile 或恢復開放流程。Caller 必須將失敗、
+未知結果或無法停流一律視為 **NO-GO**。`SINGLE-NODE-03` 正式 Gate 仍 OPEN。
+
+### G5 Docker 受控還原順序候選
+
+`src/deception/security/controlled_restore.py` 額外提供 `DockerRestoreIsolation`
+與 `run_controlled_known_restore` 程式庫入口，供具備獨立部署控制面的操作程式
+串接。這不是自動從既有部署發現所有入口、可直接在線上執行的 Restore CLI。
+
+1. 控制面必須明確提供 **完整 64 位十六進位容器 ID、Docker 原始容器名稱、
+   `ingress`／`sender` 角色**，兩類都不能缺。使用固定本機 Docker socket，
+   停機前先 `inspect`，確認每個 ID／名稱一致、
+   `mirage.restore.stop_eligible=true`、`mirage.restore.role` 符合、
+   `RestartPolicy=no` 且未設定 `AutoRemove`。兩份隔離 Compose 範本已預留
+   標籤；正式 Gateway 仍需額外盤點，不得直接套用。
+2. 只對已確認 opt-in 的精確 ID 執行 Docker stop；再次 `inspect` 每個容器
+   `Status=exited/created`、`Running=false`、`Restarting=false`、
+   `Dead=false`、`Pid=0`。任何身分換綁、daemon 失聯或程序仍在都拒絕還原。
+3. 由呼叫端提供受控的 `restore_world` 回呼。停流檢查通過後才允許執行；
+   還原完成後 **再次**機器查停流，才使用既有兩個獨立 SCRAM Login
+   寫入不可逆 UUIDv4 Marker 並讀回，最後再查停流。
+4. 所有路徑都**沒有** Sender start、Resume、Replay 或 Release 操作。
+   `restore_world` 錯誤、Marker 寫入未知或 Docker 狀態變更都失敗封閉，
+   操作員必須排查，不可自行略過階段或拿返回值自動解封。
+
+這解決「無機器證據卻直接相信人工停流旗標」的**已列出容器子案例**，
+但不是整機持久隔離證明：控制器尚未具備對**所有** Gateway、旁路程序、
+未列出的 Sender／在途 TCP 連線的完整盤點，Docker `inspect` 與實際
+`pg_restore` 並非不可競爭的原子操作；其他操作者能同時 `docker start`。
+正式部署還需具權威的入口網路封鎖、控制面鎖、原生啟動協調、GC bytes 清除
+及故障矩陣。即使實體 Docker 停機子測通過，**SINGLE-NODE-03 仍 OPEN**，
+**Trusted Send／DECEIVE 不會因本功能啟用**。
+
 ## 故障、驗證與限制
 
 `python -m pytest -q tests/test_protected_send.py` 包含正式
@@ -113,8 +201,11 @@ ID，用不可變 Token/Promotion 到期時間確定授權期限及 Sender Owner
 Receipt→Promotion→Grant Binding→Authorized Snapshot→Send Lease→原生 ASGI
 200 和終態 Audit，並測重用 Receipt、兩份候選的負面情境。
 已新增獨立 Authorizer 物理 SCRAM 角色／Receipt-only mTLS RPC，
-但尚無完整 Validator→Candidate 提交、Verifier→Authorizer→Sender 最終
-Client HTTP 接線；不接受 Runtime 指定 Header/Body 作為授權證據。
+另有 `tests/test_g6_full_real_chain.py` 在拋棄式 PostgreSQL 與七 TLS
+Listener 上串起真 JWS→Verifier→Executor→Validator→Publisher→Authorizer→
+Sender→Client 原生 HTTP 200，並阻斷相同 JWS Replay。此僅為隔離候選，
+不代表正式最小權限拓樸已部署、G6 故障矩陣完成或解除 Sender Fuse；
+不接受 Runtime 指定 Header/Body 作為授權證據。
 
 ### Receipt-only Sender→Gateway 代理候選（未解封）
 
@@ -143,6 +234,17 @@ Sender→Gateway 完成**不代表 Gateway→Client 收到**。任何 Gateway �
 不能快取、重組、替換已釘選的原生狀態／Headers／Body，也不能把內部 503
 混充成功候選。這段 Gateway 真正的雙向代理、前後端 mTLS/Client 邊界、
 斷線後一次性對帳及 G5/G6 故障注入**尚未實作／未獲正式驗收**。
+
+**Gateway 代理候選增量**：`protected_gateway.py` 新增內部 mTLS Client
+與 Loopback-only HTTPS Gateway 實驗入口。它經 Verifier 授權鏈返回的
+`receipt_id + candidate_hash` 驅動 Sender 單次 POST；即使 Sender HTTP 503，
+也只有與授權 Hash 精確相符的 Body／有序 Headers／Status 才能當業務回應。
+驗證失敗只回固定 503，絕不拿 HTTP 回覆碼代替授權證據。
+測試會以三個獨立 TLS Listener、兩個 Client CA、不可重複 Receipt、
+不同 Client Cert 和真 PostgreSQL Lease 逐層驗收。原有正式 Sender
+`/internal/v1/send` 仍永久 503；**候選 Gateway 不得部署公網**。
+前段所述完整 Gateway→Client、G5/G6 Release Gate 的未完成狀態不變；
+候選傳輸綠燈不代表正式服務放行。
 
 **G5 已知 Restore／在途 ASGI 窗口（追加隔離子項，待 CI）**：
 `known_restore_delivery_window()` 在已提交 Lease **之後**取得 PG Session
@@ -302,3 +404,31 @@ Fence INSERT 當作 Object GC 完成或 G4／G5 Release PASS。
 - 固定修補 Commit [`f626f45`](https://github.com/IAN40070510/Mirage_API/commit/f626f45f7c191026a7088c2319ff3027c8ae845f)、[PG17.6 #45488811957](https://github.com/IAN40070510/Mirage_API/actions/runs/45488811957) `success`：真 PG `172 passed`，包含先 Fence 阻止 Start、Active/Unknown Lease 禁止清理、終態後保留 Lease 可 Fence、兩方並行只能一方提交、不可改寫 Fence；獨立 mTLS `5 passed`、G5 模擬 `9 passed`、隔離 Fence `7 passed`。
 - [容器示範 #45488812056](https://github.com/IAN40070510/Mirage_API/actions/runs/45488812056) `success`；文件檢查 `1961 functions／69 guides` PASS。
 - 以上只簽收**同一 PostgreSQL 的 Purge Fence／StartSend 競態指定子項**；正式 Role／GC／Object Pin／Restore／混版未通過，Trusted Send 繼續 **OFF**。
+
+### 七 TLS／七個獨立 SCRAM Login 的啟動 ACL 修補（隔離候選）
+
+在 `tests/test_g6_full_real_chain.py`、`tests/test_g6_cart_full_real_chain.py`
+與 `tests/test_g6_medusa_full_real_chain.py` 的真 Client→Gateway→
+Verifier→Executor→Validator→Publisher→Authorizer→Sender 測試中，資料庫
+不再讓全部服務共用 Schema Owner：Verifier、Executor、Validator、
+Candidate Writer、Promoter、Authorizer、Sender 均使用不同的、不可繼承
+且受限的短期 SCRAM Login。各自只在拋棄式測試 Schema 取得固定所需表
+與欄位權限。Sender 原生回應仍須真實不可逆 PG Lease，無權建立世界事件
+或改寫授權來源。
+
+實體負面試驗找出兩個啟動檢查缺口並修正：
+
+1. Sender 的 StartSend 在鎖定 Admission 後須讀
+   `protected_authorized_snapshot_purge_fences`，但原本 `_login_preflight`
+   未要求此表 `SELECT`，導致角色可啟動、首次合法發送才 503。
+2. C-01／M-01 的 Authorizer 在 Grant 之前重驗 Creator→Derived 世界，
+   需要 `protected_http_operation_bindings`、`protected_cart_creations`、
+   `guest_cart_creations`、`synthetic_resources`、`world_snapshots`、
+   `world_commit_receipts` 的 `SELECT`，原啟動角色清單漏列，導致
+   Candidate Promotion 成功但 Grant 交易失敗。
+
+現在這些權限是啟動必要條件；測試以真 PG `REVOKE` 證明缺權限時
+Preflight 拒絕，再精確恢復最小 `GRANT` 執行完整 Client 原生 2xx／4xx。
+不採用 Owner 資格或 `GRANT ALL` 繞過。這些仍是隔離同主機測試，
+**未**證明正式容器 Secret Mount／跨網路 ACL／生產 Sender Release Fuse
+均已核准，正式 Trusted Send 繼續 OFF。

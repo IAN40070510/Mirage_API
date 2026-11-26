@@ -9,6 +9,10 @@ services:
     profiles: ["g4-sender-sealed"]
     user: "10025:10025"
     restart: "no"
+    # G5 受控還原僅能停用明確 opt-in、固定 ID 的隔離 Sender；不代表可解封。
+    labels:
+      mirage.restore.stop_eligible: "true"
+      mirage.restore.role: sender
     read_only: true
     init: true
     cap_drop: [ALL]

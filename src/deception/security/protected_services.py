@@ -22,6 +22,7 @@ from .protected_rpc import (
     create_native_validator_app, serve_direct_verifier_mtls, serve_fixed_executor_mtls,
     serve_fixed_authorizer_mtls, serve_fixed_candidate_publisher_mtls,
     serve_fixed_sender_mtls, serve_native_validator_mtls,
+    require_distinct_mtls_ca_public_keys,
 )
 
 
@@ -105,6 +106,9 @@ def _login_preflight(dsn: str, login: str, *, role: str, schema: str,
         required = (("response_admissions", "SELECT"),
                     ("protected_authorized_http_snapshots", "SELECT"),
                     ("protected_grant_bindings", "SELECT"),
+                    # StartSend 在同一個 Admission FOR UPDATE 後另讀不可逆
+                    # Purge Fence；缺 SELECT 不能只在首個合法送出時才爆 503。
+                    ("protected_authorized_snapshot_purge_fences", "SELECT"),
                     ("protected_local_restore_events", "SELECT"),
                     ("protected_send_leases", "INSERT"),
                     ("protected_send_leases", "SELECT"),
@@ -128,6 +132,11 @@ def _login_preflight(dsn: str, login: str, *, role: str, schema: str,
             "session_heads", "session_world_bindings", "generation_controls",
             "trusted_key_revocations", "projection_profile_revocations",
             "response_admissions", "protected_grant_bindings",
+            # C-01／M-01 Creator→Derived 跨 Scope Source 必須由 Authorizer
+            # 在 Grant 前重新核對；缺任何一張表不得等到業務送出才 503。
+            "protected_http_operation_bindings", "protected_cart_creations",
+            "guest_cart_creations", "synthetic_resources", "world_snapshots",
+            "world_commit_receipts",
         )) + (("response_admissions", "INSERT"),
               ("protected_grant_bindings", "INSERT"),
               ("protected_authorized_http_snapshots", "INSERT"))
@@ -435,6 +444,17 @@ def create_verifier_service(config: Mapping[str, str]) -> FastAPI:
             client_key=_tls_path(config, "MIRAGE_G4_VERIFIER_AUTHORIZER_KEY_FILE"),
             server_ca=_tls_path(config, "MIRAGE_G4_AUTHORIZER_SERVER_CA_FILE"),
         )
+    # Executor／Validator／Publisher／Authorizer 的上游 Server CA 不得
+    # 因複製 PEM 或重用簽發 Key 而合併成同一權威；Gateway 入站 CA 亦同。
+    ca_keys = ["MIRAGE_G3B_EXECUTOR_SERVER_CA_FILE",
+               "MIRAGE_G3B_NATIVE_VALIDATOR_SERVER_CA_FILE"]
+    if publisher_client is not None:
+        ca_keys.append("MIRAGE_G4_PUBLISHER_SERVER_CA_FILE")
+    if authorizer_client is not None:
+        ca_keys.append("MIRAGE_G4_AUTHORIZER_SERVER_CA_FILE")
+    if config.get("MIRAGE_G3B_GATEWAY_CLIENT_CA_FILE"):
+        ca_keys.append("MIRAGE_G3B_GATEWAY_CLIENT_CA_FILE")
+    require_distinct_mtls_ca_public_keys(*(_tls_path(config, key) for key in ca_keys))
     return create_direct_verifier_app(
         verifier=checker, postgres_dsn=dsn,
         environment_id=environment, deployment_id=deployment,
@@ -599,9 +619,14 @@ def create_candidate_publisher_service(config: Mapping[str, str]) -> FastAPI:
 
 
 def create_sender_service(config: Mapping[str, str]) -> FastAPI:
-    """核對 D-74 部署 Profile，再以獨立 Sender Login 建立封閉的 G4 服務。"""
+    """核對部署 Profile 與可選主機側 Restore Marker，再建立封閉 Sender。"""
     from deception.world.protected_send import PostgresProtectedSender
+    from deception.world.protected_grant import ProtectedGrantError
+    from deception.security.restore_bootstrap import (
+        RestoreBootstrapError, read_expected_restore_event,
+    )
     from deception.security.restore_profile import load_restore_profile
+    import psycopg
 
     if any(config.get(key) for key in (
             "MIRAGE_POSTGRES_DSN", "MIRAGE_G3B_VERIFIER_DSN_FILE",
@@ -616,9 +641,21 @@ def create_sender_service(config: Mapping[str, str]) -> FastAPI:
     login = _required_config(config, "MIRAGE_G4_SENDER_LOGIN")
     _login_preflight(dsn, login, role="sender",
                      schema=_required_config(config, "MIRAGE_G3B_WORLD_SCHEMA"))
-    return create_fixed_sender_app(
-        sender=PostgresProtectedSender(dsn, expected_login=login),
-    )
+    sender = PostgresProtectedSender(dsn, expected_login=login)
+    # 此檔應由部署控制面存放在 World DB 備份域之外，保留還原後的預期
+    # UUID；若部署宣告此檔，缺檔、失配或 DB 還原掉 Marker 時拒絕 Listener。
+    # 未配置此檔仍沿用封閉 Sender，不能拿來宣稱可偵測全部 DB rollback。
+    if "MIRAGE_G5_EXPECTED_RESTORE_EVENT_FILE" in config:
+        try:
+            expected_event = read_expected_restore_event(
+                _required_config(config, "MIRAGE_G5_EXPECTED_RESTORE_EVENT_FILE"),
+            )
+            sender.require_known_restore_event(expected_event)
+        except (RestoreBootstrapError, ProtectedGrantError, psycopg.Error):
+            raise ProtectedRpcConfigurationError(
+                "g5_sender_expected_restore_marker_unverifiable",
+            ) from None
+    return create_fixed_sender_app(sender=sender)
 
 
 def from_environment() -> None:
