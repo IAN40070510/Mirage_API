@@ -93,8 +93,8 @@ Synthetic Cart/Order and Medusa; its JUnit is
 
 | Gate | Isolated evidence status | Still required for formal acceptance |
 | --- | --- | --- |
-| SINGLE-NODE-01 | **PARTIAL PASS** — 20 routes have specified Client HTTP/PG subcases with no external Fence；另有 D-74 原生 Compose 的**真正 PostgreSQL** 容器／卷啟動、重啟、無外部 Port 及清理子案 | Complete 2xx/4xx matrix and actual formal single-node startup of all protected roles without lab-only components |
-| SINGLE-NODE-02 | **PARTIAL PASS** — true SCRAM negative ACL, unique Send Lease, ASGI partial/unknown cases and four-service CI | All seven deployed services with independent physical logins, secret mounts, strict ingress network and client transport |
+| SINGLE-NODE-01 | **PARTIAL PASS** — D-74 真 PG Volume 重啟子案；另已在單機拋棄式 Compose 實測 **9/9 容器 healthy**、Gateway loopback HTTPS 與缺簽章／偽造 JWS 拒絕 | 完整原生 2xx/4xx／World→Publisher→Authorizer→Sender 流程與正式可發布 Profile／Secret、錯誤矩陣仍未驗收 |
+| SINGLE-NODE-02 | **PARTIAL PASS** — 受保護角色真 SCRAM／ACL 及 Unique Lease 子案；新增九組實體 NOINHERIT、具名 UID Secret POSIX ACL 及實際 mTLS 啟動 | 正式發送、各角色所有負面 ACL、密鑰輪替／滲透與完整 Client 首 byte／Unknown Transport 仍 OPEN |
 | SINGLE-NODE-03 | **PARTIAL PASS** — local restore marker, immutable DB trigger, mixed legacy Sender SQL and Send/Purge serialization | Real restored-system bootstrap/DB rollback and snapshot reconciliation/GC under release policy; no blind rearming |
 | SINGLE-NODE-04 | **PARTIAL PASS** — profile parser accepts no-Fence mode and live isolated native paths function without it | Formal production-like all-service boot, full feature matrix and explicit `whole_host_rollback_guarantee=false` deployment report |
 | SINGLE-NODE-05 | **PARTIAL PASS** — invalid/missing external settings fail closed in syntax/identity tests | Durable external-mode pin, authorized transition, fresh live authority/quarantine and downgrade resistance |
@@ -122,6 +122,26 @@ JUnit 分別為
 **此一真 DB 子項不等於九容器共同啟動**，沒有正式 SCRAM Secret
 配發、全部來源 HTTP 錯誤或線路故障證據，且需要明確拋棄式
 Docker opt-in；SINGLE-NODE-01～06 和 G3b～G6 全體仍 **NO-GO**。
+
+**2026-11-26 單機九容器啟動實測（不是 Release GO）：**
+指定 ARM64 測試機 `161.33.154.211` 上，固定代碼起點
+`6e6c4ae2ea5bb60e80234a6f10b5768d266a1668`，
+另建獨立 ARM64 Image `mirage-api:sn-6e6c4ae`
+（SHA-256 Image ID `e59a5017313a92c4cc320d242ac71fda88949b972a5511758743f460f97f901d`），
+不覆寫既存 `mirage-api:standalone`。
+新增的 `tests/test_single_node_full_stack.py` 在全新
+`mirage-sn-full-*` 隨機 Compose 專案，執行真 Migration、
+九組不同實體 SCRAM Login／最低 ACL、不同 mTLS CA／SAN、
+非 world-readable 具名 UID POSIX Secret ACL，核對
+**PostgreSQL 加八服務，共九容器全部 healthy**。
+Gateway 僅在 Host loopback HTTPS 可達，缺簽章 403、
+偽造 JWS 走真 Verifier mTLS 後回 503，
+Receipt／Send Lease 都未增加。隔離執行
+`job_01M8AJE8MQ00GM07DRJHN81QHK` **1 passed／零警告**；
+測試容器／Named Volume／網路與一次性 Secret 移除。
+本例不含正式完整原生 2xx/4xx 或真正可解封的發送／GC／Restore，
+合成 Publisher Evidence 亦非正式核准證據；
+**SINGLE-NODE-01／02 依然 PARTIAL，G3b～G6 整體 NO-GO**。
 
 ### 2026-11-25 G5 actual PostgreSQL restore experiment — bounded evidence
 

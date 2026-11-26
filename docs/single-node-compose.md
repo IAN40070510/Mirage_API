@@ -110,6 +110,46 @@ python3 -m pytest -q tests/test_single_node_lifecycle.py
 正式主機的 Schema、獨立 SCRAM／Secret、實際 mTLS、客戶端錯誤、
 GC／Restore、故障注入與 Owner 仍各有獨立 Gate。
 
+### 九容器真實啟動／SCRAM／mTLS 子項（SINGLE-NODE-01／02）
+
+`tests/test_single_node_full_stack.py` 在**明確 opt-in 的拋棄式 ARM64 Docker 主機**，
+用隨機 `mirage-sn-full-*` 專案啟動本份 D-74 Compose 的 **9/9 容器**：
+PostgreSQL、Verifier、兩個 Executor、Validator、Publisher、Authorizer、
+Sender 以及 loopback Gateway。先在全新 PG17 Migration 建立九個不同的
+`LOGIN NOINHERIT` SCRAM 身分，再以真實 SQL `GRANT`／拒絕權限執行
+每個 Runtime 同款 `_login_preflight`；短期、不同 CA 的 X.509
+Server/Client 身分只存測試目錄。每份 Secret 由檔案擁有者設置
+**具名 UID POSIX ACL**（不開放 world-read），並使用容器真實讀取驗證
+合法 UID 可以讀、異角色 UID 不能讀；不可用 BusyBox `test -r`
+代替實際 open/read。
+
+測試要求所有 9 容器 `healthy`、Database／Sender 不公開 Host 埠，
+只從 loopback HTTPS 讀 Gateway readiness；缺少 Signed Session
+的 HTTP 必須拒絕、假的 JWS 經 Gateway→Verifier 真 mTLS
+也必須固定拒絕，且 DB 新 Receipt／Send Lease 仍為 0。
+成功或失敗只針對本次亂數專案執行 `down --volumes`，
+並驗證容器／網路／卷殘留為零，測試用短期 CA 與 Secret 一併移除。
+**正式部署及任何非拋棄式 DB 絕不可執行這個刪卷流程。**
+
+在該專用主機、Docker Engine／Compose 已核對且存在下述固定來源的
+獨立建置映像時才執行（示例 SHA 對應此輪實測，變更程式須重新建置）：
+
+```bash
+docker build --pull=false --tag mirage-api:sn-6e6c4ae -f Dockerfile .
+MIRAGE_SINGLE_NODE_FULL_STACK_ISOLATED=true \
+MIRAGE_SINGLE_NODE_DISPOSABLE_COMPOSE_PROJECT=true \
+MIRAGE_G5_RESTORE_PG_TOOL_CONTAINER=mirage-g3b-ci-db \
+MIRAGE_SINGLE_NODE_TEST_IMAGE=mirage-api:sn-6e6c4ae \
+python3 -m pytest -q tests/test_single_node_full_stack.py
+```
+
+本測試的 Publisher Evidence、Cart State 與 CA 是**測試用合成資料**，
+僅證明最小角色／實體容器／Secret／健康與負面 Gateway 路徑。
+**未測試正式完整原生 2xx/4xx、真已核准的 Profile、正式發送，
+也沒有執行完整 G5 GC／Restore／效能矩陣。**
+本項為 `SINGLE-NODE-01/02` 新增真實子項證據，
+**不得單憑 9/9 healthy 轉為整項 PASS**。
+
 ### G5 停流／還原與錯誤處理
 
 `verifier`、`gateway` 和 `sender` 都有明確

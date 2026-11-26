@@ -23,6 +23,20 @@ Inventory／Cart Executor、Validator、Candidate Publisher、Authorizer、Sende
 的真 TLS／SCRAM 初始化，**SINGLE-NODE-01 仍 PARTIAL，02～06 仍 OPEN**。
 完整執行與安全邊界見 [單機部署文件](single-node-compose.md#獨立-postgresql-生命週期實測single-node-01-子項)。
 
+**2026-11-26 九容器真實 Compose 啟動新增子項：**
+`tests/test_single_node_full_stack.py` 在專用 ARM64 拋棄式隨機 Compose
+專案內，以同一個真 PG17 Migration 建立九組分離的實體 SCRAM／NOINHERIT
+Role 和最小 ACL；短期獨立 mTLS CA 與主機具名 UID POSIX ACL
+讓 Verifier／兩 Executor／Validator／Publisher 三 Login／Authorizer／Sender
+以及 Gateway 於同台主機全部 **9/9 healthy**。
+Gateway loopback HTTPS readiness、缺簽章 403、假 JWS 經 mTLS
+失敗 503，且 PG Receipt／Send Lease 新增 0；測後拋棄式容器／卷／網路
+與短期 Secret 移除。映像從固定 `6e6c4ae` 另建
+`mirage-api:sn-6e6c4ae`，原本四服務 `mirage-api:standalone`
+未覆寫。這仍僅是`SINGLE-NODE-01/02` 的**隔離真啟動子項**，
+合成 Publisher Evidence 不能冒充正式 Profile、全原生路由與 G5/G6
+故障 Gate；**G3b～G6 仍 NO-GO**。
+
 | 階段 | 隔離實測 | 尚未完成的放行條件 |
 | --- | --- | --- |
 | G3b | ARM64 四個獨立 non-root mTLS 服務與專用 SCRAM、20/20 無簽章路徑拒絕；I-01～I-04 的 8 組、C-01～C-09 的 16 組、M-01～M-07 的 10 組原生 Client 200／指定 400／404／409，均由真 Ed25519 JWS→Verifier→Executor→Validator→Publisher→Authorizer 跨七 TLS Listener、唯一 PG Lease 與 Replay 拒絕隔離驗收；新增每服務**不同實體 SCRAM Login** 的七 TLS 隔離回歸，包含 Sender／Authorizer 缺少關鍵唯讀 ACL 的真 `REVOKE` 啟動拒絕 | **20 路由尚未完成全部指定錯誤／CAS／故障／URL 矩陣**，Medusa 非空初始品項、完整官方契約變體、正式容器七服務 Secret／網路／憑證輪替及安全審核 |
