@@ -102,6 +102,10 @@ G5 Compose 還原控制新增同專案 Gateway、Verifier、Sender 全部容器 
 **I／C／M 共 20 路由已有 D-74 九容器隔離原生回應子項，但完整變體、
 正式 Profile／Sender、G5／G6 和 Owner GO 都仍 OPEN**。
 
+G3b 封閉模式九容器入口：對 I-01～I-04、C-01～C-09、M-01～M-07 分別省略 Request ID 或簽章 Header，共 40 個原生 HTTP 拒絕結果，逐一核對 403 和拒絕原因。PostgreSQL Receipt 與 Send Lease 皆為零。ARM64 工作 `job_01M8BYBEGS001M7YFFK4Y9CNKN` 通過。
+
+G6 九容器 Client 實體斷線子案：I-04 的 TLS Client 收到原生 HTTP 200 狀態前綴後，以 TCP RST 中止連線，沒有讀取 Body。相同 JWS 重送固定 503；PostgreSQL 的 Candidate、Admission 與 Send Lease 計數只增加一筆。ARM64 隔離工作 `job_01M8BY4PQZ00XBA3HJBN7TEZJ8` 通過。此案例未判定中止前核心已緩衝多少 Body；封包遺失、其他故障時點及混合版本回退仍待驗收。
+
 | 階段 | 隔離實測 | 尚未完成的放行條件 |
 | --- | --- | --- |
 | G3b | ARM64 四個獨立 non-root mTLS 服務與專用 SCRAM、20/20 無簽章路徑拒絕；I-01～I-04 的 8 組、C-01～C-09 的 16 組、M-01～M-07 的 10 組原生 Client 200／指定 400／404／409，均由真 Ed25519 JWS→Verifier→Executor→Validator→Publisher→Authorizer 跨七 TLS Listener、唯一 PG Lease 與 Replay 拒絕隔離驗收；新增每服務**不同實體 SCRAM Login** 的七 TLS 隔離回歸；D-74 真九容器 I-01～I-04、C-01～C-09、M-01～M-07 共 20 路由均有原生 Client 2xx／4xx 子案與派生 Scope、CAS 負面 | **三平台其餘完整錯誤／故障／URL／並行變體**、正式核准 Profile、憑證輪替、正式 Client 安全審核仍未完成，不能把 20 條部分覆蓋當作整個 Gate PASS |

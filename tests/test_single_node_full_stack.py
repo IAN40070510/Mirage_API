@@ -30,6 +30,7 @@ from deception.world import (
     PostgresProjectionRegistry, ProjectionCompatibilityProfile, ProjectionEvidence,
 )
 from deception.world.session import SessionBinding
+from test_operation_binding import PINNED_HTTP_CASES
 from test_trusted_session import encode
 import httpx
 import psycopg
@@ -446,6 +447,36 @@ def _sign_disposable_native_request(
     ).decode("ascii").rstrip("=")
     outgoing.headers["x-trusted-session"] = prefix + "." + signature
     return outgoing
+
+
+def _verify_required_headers_for_all_routes(client: httpx.Client, origin: str) -> None:
+    """核對三平台固定路由缺任一必要 Header 時的 Gateway 原生拒絕。"""
+    for case_id, _, method, path, _, _ in PINNED_HTTP_CASES:
+        for headers, reason in (
+                ({"x-request-id": uuid4().hex}, "gateway_signed_session_required"),
+                ({"x-trusted-session": "disposable"}, "gateway_request_id_required")):
+            response = client.request(method, origin + path, headers=headers)
+            assert response.status_code == 403, (case_id, reason, response.status_code)
+            assert response.json() == {"detail": reason}, (case_id, reason)
+
+
+def _verify_client_reset_after_native_status(
+        client: httpx.Client, origin: str, signer: Ed25519PrivateKey, ca: Path) -> None:
+    """真 Client 讀到原生 200 後以 TCP RST 關閉，重送相同 JWS 必須遭拒。"""
+    signed = _sign_disposable_native_request(client, origin, signer)
+    context = ssl.create_default_context(cafile=str(ca))
+    with socket.create_connection(("127.0.0.1", signed.url.port), timeout=30) as tcp:
+        with context.wrap_socket(tcp, server_hostname="localhost") as tls:
+            # 使用已簽請求的原始 Header 和 URL，保持 Verifier 核對的指紋。
+            headers = b"".join(k + b": " + v + b"\r\n" for k, v in signed.headers.raw)
+            tls.sendall(b"GET " + signed.url.raw_path + b" HTTP/1.1\r\n" + headers + b"\r\n")
+            prefix = b"HTTP/1.1 200 "
+            for expected in prefix:
+                assert tls.recv(1) == bytes([expected]), "native status missing before reset"
+            tls.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+    replay = client.send(signed)
+    assert replay.status_code == 503
+    assert replay.json() == {"detail": "gateway_delivery_unverifiable"}
 
 
 def _exercise_disposable_inventory_native_matrix(
@@ -1199,6 +1230,8 @@ def test_true_nine_service_compose_sealed_stack_with_physical_scram_and_tls(
             response = client.get(origin + "/internal/ready")
             assert response.status_code == 200
             assert response.json()["trusted_send"] == "disabled"
+            if sender_mode == "sealed":
+                _verify_required_headers_for_all_routes(client, origin)
             missing_signature = client.get(
                 origin + "/api/items", headers={"x-request-id": uuid4().hex},
             )
@@ -1239,6 +1272,8 @@ def test_true_nine_service_compose_sealed_stack_with_physical_scram_and_tls(
                         client, origin, signer, admin_dsn,
                     )
                 else:
+                    _verify_client_reset_after_native_status(client, origin, signer, ca)
+                    expected_authorizations += 1
                     expected_authorizations += _exercise_disposable_inventory_native_matrix(
                         client, origin, signer,
                     )
