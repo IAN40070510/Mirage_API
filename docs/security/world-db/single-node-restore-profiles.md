@@ -93,8 +93,8 @@ Synthetic Cart/Order and Medusa; its JUnit is
 
 | Gate | Isolated evidence status | Still required for formal acceptance |
 | --- | --- | --- |
-| SINGLE-NODE-01 | **PARTIAL PASS** — D-74 真 PG Volume 重啟子案；拋棄式 Compose **9/9 healthy**；Gateway loopback HTTPS 拒絕缺簽章／偽造 JWS；**正式 sealed Sender** 503／零 Lease；臨時測試覆寫已涵蓋 I-01～I-04 的原生 200／409 和 CAS 一贏一拒 | 正式 Sender 仍封閉；其餘 16 條原生路由／批准 Profile／正式 Secret、故障矩陣未驗收，測試覆寫不可上線 |
-| SINGLE-NODE-02 | **PARTIAL PASS** — 真 SCRAM／ACL、九組實體 NOINHERIT、具名 UID Secret POSIX ACL 與 mTLS；隔離 Sender 驗證 11 筆 Ingress、10 筆唯一 Send Lease、3 World Commit 與 2 Rejection Source | 正式發送、各角色全部負面 ACL、密鑰輪替／滲透及完整 Client 首 byte／Unknown Transport 仍 OPEN |
+| SINGLE-NODE-01 | **PARTIAL PASS** — D-74 真 PG Volume 重啟；拋棄式 Compose **9/9 healthy**；Gateway 拒絕缺簽章／偽造 JWS；**正式 sealed Sender** 503／零 Lease；臨時測試覆寫已涵蓋 I-01～I-04、C-01～C-09、M-01～M-07 **20 條路由**原生 200／400／404／409 子案、派生 Scope 與 CAS 一贏一拒 | 正式 Sender 仍封閉；批准 Profile／正式 Secret、全部故障／錯誤／URL 變體未驗收，測試覆寫不可上線 |
+| SINGLE-NODE-02 | **PARTIAL PASS** — 真 SCRAM／ACL、九組實體 NOINHERIT、具名 UID Secret POSIX ACL 與 mTLS；Inventory 候選 11 Ingress／10 Lease；Cart 候選含基準請求有 20 唯一 Lease、2 Cart Creation、7 Commit／5 Rejection Source；Medusa 候選含基準請求有 11 唯一 Lease、1 Cart Creation、5 Commit／2 Rejection Source | 正式發送、各角色全部負面 ACL、密鑰輪替／滲透及完整 Client 首 byte／Unknown Transport 仍 OPEN |
 | SINGLE-NODE-03 | **PARTIAL PASS** — local restore marker, immutable DB trigger, mixed legacy Sender SQL and Send/Purge serialization | Real restored-system bootstrap/DB rollback and snapshot reconciliation/GC under release policy; no blind rearming |
 | SINGLE-NODE-04 | **PARTIAL PASS** — profile parser accepts no-Fence mode and live isolated native paths function without it | Formal production-like all-service boot, full feature matrix and explicit `whole_host_rollback_guarantee=false` deployment report |
 | SINGLE-NODE-05 | **PARTIAL PASS** — invalid/missing external settings fail closed in syntax/identity tests | Durable external-mode pin, authorized transition, fresh live authority/quarantine and downgrade resistance |
@@ -175,6 +175,36 @@ Admission／Lease、3 筆 Commit Source、2 筆 Rejection Source**，
 JUnit `/tmp/mirage-g3b-g6-20261125.AsFBoE/i01-i04-race-candidate-trial.xml`。
 未完成正式 SHA 雙模式複跑前不能把這項標成精確提交驗收；正式 Sender／
 外部整機回滾保證／G5 GC／G6 Client 線路故障仍保持 **NO-GO**。
+
+**2026-11-26 C-01～C-09 Cart／Order 九容器原生鏈：**
+第三個獨立亂數 Project 先建立 Creator Cart World，再用 DB 派生的
+Cart／Order Session／Resource 簽發真 JWS；C-01～C-09 共 18 次原生
+Client 200／指定 409，包含品項增刪改、操作歷史、完成／取消訂單。
+Creator 跨 Scope、Cart 偽裝 Order、舊 CAS 皆 503；第二個 Cart 的兩張
+同版 JWS 真並行只允許一個原生 200 與一筆 World Commit，敗者 503。
+加上基準 Inventory 讀取，PG 核對 **20 筆 Candidate／Promotion／
+Admission／Send Lease、2 筆 Cart Creation、7 Commit Source、
+5 Rejection Source**，所有可重放 JWS 立即拒絕。
+ARM64 嚴格初測 `job_01M8BH30A2008NDD0FV4W72CAP`
+**1 passed／49.96 秒**，JUnit
+`/tmp/mirage-g3b-g6-20261125.AsFBoE/cart-c01-c09-strict-trial.xml`。
+此為隔離候選，不是正式 Sender Release 或 G5/G6 完整故障驗收。
+
+**2026-11-26 M-01～M-07 Medusa Store 九容器原生鏈：**
+第四個獨立亂數 Project 在獨立 Creator World 建 Cart，使用真
+Publishable Key 和分平台互異的合成 Source／Profile／Contract Hash，
+從 Gateway HTTPS 取得 10 次原生 `200`／`400`／`404`，涵蓋
+M-01～M-07。錯 Key、Creator 跨 Scope、Cart 冒充 Order，及缺少
+受保護錯誤來源的操作固定 `503`，已簽 JWS 的重放立即拒絕。
+另加基準 Inventory 200，PG 核對 **11 Candidate／Promotion／
+Admission／唯一 Send Lease、1 Cart Creation、5 World Commit
+Source、2 Medusa Rejection Source**。測試合成 Contract Hash
+初次跨平台碰撞被 Registry 正確拒絕；只更正 fixture 而不變更 Registry。
+ARM64 初測 `job_01M8BHBTS700RHXYNDP8VT9MWF`
+**1 passed／42.25 秒**，JUnit
+`/tmp/mirage-g3b-g6-20261125.AsFBoE/medusa-m01-m07-unique-trial.xml`。
+此為 20 條路由各至少一組原生 Client 候選的證據，仍非完整正式
+Profile／錯誤／URL／故障／Sender 放行驗收。
 
 ### 2026-11-25 G5 actual PostgreSQL restore experiment — bounded evidence
 

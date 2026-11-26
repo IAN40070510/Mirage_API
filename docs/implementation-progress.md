@@ -68,9 +68,41 @@ Admission／Send Lease、3 筆 Commit Source、2 筆 Rejection Source**，
 **1 passed／41.74 秒**，JUnit `i01-i04-race-candidate-trial.xml`；
 完整精確 SHA 雙模式與其餘 16 路由仍須另驗，正式 Sender 不解封。
 
+**2026-11-26 九容器 Cart／Order C-01～C-09 原生與 CAS 增量（仍 NO-GO）：**
+第三個獨立 `isolated_cart_candidate` 隨機 D-74 Compose Project 由
+短期 Creator Scope 建真 Cart World；再以受保護衍生 Cart／Order
+Session／Resource 分別簽 JWS，完整跑完 C-01～C-09 的 **18 筆**
+原生 200／指定 409，包含品項增刪改／歷史操作／完成與取消；
+Creator 跨 Scope、Cart 冒充 Order、舊版本 CAS 均固定 503。
+另以不同 JWS 同時寫同一版 Cart，只准一個 Client 200 和 World Commit，
+敗者 503 且不鑄造第二張 Lease；所有成功 JWS 重放固定 503。
+含一筆 Inventory 基準 200，真 PG 精確核對 **20 筆 Candidate／
+Promotion／Admission／Send Lease、2 筆 Cart Creation、7 筆
+World Commit Source、5 筆 Rejection Source**。固定 ARM64 初測
+`job_01M8BH30A2008NDD0FV4W72CAP` **1 passed／49.96 秒**，
+JUnit `cart-c01-c09-strict-trial.xml`，尚待提交精確 SHA 三模式複跑。
+僅測試專用 Sender 覆寫，正式發送和 Owner GO 不變。
+
+**2026-11-26 九容器 Medusa M-01～M-07 原生增量（仍 NO-GO）：**
+第四個 `isolated_medusa_candidate` 拋棄式 Project 由真正 Creator
+Cart World／派生身分，以固定 Publishable Key 綁原始 HTTP JWS，
+核對 M-01～M-07 的 **10 筆**原生 Client 200／400／404，
+包含商品已存在時的品項增刪改、完成訂單與 Order Read；錯 Key、
+Creator 讀 Cart、Cart 讀 Order、無受保護 Error Source 的重複刪除
+和空 Cart 完成皆 503。原生 JWS 重放亦固定 503。
+初測先被 Registry 的 `bootstrap_evidence_conflict` 拒絕：三平台
+測試 Fixture 使用相同 Contract Hash；改成平台互異 Source／Profile／
+Contract Hash 後通過，**未弱化 Registry**。含一筆基準 Inventory 200，
+真 PG 精確 **11 筆 Candidate／Promotion／Admission／Send Lease、
+1 筆 Cart Creation、5 Commit Source、2 Medusa Rejection Source**。
+ARM64 `job_01M8BHBTS700RHXYNDP8VT9MWF` **1 passed／42.25 秒**，
+JUnit `medusa-m01-m07-unique-trial.xml`；尚待提交精確 SHA 四模式複跑。
+**I／C／M 共 20 路由已有 D-74 九容器隔離原生回應子項，但完整變體、
+正式 Profile／Sender、G5／G6 和 Owner GO 都仍 OPEN**。
+
 | 階段 | 隔離實測 | 尚未完成的放行條件 |
 | --- | --- | --- |
-| G3b | ARM64 四個獨立 non-root mTLS 服務與專用 SCRAM、20/20 無簽章路徑拒絕；I-01～I-04 的 8 組、C-01～C-09 的 16 組、M-01～M-07 的 10 組原生 Client 200／指定 400／404／409，均由真 Ed25519 JWS→Verifier→Executor→Validator→Publisher→Authorizer 跨七 TLS Listener、唯一 PG Lease 與 Replay 拒絕隔離驗收；新增每服務**不同實體 SCRAM Login** 的七 TLS 隔離回歸，包含 Sender／Authorizer 缺少關鍵唯讀 ACL 的真 `REVOKE` 啟動拒絕；D-74 真九容器新增 I-01～I-04 原生 200／409 與同版 CAS 一贏一拒 | **其餘 16 路由**仍未完成標準九容器全部指定錯誤／CAS／故障／URL 矩陣；Medusa 非空初始品項、正式核准 Profile、正式容器密鑰輪替與安全審核 |
+| G3b | ARM64 四個獨立 non-root mTLS 服務與專用 SCRAM、20/20 無簽章路徑拒絕；I-01～I-04 的 8 組、C-01～C-09 的 16 組、M-01～M-07 的 10 組原生 Client 200／指定 400／404／409，均由真 Ed25519 JWS→Verifier→Executor→Validator→Publisher→Authorizer 跨七 TLS Listener、唯一 PG Lease 與 Replay 拒絕隔離驗收；新增每服務**不同實體 SCRAM Login** 的七 TLS 隔離回歸；D-74 真九容器 I-01～I-04、C-01～C-09、M-01～M-07 共 20 路由均有原生 Client 2xx／4xx 子案與派生 Scope、CAS 負面 | **三平台其餘完整錯誤／故障／URL／並行變體**、正式核准 Profile、憑證輪替、正式 Client 安全審核仍未完成，不能把 20 條部分覆蓋當作整個 Gate PASS |
 | G4 | Receipt-only Sender 綁定不可變 DB Pin，唯一 Lease；Gateway 原始 HTTP mTLS、授權 Envelope Hash 與 Client 原生 HTTP；隔離七 TLS／真 PG／JWS 重放測試已通過；新增正式 D-74 九容器**臨時測試覆寫**的原生 200／一次 Lease，與正式 sealed 503／零 Lease 雙模式核對 | 正式服務仍封閉 503；不可拿測試覆寫當正式釋出；正式 Sender／Gateway 部署、完整路由與 Client 端安全審核 |
 | G5 | 已知 Restore／Purge、不可逆 Lease、密碼學 Anchor 模擬與獨立 PostgreSQL Fence 的隔離回歸；精確 `7ada6fd` ARM64 `53 passed` 額外覆蓋真 SCRAM、舊 Sender SQL DB Trigger、TEMP 偽裝、COMMIT ACK 不確定與標準單機 Profile fail-closed；實際 PG17 `pg_dump -Fc`／`pg_restore` 至另一暫存 DB，還原後先持久隔離再測新舊 Sender，隔離重跑 4/4；新增兩獨立 SCRAM Login、停流確認、實體 ACL／角色繼承拒絕與 Marker 雙帳號讀回的 `restore_bootstrap` CLI；再新增可選主機側 UUIDv4 預期檔與 Sender 啟動前 DB Marker 比對，舊備份／錯 Marker 拒絕 | 正式 Restore 控制面／故障域啟動、完整 DB Restore／GC／部署 Schema 和可選外部 Fence Acceptance；單機不得宣稱防整機快照倒退 |
 | G6 | 真 JWS 全鏈經七 TLS／PG Lease／原生 200，JWS 重放阻擋；Sender TCP 停機、復原新 Receipt、COMMIT 後未知 ACK、Known Restore 與實際 Sender mTLS Read Timeout 五類隔離案例均 fail-closed；Gateway Client 下游斷線不重送 | Client 實體掉線／網路封包遺失／跨節點重啟與延遲綜合矩陣、可追溯放行與 Owner 簽核 |

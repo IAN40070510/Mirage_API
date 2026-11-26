@@ -136,7 +136,7 @@ Server/Client 身分只存測試目錄。每份 Secret 由檔案擁有者設置
 Candidate、Promotion、Response Admission**，同一 JWS 重放仍拒絕。
 **正式 Compose Sender 固定 sealed**，有效授權亦只回安全 503、
 `protected_send_leases=0`；這不是原生 HTTP 200 或正式發送成功。
-同一測試檔的第二個參數案例，會**只在該次亂數拋棄式 Compose Project**
+同一測試檔的另外三個參數案例，會**各自在自己的亂數拋棄式 Compose Project**
 建立短期 `isolated-receipt-sender.override.yaml`，僅覆寫 Sender 的測試
 CLI 命令，不修改 `deploy/single-node/compose.yaml` 或正式映像。
 測試 CLI 仍先執行正式 Sender 的 Profile／SCRAM／ACL／Restore Marker
@@ -149,6 +149,21 @@ CLI 命令，不修改 `deploy/single-node/compose.yaml` 或正式映像。
 這 11 筆有效 Ingress／Read Source 中，僅 10 筆能建立 Candidate、
 Promotion、Admission 和一次性 Send Lease；真 World Commit 恰好 3 筆，
 受保護業務 Rejection 恰好 2 筆，全部 JWS 重放均固定 `503`。
+第三個 `isolated_cart_candidate` 模式先建立獨立 Creator World，再要求
+每次 Cart／Order 請求使用資料庫核發的**派生 Session／Resource 身分**；
+已覆蓋 C-01～C-09 的 18 組原生 200／409、Creator 跨 Scope、
+Cart 假冒 Order、過期 CAS 503，以及另一個 Cart 上兩張同版本
+JWS 同時提交一贏一拒。含一筆基準 Inventory 200，共只有 **20** 筆
+Candidate／Promotion／Admission／Send Lease、2 筆 Cart Creation、
+7 筆 World Commit Source、5 筆 Rejection Source；CAS 敗者不可起送。
+第四個 `isolated_medusa_candidate` 模式也從獨立 Creator World
+建立 Medusa Store Cart，使用真 Publishable Key 與合成且**分平台不同**
+的 Source／Profile／Contract Hash，核對 M-01～M-07 十次原生
+`200`／`400`／`404`，錯 Key、Creator 跨 Scope、Cart 冒充 Order、
+沒有受保護 Error Source 的重複刪除／空 Cart 完成均固定 `503`。
+含一筆基準 Inventory 200，PG 有 **11** 筆 Candidate／Promotion／
+Admission／Send Lease、1 筆 Cart Creation、5 筆 World Commit Source
+與 2 筆 Medusa Rejection Source；同一原生 JWS 重放固定 `503`。
 候選測試必須使用新建立的 `mirage-sn-full-*` Project 與
 `mirage_sn_full_*` DB，測試後刪除覆寫檔與全部暫存資源；**不允許
 拿此測試覆寫命令當成正式 Sender 釋出開關**。
@@ -170,8 +185,9 @@ python3 -m pytest -q tests/test_single_node_full_stack.py
 
 本測試的 Publisher Evidence、Cart State 與 CA 是**測試用合成資料**，
 僅證明最小角色／實體容器／Secret／健康、負面 Gateway 路徑，
-以及**正式 sealed 503／零 Lease 與臨時 Sender 候選的 I-01～I-04
-原生 200／409、CAS 並行拒絕與單次 Lease 不重放**。
+以及**正式 sealed 503／零 Lease 與臨時 Sender 候選的 I-01～I-04、
+C-01～C-09、M-01～M-07 共 20 路由至少一組原生 2xx／4xx，
+CAS 並行拒絕與一次性 Lease 不重放**。
 ARM64 隔離主機 `161.33.154.211`、固定應用映像 `mirage-api:sn-cc2e0af`
 的雙參數實測 `job_01M8AZY38J00PN3MRNJT6XCWEW` **2 passed／73.33 秒**；
 JUnit `full-compose-receipt-candidate-cc2e0af.xml` 保存在隔離主機暫存
@@ -179,7 +195,15 @@ JUnit `full-compose-receipt-candidate-cc2e0af.xml` 保存在隔離主機暫存
 `job_01M8B3P9E500DE6V9J97FGNH5Q` **1 passed／41.74 秒**，
 JUnit `i01-i04-race-candidate-trial.xml`；只跑新候選參數案例，
 正式 sealed 模式於相同前版已獨立驗證，尚須提交後同 SHA 雙模式複跑。
-這仍**未測試正式 Compose 的所有 20 路由與完整 2xx/4xx、真已核准的 Profile、正式發送，
+C-01～C-09 嚴格原生／CAS ARM64 初測
+`job_01M8BH30A2008NDD0FV4W72CAP` **1 passed／49.96 秒**，
+JUnit `cart-c01-c09-strict-trial.xml`；提交後仍須同 SHA 四模式複跑。
+M-01～M-07 成功初測 `job_01M8BHBTS700RHXYNDP8VT9MWF`
+**1 passed／42.25 秒**，JUnit `medusa-m01-m07-unique-trial.xml`；
+先前唯一 Contract Hash 失配被 Registry fail-closed 拒絕，改成
+三平台互異合成證據後重試通過，未修改 Registry 安全規則。
+這仍**未測試正式 Compose 的全部指定 2xx/4xx／URL／故障變體、
+真已核准的 Profile、正式發送，
 也沒有執行完整 G5 GC／Restore／效能矩陣。**
 本項為 `SINGLE-NODE-01/02` 新增真實子項證據，
 **不得單憑 9/9 healthy 轉為整項 PASS**。

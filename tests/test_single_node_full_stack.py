@@ -6,6 +6,7 @@ import base64
 from concurrent.futures import ThreadPoolExecutor
 import ctypes
 import ctypes.util
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -23,6 +24,7 @@ from uuid import uuid4
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from deception.api.fingerprint import fingerprint_httpx_request
+from deception.domains.ecommerce.carts import SyntheticCarts
 from deception.domains.ecommerce.inventory import SyntheticInventory
 from deception.world import (
     PostgresProjectionRegistry, ProjectionCompatibilityProfile, ProjectionEvidence,
@@ -274,7 +276,8 @@ def _material(root: Path, dsns: dict[str, str], pg_password: str,
         "authorizer_dsn": dsns["authorizer"],
         "sender_dsn": dsns["sender"],
         "cart_initial_state": json.dumps({
-            "catalog": {"known": {"sku": "sku-1", "unit_price": 100}},
+            "catalog": {"known": {"sku": "sku-1", "unit_price": 100},
+                        "v1": {"sku": "sku-1", "unit_price": 100}},
             "inventory": {"sku-1": 5},
             "native_context": {"region_id": "reg_mirage_usd",
                                "sales_channel_id": "sc_mirage",
@@ -287,14 +290,22 @@ def _material(root: Path, dsns: dict[str, str], pg_password: str,
     })
     material["publisher_evidence"] = json.dumps({
         name: {
-            "source_spec_sha256": "1" * 64,
+            "source_spec_sha256": hashlib.sha256(
+                ("single-node-source:" + name).encode("ascii")
+            ).hexdigest(),
             "compatibility_profile": {
                 "profile_id": "disposable", "profile_version": "1",
-                "profile_sha256": "2" * 64, "platform_id": name,
-                "platform_version": "1", "source_spec_sha256": "1" * 64,
+                "profile_sha256": hashlib.sha256(
+                    ("single-node-profile:" + name).encode("ascii")
+                ).hexdigest(), "platform_id": name,
+                "platform_version": "1", "source_spec_sha256": hashlib.sha256(
+                    ("single-node-source:" + name).encode("ascii")
+                ).hexdigest(),
                 "world_schema_version": "1", "domain_adapter_version": "1",
             },
-            "projection_contract_hash": "3" * 64,
+            "projection_contract_hash": hashlib.sha256(
+                ("single-node-contract:" + name).encode("ascii")
+            ).hexdigest(),
             "official_schema_valid": True, "effective_projection_valid": True,
         }
         for name in ("synthetic-inventory", "synthetic-carts", "medusa-native-cart")
@@ -369,14 +380,45 @@ def _seed_disposable_native_inventory(admin_dsn: str,
     )
 
 
+def _seed_disposable_native_cart(admin_dsn: str,
+                                 material: dict[str, str | Path],
+                                 *, medusa: bool = False) -> None:
+    """建立短期 Creator Cart World；Medusa 模式再註冊獨立的原生來源 Profile。"""
+    contracts = json.loads(str(material["publisher_evidence"]))
+    platforms = ("synthetic-carts", "medusa-native-cart") if medusa else ("synthetic-carts",)
+    profiles = tuple(ProjectionEvidence(
+        source_spec_sha256=contracts[name]["source_spec_sha256"],
+        compatibility_profile=ProjectionCompatibilityProfile(
+            **contracts[name]["compatibility_profile"],
+        ),
+        projection_contract_hash=contracts[name]["projection_contract_hash"],
+        official_schema_valid=contracts[name]["official_schema_valid"],
+        effective_projection_valid=contracts[name]["effective_projection_valid"],
+    ) for name in platforms)
+    PostgresProjectionRegistry(admin_dsn).ensure_registered_batch(profiles)
+    state = json.loads(str(material["cart_initial_state"]))
+    binding = SessionBinding(
+        environment_id="disposable", deployment_id="isolated",
+        session_id="cart-creator", session_epoch=1, access_mode="cart",
+    )
+    SyntheticCarts(admin_dsn).resolve(
+        binding, {"catalog": state["catalog"], "inventory": state["inventory"],
+                  "reservations": {}}, now=int(time.time()), ttl=600,
+    )
+
+
 def _sign_disposable_native_request(
         client: httpx.Client, origin: str, signer: Ed25519PrivateKey,
         *, method: str = "GET", path: str = "/synthetic/inventory/sku-1",
-        body: dict | None = None) -> httpx.Request:
+        body: dict | None = None, access_mode: str = "inventory",
+        session_id: str = "session", resource_id: str | None = None,
+        extra_headers: dict[str, str] | None = None) -> httpx.Request:
     """依真正原生 Method／URL／JSON Body 簽一次 JWS，私鑰僅留測試記憶體。"""
     jti = uuid4().hex
     request_id = "sn-compose-valid-" + jti
     headers = {"x-request-id": request_id}
+    if extra_headers is not None:
+        headers.update(extra_headers)
     kwargs = {}
     if body is not None:
         headers["content-type"] = "application/json"
@@ -388,11 +430,13 @@ def _sign_disposable_native_request(
     claims = {
         "iss": "gateway", "aud": "mirage", "iat": now - 5, "nbf": now - 5,
         "exp": now + 45, "jti": jti, "environment_id": "disposable",
-        "deployment_id": "isolated", "session_id": "session", "session_epoch": 1,
-        "access_mode": "inventory",
+        "deployment_id": "isolated", "session_id": session_id, "session_epoch": 1,
+        "access_mode": access_mode,
         "request_fingerprint": fingerprint_httpx_request(outgoing, request_id),
         "assessment_id": "isolated", "assessment_digest": "b" * 64,
     }
+    if resource_id is not None:
+        claims["resource_id"] = resource_id
     prefix = encode({
         "alg": "Ed25519", "kid": "test", "protocol_version": "1.1",
         "typ": "mirage-trusted-session+jwt",
@@ -529,6 +573,329 @@ def _exercise_disposable_inventory_native_matrix(
         assert replay.json() == {"detail": "gateway_delivery_unverifiable"}
     # 兩份 CAS JWS 都進 Ingress，但敗者不能建立 Candidate／Admission／Lease。
     return len(signed) - 1
+
+
+def _exercise_disposable_cart_native_matrix(
+        client: httpx.Client, origin: str, signer: Ed25519PrivateKey,
+        admin_dsn: str) -> int:
+    """從 Creator→Cart→Order 經九容器執行 C-01～C-09，驗原生 200／409 與 CAS。"""
+    world = SyntheticCarts(admin_dsn)
+    creator = SessionBinding(
+        environment_id="disposable", deployment_id="isolated",
+        session_id="cart-creator", session_epoch=1, access_mode="cart",
+    )
+    native_count = 0
+
+    def native(method: str, path: str, *, body: dict | None = None,
+               binding: SessionBinding = creator, expected: int = 200,
+               code: str | None = None) -> dict:
+        """對固定 Cart／Order 原生請求簽一次 JWS，核對 Lease 成功並拒絕重放。"""
+        nonlocal native_count
+        original = _sign_disposable_native_request(
+            client, origin, signer, method=method, path=path, body=body,
+            access_mode="cart", session_id=binding.session_id,
+            resource_id=binding.resource_id,
+        )
+        response = client.send(original)
+        assert response.status_code == expected, (
+            method, path, expected, response.status_code, response.text
+        )
+        if code is not None:
+            assert response.content == json.dumps(
+                {"code": code}, separators=(",", ":"),
+            ).encode("utf-8")
+        else:
+            assert response.headers["content-type"] == "application/json"
+        replay = client.send(original)
+        assert replay.status_code == 503
+        assert replay.json() == {"detail": "gateway_delivery_unverifiable"}
+        native_count += 1
+        return response.json()
+
+    def mutation(version: int, name: str, **fields) -> dict:
+        """只為本次測試生成唯一 Attempt 與冪等鍵，版本值由既定案例明示。"""
+        return {**fields, "expected_version": version,
+                "idempotency_key": "sn-" + name + "-" + uuid4().hex,
+                "commit_attempt_id": str(uuid4())}
+
+    def fail_closed(method: str, path: str, *, body: dict | None = None,
+                    binding: SessionBinding = creator) -> None:
+        """未授權 Creator／Cart Scope 或舊版 CAS 必須由真 Gateway 503 阻斷。"""
+        original = _sign_disposable_native_request(
+            client, origin, signer, method=method, path=path, body=body,
+            access_mode="cart", session_id=binding.session_id,
+            resource_id=binding.resource_id,
+        )
+        denied = client.send(original)
+        assert denied.status_code == 503, (method, path, denied.text)
+        assert denied.json() == {"detail": "gateway_delivery_unverifiable"}
+        assert client.send(original).status_code == 503
+
+    created = native("POST", "/synthetic/carts", body={})
+    assert created["state_version"] == 1
+    cart_id = created["cart"]["id"]
+    assert cart_id.startswith("cart_")
+    cart = world.resource_binding(
+        cart_id, environment_id="disposable", deployment_id="isolated",
+        now=int(time.time()),
+    )
+    assert cart.access_mode == "cart" and cart.resource_id == cart_id
+    cart_path = "/synthetic/carts/" + cart_id
+    fetched = native("GET", cart_path, binding=cart)
+    assert fetched["cart"] == created["cart"]
+    assert fetched["state_version"] == 1
+
+    # Creator 的原始 Session 不得偷用新 Cart 的派生資源權限。
+    fail_closed("GET", cart_path)
+
+    assert native(
+        "POST", cart_path + "/line-items", binding=cart, expected=409,
+        code="unknown_synthetic_variant",
+        body=mutation(1, "unknown", variant_id="absent", quantity=1),
+    ) == {"code": "unknown_synthetic_variant"}
+    add_attempt = str(uuid4())
+    added = native(
+        "POST", cart_path + "/line-items", binding=cart,
+        body={**mutation(1, "add", variant_id="v1", quantity=2),
+              "commit_attempt_id": add_attempt},
+    )
+    assert added["state_version"] == 2
+    item = added["cart"]["items"][0]
+    assert item["quantity"] == 2
+    fail_closed(
+        "POST", cart_path + "/line-items", binding=cart,
+        body=mutation(1, "stale", variant_id="v1", quantity=1),
+    )
+    assert native(
+        "GET", cart_path + "/operations/" + add_attempt, binding=cart,
+    )["commit_attempt_id"] == add_attempt
+    assert native(
+        "GET", cart_path + "/operations/" + str(uuid4()), binding=cart,
+        expected=409, code="operation_not_found",
+    ) == {"code": "operation_not_found"}
+
+    item_path = cart_path + "/line-items/" + item["id"]
+    updated = native(
+        "POST", item_path, binding=cart,
+        body=mutation(2, "update", quantity=3),
+    )
+    assert updated["state_version"] == 3
+    assert updated["cart"]["items"][0]["quantity"] == 3
+    assert native(
+        "POST", cart_path + "/line-items/item_" + "f" * 32,
+        binding=cart, expected=409, code="cart_item_not_found",
+        body=mutation(3, "update-missing", quantity=1),
+    ) == {"code": "cart_item_not_found"}
+    removed = native(
+        "DELETE", item_path, binding=cart, body=mutation(3, "delete"),
+    )
+    assert removed["state_version"] == 4
+    assert removed["cart"]["items"] == []
+    assert native(
+        "DELETE", item_path, binding=cart, expected=409,
+        code="cart_item_not_found", body=mutation(4, "delete-missing"),
+    ) == {"code": "cart_item_not_found"}
+    assert native(
+        "POST", cart_path + "/complete", binding=cart, expected=409,
+        code="empty_synthetic_cart", body=mutation(4, "empty-complete"),
+    ) == {"code": "empty_synthetic_cart"}
+    assert native(
+        "POST", cart_path + "/line-items", binding=cart,
+        body=mutation(4, "refill", variant_id="v1", quantity=1),
+    )["state_version"] == 5
+    completed = native(
+        "POST", cart_path + "/complete", binding=cart,
+        body=mutation(5, "complete"),
+    )
+    assert completed["state_version"] == 6
+    order_id = completed["order"]["id"]
+    assert completed["order"]["cart_id"] == cart_id
+    order = world.resource_binding(
+        order_id, environment_id="disposable", deployment_id="isolated",
+        now=int(time.time()),
+    )
+    order_path = "/synthetic/orders/" + order_id
+    assert native("GET", order_path, binding=order)["order"] == completed["order"]
+    fail_closed("GET", order_path, binding=cart)
+    cancelled = native(
+        "POST", order_path + "/cancel", binding=order,
+        body=mutation(6, "order-cancel"),
+    )
+    assert cancelled["state_version"] == 7
+    assert cancelled["order"]["status"] == "cancelled"
+    assert native(
+        "POST", order_path + "/cancel", binding=order, expected=409,
+        code="order_not_cancellable", body=mutation(7, "order-recancel"),
+    ) == {"code": "order_not_cancellable"}
+
+    # 不同簽章但相同 Cart 版本的並行 mutation 只有一筆能取得 Lease。
+    race_created = native("POST", "/synthetic/carts", body={})
+    race_cart_id = race_created["cart"]["id"]
+    race_cart = world.resource_binding(
+        race_cart_id, environment_id="disposable", deployment_id="isolated",
+        now=int(time.time()),
+    )
+    race_path = "/synthetic/carts/" + race_cart_id
+    concurrent = [
+        _sign_disposable_native_request(
+            client, origin, signer, method="POST", path=race_path + "/line-items",
+            body=mutation(1, "race-" + str(index), variant_id="v1", quantity=1),
+            access_mode="cart", session_id=race_cart.session_id,
+            resource_id=race_cart.resource_id,
+        ) for index in range(2)
+    ]
+    barrier = Barrier(2)
+
+    def send_parallel(original: httpx.Request) -> httpx.Response:
+        """同時放行真 Client HTTPS 的兩張 Cart JWS，觀察 PostgreSQL CAS 結果。"""
+        barrier.wait(timeout=10)
+        return client.send(original)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(send_parallel, concurrent))
+    assert sorted(response.status_code for response in results) == [200, 503], (
+        [(response.status_code, response.text) for response in results]
+    )
+    winner = next(response for response in results if response.status_code == 200)
+    loser = next(response for response in results if response.status_code == 503)
+    assert winner.json()["state_version"] == 2
+    assert len(winner.json()["cart"]["items"]) == 1
+    assert loser.json() == {"detail": "gateway_delivery_unverifiable"}
+    for original in concurrent:
+        replay = client.send(original)
+        assert replay.status_code == 503
+        assert replay.json() == {"detail": "gateway_delivery_unverifiable"}
+    after_race = native("GET", race_path, binding=race_cart)
+    assert after_race["state_version"] == 2
+    assert after_race["cart"]["items"] == winner.json()["cart"]["items"]
+    assert native_count == 18
+    return native_count + 1
+
+
+def _exercise_disposable_medusa_native_matrix(
+        client: httpx.Client, origin: str, signer: Ed25519PrivateKey,
+        admin_dsn: str) -> int:
+    """在真九容器驗 M-01～M-07 的 Medusa 原生 200／400／404 與派生能力。"""
+    creator = SessionBinding(
+        environment_id="disposable", deployment_id="isolated",
+        session_id="cart-creator", session_epoch=1, access_mode="cart",
+    )
+    world = SyntheticCarts(admin_dsn)
+    publishable_key = "pk_disposable_single_node_only"
+    native_count = 0
+
+    def native(method: str, path: str, *, body: dict | None = None,
+               binding: SessionBinding = creator, expected: int = 200) -> dict:
+        """固定 Publishable Key 也納入 Ed25519 Fingerprint，核對真 Medusa 回應。"""
+        nonlocal native_count
+        original = _sign_disposable_native_request(
+            client, origin, signer, method=method, path=path, body=body,
+            access_mode="cart", session_id=binding.session_id,
+            resource_id=binding.resource_id,
+            extra_headers={"content-type": "application/json",
+                           "x-publishable-api-key": publishable_key},
+        )
+        response = client.send(original)
+        assert response.status_code == expected, (
+            method, path, expected, response.status_code, response.text
+        )
+        assert response.headers["content-type"] == "application/json"
+        replay = client.send(original)
+        assert replay.status_code == 503
+        assert replay.json() == {"detail": "gateway_delivery_unverifiable"}
+        native_count += 1
+        return response.json()
+
+    def fail_closed(method: str, path: str, *, body: dict | None = None,
+                    binding: SessionBinding = creator,
+                    key: str = publishable_key) -> None:
+        """錯 Publishable Key、越權派生資源及無 Error Source 一律不能發送。"""
+        original = _sign_disposable_native_request(
+            client, origin, signer, method=method, path=path, body=body,
+            access_mode="cart", session_id=binding.session_id,
+            resource_id=binding.resource_id,
+            extra_headers={"content-type": "application/json",
+                           "x-publishable-api-key": key},
+        )
+        response = client.send(original)
+        assert response.status_code == 503, (method, path, response.text)
+        assert response.json() == {"detail": "gateway_delivery_unverifiable"}
+
+    created = native(
+        "POST", "/store/carts",
+        body={"email": "ci@example.invalid", "items": []},
+    )
+    assert set(created) == {"cart"}
+    cart_id = created["cart"]["id"]
+    assert created["cart"]["items"] == []
+    cart = world.resource_binding(
+        cart_id, environment_id="disposable", deployment_id="isolated",
+        now=int(time.time()),
+    )
+    assert cart.resource_id == cart_id
+    cart_path = "/store/carts/" + cart_id
+    assert native("GET", cart_path, binding=cart)["cart"]["id"] == cart_id
+    fail_closed("GET", cart_path, binding=cart, key="incorrect_public_key")
+    fail_closed("GET", cart_path)
+
+    line_path = cart_path + "/line-items"
+    invalid = native(
+        "POST", line_path, binding=cart, expected=400,
+        body={"variant_id": "known", "quantity": 0},
+    )
+    assert invalid == {
+        "message": "The requested cart operation is not supported.",
+        "type": "invalid_data",
+    }
+    missing = native(
+        "POST", line_path, binding=cart, expected=404,
+        body={"variant_id": "missing", "quantity": 1},
+    )
+    assert missing == {
+        "message": "The requested cart operation could not be completed.",
+        "type": "not_found",
+    }
+    added = native(
+        "POST", line_path, binding=cart,
+        body={"variant_id": "known", "quantity": 2},
+    )
+    assert added["cart"]["id"] == cart_id
+    item = added["cart"]["items"][0]
+    assert item["quantity"] == 2
+    item_path = line_path + "/" + item["id"]
+    updated = native(
+        "POST", item_path, binding=cart, body={"quantity": 3},
+    )
+    assert updated["cart"]["items"][0]["quantity"] == 3
+    deleted = native("DELETE", item_path, binding=cart)
+    assert set(deleted) == {"id", "object", "deleted", "parent"}
+    assert deleted["id"] == item["id"]
+    assert deleted["deleted"] is True
+    assert deleted["parent"]["items"] == []
+    fail_closed("DELETE", item_path, binding=cart)
+    fail_closed("POST", cart_path + "/complete", binding=cart)
+
+    refilled = native(
+        "POST", line_path, binding=cart,
+        body={"variant_id": "known", "quantity": 1},
+    )
+    assert refilled["cart"]["items"][0]["quantity"] == 1
+    completed = native("POST", cart_path + "/complete", binding=cart)
+    assert completed["type"] == "order"
+    order_id = completed["order"]["id"]
+    assert completed["order"]["payment_status"] == "not_paid"
+    assert completed["order"]["fulfillment_status"] == "not_fulfilled"
+    order = world.resource_binding(
+        order_id, environment_id="disposable", deployment_id="isolated",
+        now=int(time.time()),
+    )
+    order_path = "/store/orders/" + order_id
+    read_order = native("GET", order_path, binding=order)
+    assert read_order["order"]["id"] == order_id
+    assert read_order["order"]["customer_id"] is None
+    fail_closed("GET", order_path, binding=cart)
+    assert native_count == 10
+    return native_count
 
 
 def _install_role_owned_secrets(root: Path, material: dict[str, str | Path],
@@ -723,7 +1090,10 @@ serve_fixed_sender_mtls(
     return override
 
 
-@pytest.mark.parametrize("sender_mode", ("sealed", "isolated_receipt_candidate"))
+@pytest.mark.parametrize("sender_mode", (
+    "sealed", "isolated_receipt_candidate", "isolated_cart_candidate",
+    "isolated_medusa_candidate",
+))
 def test_true_nine_service_compose_sealed_stack_with_physical_scram_and_tls(
         tmp_path, sender_mode: str):
     """各以拋棄式九容器驗證正式 Sender 封閉，及測試專用 Receipt 起送候選。"""
@@ -746,7 +1116,7 @@ def test_true_nine_service_compose_sealed_stack_with_physical_scram_and_tls(
     (secret_dir / "postgres_password").chmod(0o400)
     env = _env(secret_dir, database, admin, port)
     base = [COMPOSE_BIN, "-p", project, "-f", str(COMPOSE)]
-    if sender_mode == "isolated_receipt_candidate":
+    if sender_mode != "sealed":
         # 只針對本次隨機 Project／DB，既不改標準部署檔，也不賦予正式 Sender 開關。
         base.extend(["-f", str(_isolated_receipt_sender_override(
             tmp_path, project, database,
@@ -785,6 +1155,10 @@ def test_true_nine_service_compose_sealed_stack_with_physical_scram_and_tls(
         signer = Ed25519PrivateKey.generate()
         material = _material(tmp_path, dsns, password, signer)
         _seed_disposable_native_inventory(admin_dsn, material)
+        if sender_mode in ("isolated_cart_candidate", "isolated_medusa_candidate"):
+            _seed_disposable_native_cart(
+                admin_dsn, material, medusa=sender_mode == "isolated_medusa_candidate",
+            )
         _install_role_owned_secrets(tmp_path, material, doc)
         _run([*base, "--profile", "isolated-gateway", "up", "-d"],
              env=env, timeout=180)
@@ -856,13 +1230,55 @@ def test_true_nine_service_compose_sealed_stack_with_physical_scram_and_tls(
                 assert actual.headers["content-type"].startswith("application/json")
                 assert actual.json() == {"sku": "sku-1", "available": 4,
                                          "state_version": 1}
-                expected_authorizations += _exercise_disposable_inventory_native_matrix(
-                    client, origin, signer,
-                )
+                if sender_mode == "isolated_cart_candidate":
+                    expected_authorizations += _exercise_disposable_cart_native_matrix(
+                        client, origin, signer, admin_dsn,
+                    )
+                elif sender_mode == "isolated_medusa_candidate":
+                    expected_authorizations += _exercise_disposable_medusa_native_matrix(
+                        client, origin, signer, admin_dsn,
+                    )
+                else:
+                    expected_authorizations += _exercise_disposable_inventory_native_matrix(
+                        client, origin, signer,
+                    )
             replay = client.send(authorized)
             assert replay.status_code == 503
             assert replay.json() == {"detail": "gateway_delivery_unverifiable"}
         with psycopg.connect(admin_dsn) as conn:
+            if sender_mode == "isolated_medusa_candidate":
+                for table in ("candidate_records", "protected_candidate_promotions",
+                              "response_admissions", "protected_send_leases"):
+                    assert conn.execute("SELECT count(*) FROM " + table).fetchone() == (
+                        expected_authorizations,
+                    )
+                assert conn.execute(
+                    "SELECT count(*) FROM protected_cart_creations"
+                ).fetchone() == (1,)
+                assert conn.execute(
+                    "SELECT count(*) FROM protected_world_commit_sources"
+                ).fetchone() == (5,)
+                assert conn.execute(
+                    "SELECT count(*) FROM protected_medusa_rejection_sources"
+                ).fetchone() == (2,)
+                return
+            if sender_mode == "isolated_cart_candidate":
+                for table in ("candidate_records", "protected_candidate_promotions",
+                              "response_admissions", "protected_send_leases"):
+                    assert conn.execute("SELECT count(*) FROM " + table).fetchone() == (
+                        expected_authorizations,
+                    )
+                assert conn.execute(
+                    "SELECT count(*) FROM protected_cart_creations"
+                ).fetchone() == (2,)
+                # 同版雙 JWS 敗者不可生成第八筆 Cart／Order World Commit。
+                assert conn.execute(
+                    "SELECT count(*) FROM protected_world_commit_sources"
+                ).fetchone() == (7,)
+                assert conn.execute(
+                    "SELECT count(*) FROM protected_world_rejection_sources"
+                ).fetchone() == (5,)
+                return
             for table in ("replay_entries", "ingress_receipts", "read_admissions",
                           "protected_world_read_sources", "candidate_records",
                           "protected_candidate_promotions", "response_admissions"):

@@ -22,6 +22,36 @@ JUnit `i01-i04-race-candidate-trial.xml`；正式 sealed 模式仍回 503、
 零 Lease。此增量**未使用已簽署正式 Publisher Profile，也沒有解封
 Sender、覆蓋其餘 16 條路由或完成所有故障矩陣**，全 G3b Gate 保持 OPEN。
 
+**2026-11-26 D-74 九容器 C-01～C-09 真 Client／Cart→Order 增量：**
+以拋棄式 Creator World 真正建立 Cart，從 DB 持久化的派生 Session／
+Resource 核對後才分別簽發 Cart／Order JWS。十八筆 C-01～C-09
+原生 200／指定 409、Cart Item 增刪改／歷史 Operation／完成訂單與取消
+都經正式九容器拓樸的獨立 mTLS／SCRAM 角色和**僅測試覆寫**的 Sender。
+Creator 越權讀派生 Cart、Cart 假冒 Order、舊 CAS 均 503；第二個短期
+Cart 的兩張同版 JWS 並行只有一個 200／World Commit，另一個 503。
+含一筆基準 Inventory 200，共 **20 筆 Candidate／Promotion／Admission／
+Send Lease、2 筆 Cart Creation、7 筆 World Commit Source、5 筆
+Rejection Source**，重放一律 503。ARM64 受控試驗
+`job_01M8BH30A2008NDD0FV4W72CAP` **1 passed／49.96 秒**，
+JUnit `cart-c01-c09-strict-trial.xml`；正式 Compose 與 Sender CLI 未改。
+**2026-11-26 D-74 九容器 M-01～M-07 Medusa Store 原生增量：**
+另一獨立 Creator World 建立 Medusa Cart，使用真 Publishable Key 與各平台
+互異的合成 Source／Profile／Contract Hash，經九容器驗證十次原生
+Client `200`／`400`／`404`，涵蓋 Cart 建立／讀取、Item 增刪改、
+無效數量、未知 Variant、完成 Cart 與讀取 Order。錯 Key、Creator 跨
+Scope、Cart 冒充 Order、未具受保護錯誤來源的非法重複刪除／空 Cart
+完成均拒絕 `503`；所有簽名請求重放均拒絕。含基準 Inventory 讀取，
+PG 精確核對 **11 Candidate／Promotion／Admission／Send Lease、1 Cart
+Creation、5 World Commit Source、2 Medusa Rejection Source**。
+第一次試跑因合成測試證據的三平台 Contract Hash 重複而被 Registry
+正確拒絕；僅修正測試資料的跨平台 Hash 唯一性後，ARM64 工作
+`job_01M8BHBTS700RHXYNDP8VT9MWF` **1 passed／42.25 秒**，
+JUnit `medusa-m01-m07-unique-trial.xml`；沒有放寬 Registry。
+**至此 I-01～I-04、C-01～C-09、M-01～M-07 共 20 條路由均具
+D-74 原生 Client 2xx／4xx 至少一組受控候選證據，但不等於各路由
+完整錯誤／URL／競態／故障矩陣驗收。** 正式核准 Publisher Profile、
+Sender Release Fuse、全部故障變體及 Owner GO 仍 **OPEN／NO-GO**。
+
 **傳輸子項實測**：固定程式 SHA `cb3e8a6a7d218e7f2144ba0d8ea641486e987898`，
 [PostgreSQL 17.6 CI 45056622731](https://github.com/IAN40070510/Mirage_API/actions/runs/45056622731)
 `65 passed`、實體 mTLS `4 passed`；
