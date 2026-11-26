@@ -22,6 +22,7 @@ from .protected_rpc import (
     create_native_validator_app, serve_direct_verifier_mtls, serve_fixed_executor_mtls,
     serve_fixed_authorizer_mtls, serve_fixed_candidate_publisher_mtls,
     serve_fixed_sender_mtls, serve_native_validator_mtls,
+    require_distinct_mtls_ca_public_keys,
 )
 
 
@@ -443,6 +444,17 @@ def create_verifier_service(config: Mapping[str, str]) -> FastAPI:
             client_key=_tls_path(config, "MIRAGE_G4_VERIFIER_AUTHORIZER_KEY_FILE"),
             server_ca=_tls_path(config, "MIRAGE_G4_AUTHORIZER_SERVER_CA_FILE"),
         )
+    # Executor／Validator／Publisher／Authorizer 的上游 Server CA 不得
+    # 因複製 PEM 或重用簽發 Key 而合併成同一權威；Gateway 入站 CA 亦同。
+    ca_keys = ["MIRAGE_G3B_EXECUTOR_SERVER_CA_FILE",
+               "MIRAGE_G3B_NATIVE_VALIDATOR_SERVER_CA_FILE"]
+    if publisher_client is not None:
+        ca_keys.append("MIRAGE_G4_PUBLISHER_SERVER_CA_FILE")
+    if authorizer_client is not None:
+        ca_keys.append("MIRAGE_G4_AUTHORIZER_SERVER_CA_FILE")
+    if config.get("MIRAGE_G3B_GATEWAY_CLIENT_CA_FILE"):
+        ca_keys.append("MIRAGE_G3B_GATEWAY_CLIENT_CA_FILE")
+    require_distinct_mtls_ca_public_keys(*(_tls_path(config, key) for key in ca_keys))
     return create_direct_verifier_app(
         verifier=checker, postgres_dsn=dsn,
         environment_id=environment, deployment_id=deployment,

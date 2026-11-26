@@ -48,6 +48,9 @@ Sender 與單一 PostgreSQL 17 組裝在**同一台主機**。Gateway 使用
 4. 使用每服務獨立且 SAN 正確的 TLS 身分（`verifier`、`sender` 等容器 DNS
    名稱必須符合憑證）。Verifier→Publisher 與 Verifier→Authorizer 不得
    複製相同 Client Certificate 公鑰。Gateway→Verifier／Sender 使用不同 CA。
+   Gateway／Verifier 還會依 X.509 **CA 公鑰**逐張檢查跨角色信任根及
+   輪替 Bundle；不同路徑、Secret 名稱或重簽憑證若仍使用相同 CA Key，
+   或兩條 Bundle 共享任一根，一律拒絕啟動。
 5. **Compose `file:` Secret 使用 bind mount，`uid`／`gid`／`mode` 設定可能
    不受支援。** 主機側檔案須以真實 UID/GID 與嚴格 ACL 授權特定容器讀取，
    私鑰／DSN 不得 world-readable，路徑不可 symlink。若此條件無法成立
@@ -182,7 +185,8 @@ Docker 停機成功也**不能證明全入口已停流**；目前控制器沒有
 Secret 掛載、Role、最小網段、Restart Policy、受控 Restore Label，並故意
 篡改 Gateway 公開埠、Sender／DB port、Trusted Send、外部 Fence、跨角色 DSN、
 Restart、UID 與健康探針，要求全部拒絕。Gateway 測試使用**臨時真 X.509**，
-核對憑證複用、權限過寬、非法 Profile 與啟動前固定 Bind。通過此套測試
+核對憑證複用、**複製 CA 公鑰**、非簽發 CA、權限過寬、非法 Profile
+與啟動前固定 Bind。通過此套測試
 仍只是 **STATIC／ISOLATED candidate PASS**，正式完整容器部署尚待可重現
 端到端及 Owner 簽核。
 

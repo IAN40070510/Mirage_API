@@ -168,6 +168,18 @@ def test_single_node_gateway_denies_copied_identity_and_world_readable_keys(tmp_
         create_sealed_compose_gateway(safe)
 
 
+def test_single_node_gateway_denies_copied_mtls_trust_authority(tmp_path):
+    """不同 Secret 名稱若裝入相同 CA 公鑰，Gateway 不能合併 Verifier／Sender 信任鏈。"""
+    config = _gateway_config(tmp_path)
+    sender_root = Path(config["MIRAGE_G4_GATEWAY_SENDER_SERVER_CA_FILE"])
+    verifier_root = Path(config["MIRAGE_G4_GATEWAY_VERIFIER_SERVER_CA_FILE"])
+    assert sender_root != verifier_root
+    sender_root.write_bytes(verifier_root.read_bytes())
+    with pytest.raises(ProtectedRpcConfigurationError,
+                       match="protected_rpc_mtls_ca_identity_reuse_denied"):
+        create_sealed_compose_gateway(config)
+
+
 def test_gateway_container_start_checks_bind_before_any_server_run(tmp_path, monkeypatch):
     """限制容器固定 bind；憑證配置通過後才呼叫 Uvicorn，無實際開 socket。"""
     config = _gateway_config(tmp_path)

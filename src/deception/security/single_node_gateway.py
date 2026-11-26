@@ -17,7 +17,8 @@ from deception.security.protected_gateway import (
     create_gateway_native_proxy_candidate_app,
 )
 from deception.security.protected_rpc import (
-    ProtectedRpcConfigurationError, require_mtls_files,
+    ProtectedRpcConfigurationError, require_distinct_mtls_ca_public_keys,
+    require_mtls_files,
 )
 from deception.security.restore_profile import (
     RestoreProfileConfigurationError, load_restore_profile,
@@ -76,6 +77,12 @@ def create_sealed_compose_gateway(config: Mapping[str, str]) -> FastAPI:
                    for path in key_paths)
             or len({_certificate_key_identity(cert) for cert in identities}) != 3):
         raise ProtectedRpcConfigurationError("single_node_gateway_tls_identity_reuse_denied")
+    # Gateway→Verifier 和 Gateway→Sender 的兩條信任鏈不容共享 CA 私鑰；
+    # 即使管理者把同一 PEM 複製到不同 Secret 名稱，也必須在綁定 Socket 前拒絕。
+    require_distinct_mtls_ca_public_keys(
+        Path(_required(config, prefix + "VERIFIER_SERVER_CA_FILE")),
+        Path(_required(config, prefix + "SENDER_SERVER_CA_FILE")),
+    )
     verifier = FixedGatewayVerifierMTLSClient(
         origin=_required(config, prefix + "VERIFIER_ORIGIN"),
         client_cert=verifier_cert,

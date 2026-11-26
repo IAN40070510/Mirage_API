@@ -8,6 +8,12 @@ TLS 握手；它不採信 HTTP header 所宣稱的「已驗證身分」。正式
 **僅供該內部 RPC Caller 使用的 CA／信任集**，不可把一般 Gateway 或公共
 服務用戶端 CA 混入。
 
+G3b/G4 的 Gateway 及 Verifier 組裝時以 X.509 CA 公鑰辨識各條信任根，
+包含輪替 CA Bundle 中的**每一張**；不依賴檔名不同就推定權限隔離。
+複製同一 CA 至不同 Secret 名稱、重用 CA 私鑰、不同 Bundle 交集、
+非簽發 CA 或 symlink 欺騙均拒絕啟動。測試只證明候選程序
+啟動拒絕，不取代憑證輪替、撤銷、正式 PKI 與各服務實際來源身分驗收。
+
 ### G4 提前施工：封閉獨立 Sender（未放行）
 
 `create_fixed_sender_app()`／`serve_fixed_sender_mtls()` 讓 Sender 使用另一組

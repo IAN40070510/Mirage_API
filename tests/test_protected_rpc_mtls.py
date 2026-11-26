@@ -85,6 +85,55 @@ def test_protected_rpc_requires_distinct_nonempty_mtls_material(tmp_path):
     assert create_sealed_app().openapi_url is None
 
 
+def test_mtls_trust_roots_reject_copied_ca_under_a_new_filename(tmp_path):
+    """真 CA 雖有不同路徑但共用同一公鑰須拒絕，葉憑證及 symlink 亦不可冒充 CA。"""
+    from deception.security.protected_rpc import require_distinct_mtls_ca_public_keys
+
+    first, second = tmp_path / "first", tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    ca_a, server_a, *_ = _issue_mtls_certificates(first)
+    ca_b, *_ = _issue_mtls_certificates(second)
+    assert require_distinct_mtls_ca_public_keys(ca_a, ca_b) is None
+
+    copied = tmp_path / "copied-root.pem"
+    copied.write_bytes(ca_a.read_bytes())
+    with pytest.raises(ProtectedRpcConfigurationError,
+                       match="protected_rpc_mtls_ca_identity_reuse_denied"):
+        require_distinct_mtls_ca_public_keys(ca_a, copied)
+    reissued = tmp_path / "reissued-root.pem"
+    subprocess.run([
+        "openssl", "req", "-new", "-x509", "-key", str(first / "ca.key"),
+        "-days", "1", "-subj", "/CN=Mirage reissued CA",
+        "-addext", "basicConstraints=critical,CA:TRUE",
+        "-addext", "keyUsage=critical,keyCertSign,cRLSign",
+        "-out", str(reissued),
+    ], check=True, capture_output=True)
+    assert reissued.read_bytes() != ca_a.read_bytes()
+    with pytest.raises(ProtectedRpcConfigurationError,
+                       match="protected_rpc_mtls_ca_identity_reuse_denied"):
+        require_distinct_mtls_ca_public_keys(ca_a, reissued)
+    # 真 TLS 可接受多個信任根以輪替憑證；交集藏在第二張也不能漏查。
+    bundled = tmp_path / "overlapping-roots.pem"
+    bundled.write_bytes(ca_b.read_bytes() + ca_a.read_bytes())
+    with pytest.raises(ProtectedRpcConfigurationError,
+                       match="protected_rpc_mtls_ca_identity_reuse_denied"):
+        require_distinct_mtls_ca_public_keys(ca_a, bundled)
+    third = tmp_path / "third"
+    third.mkdir()
+    ca_c, *_ = _issue_mtls_certificates(third)
+    bundled.write_bytes(ca_b.read_bytes() + ca_c.read_bytes())
+    assert require_distinct_mtls_ca_public_keys(ca_a, bundled) is None
+    with pytest.raises(ProtectedRpcConfigurationError,
+                       match="protected_rpc_mtls_ca_invalid"):
+        require_distinct_mtls_ca_public_keys(ca_a, server_a)
+    linked = tmp_path / "linked-root.pem"
+    linked.symlink_to(ca_b)
+    with pytest.raises(ProtectedRpcConfigurationError,
+                       match="protected_rpc_mtls_ca_invalid"):
+        require_distinct_mtls_ca_public_keys(ca_a, linked)
+
+
 def test_verifier_authorizer_and_publisher_deny_copied_tls_client_identity(tmp_path):
     """兩種持久寫入角色即使把相同憑證複製到不同檔名，也不能共用簽章身分。"""
     from deception.security.protected_services import _require_separate_authorizer_publisher_identity
